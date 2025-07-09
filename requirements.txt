@@ -1,0 +1,7 @@
+Flask>=3.0          # Web 框架
+Flask-SQLAlchemy>=3.1
+Flask-Migrate>=4.0
+pandas>=2.2
+openpyxl>=3.1
+xlsxwriter>=3.1
+gunicorn>=21.2      # 生產用 WSGI Server

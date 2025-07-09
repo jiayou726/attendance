@@ -34,6 +34,10 @@ def create_app() -> Flask:
     def home():
         return redirect(url_for("punch.form"))
 
+    # ── ★ 第一次啟動自動建立所有資料表 ──
+    with app.app_context():
+        db.create_all()          # 如果已存在資料表則忽略，不會覆寫
+
     return app
 
 

@@ -7,5 +7,5 @@ venv/
 .env/
 
 # Database / Excel
-attendance.db
+#attendance.db
 *.xlsx

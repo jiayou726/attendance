@@ -37,7 +37,16 @@ def create_app() -> Flask:
     # ── ★ 第一次啟動自動建立所有資料表 ──
     with app.app_context():
         db.create_all()          # 如果已存在資料表則忽略，不會覆寫
-
+        @app.route("/dbping")
+        def dbping():
+            try:
+                from extensions import db
+                # SELECT 1 只是輕量驗證連線
+                db.session.execute("SELECT 1")
+                return "OK"           # 連線成功
+            except Exception as e:
+            # 回傳錯誤訊息便於debug（完成功能後可移除）
+                  return f"ERR: {e}"
     return app
 
 

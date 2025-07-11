@@ -37,17 +37,7 @@ def create_app() -> Flask:
     # ── ★ 第一次啟動自動建立所有資料表 ──
     with app.app_context():
         db.create_all()          # 如果已存在資料表則忽略，不會覆寫
-        from sqlalchemy import text            # ★ 新增
-
-        @app.route("/dbping")
-        def dbping():
-            from extensions import db
-            try:
-                db.session.execute(text("SELECT 1"))   # ★ 用 text() 包裝
-                return "OK"
-            except Exception as e:
-                return f"ERR: {e}"
-
+        
     return app
 
 

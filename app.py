@@ -5,6 +5,7 @@ import os
 from flask import Flask, redirect, url_for
 from config     import Config
 from extensions import db, migrate
+from sqlalchemy import text
 
 # 藍圖
 from blueprints.auth      import auth_bp

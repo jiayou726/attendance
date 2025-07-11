@@ -5,7 +5,6 @@ import os
 from flask import Flask, redirect, url_for
 from config     import Config
 from extensions import db, migrate
-from sqlalchemy import text
 
 # 藍圖
 from blueprints.auth      import auth_bp
@@ -38,16 +37,17 @@ def create_app() -> Flask:
     # ── ★ 第一次啟動自動建立所有資料表 ──
     with app.app_context():
         db.create_all()          # 如果已存在資料表則忽略，不會覆寫
+        from sqlalchemy import text            # ★ 新增
+
         @app.route("/dbping")
         def dbping():
+            from extensions import db
             try:
-                from extensions import db
-                # SELECT 1 只是輕量驗證連線
-                db.session.execute("SELECT 1")
-                return "OK"           # 連線成功
+                db.session.execute(text("SELECT 1"))   # ★ 用 text() 包裝
+                return "OK"
             except Exception as e:
-            # 回傳錯誤訊息便於debug（完成功能後可移除）
-                  return f"ERR: {e}"
+                return f"ERR: {e}"
+
     return app
 
 

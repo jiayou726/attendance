@@ -1,6 +1,7 @@
 # blueprints/punch.py
 # --------------------------------------------------------
-# 5 分鐘換 QR Code＋自動刷新＋逾時強制重掃（完整覆蓋版）
+# 5 分鐘換 QR Code＋自動刷新＋逾時強制重掃
+# 「返回」鍵修正 → 回到打卡表單 (/punch/)
 # --------------------------------------------------------
 
 from flask import (
@@ -22,15 +23,11 @@ punch_bp = Blueprint("punch", __name__, url_prefix="/punch")
 # ──────────────────────────────── 5 分鐘 QR 產生 ────────────────────────────────
 @punch_bp.route("/qrcode")
 def qrcode_view():
-    """
-    產生只在 5 分鐘內有效的 QR Code；前端每 300 秒自動刷新。
-    """
     now_ts = int(time.time())
     s      = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
-    token  = s.dumps({"ts": now_ts})                       # 只簽時間戳
+    token  = s.dumps({"ts": now_ts})
     url    = url_for("punch.form", t=token, _external=True)
 
-    # 產生 QR → Base64
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
     qr.add_data(url); qr.make(fit=True)
     img = qr.make_image()
@@ -47,10 +44,9 @@ def qrcode_view():
 
 
 # ──────────────────────────────── 打卡表單 ────────────────────────────────
-MAX_AGE = 300      # 簽章有效秒數（5 分鐘）
+MAX_AGE = 300  # 5 分鐘
 
 def _token_expired() -> bool:
-    """檢查 session 中簽章是否逾時。"""
     qr_ts = session.get("qr_ts")
     return (qr_ts is None) or (time.time() - qr_ts > MAX_AGE)
 
@@ -58,13 +54,10 @@ def _token_expired() -> bool:
 def form():
     err = request.args.get("err")
 
-    # ❶ 先檢查已驗證的 token 是否逾時
     if session.get("token_ok") and _token_expired():
-        session.pop("token_ok", None)
-        session.pop("qr_ts",  None)
+        session.clear()
         return redirect(url_for(".form", err="請重新掃描 QR Code"))
 
-    # ❷ 若尚未驗證，檢查傳入 token
     if not session.get("token_ok"):
         token = request.args.get("t")
         if not token:
@@ -94,10 +87,8 @@ def form():
 
 @punch_bp.route("/", methods=["POST"])
 def punch():
-    # 再次保險：提交時也驗證有效期
     if (not session.get("token_ok")) or _token_expired():
-        session.pop("token_ok", None)
-        session.pop("qr_ts",  None)
+        session.clear()
         return redirect(url_for(".form", err="請重新掃描 QR Code"))
 
     eid = request.form["eid"].strip()
@@ -118,8 +109,7 @@ def punch():
         db.session.commit()
         msg, st = "打卡成功", "success"
 
-    session.pop("token_ok", None)
-    session.pop("qr_ts",  None)
+    session.clear()
     return redirect(url_for(".card", eid=eid, st=st, msg=msg))
 
 
@@ -186,4 +176,4 @@ def card(eid: str):
   <table>
     <tr><th>日期</th><th>上班</th><th>下班</th></tr>{body}
   </table>
-  <p><a href="/">返回</a></p></body></html>""")
+  <p><a href="{url_for('.form')}">返回打卡</a></p></body></html>""")

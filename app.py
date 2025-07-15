@@ -34,7 +34,7 @@ def create_app() -> Flask:
     # ── 首頁導向 ──
     @app.route("/")
     def home():
-        return redirect(url_for("punch.form"))
+        return redirect(url_for("punch.qrcode_view"))
 
     # ── ★ 第一次啟動自動建立所有資料表 ──
     with app.app_context():

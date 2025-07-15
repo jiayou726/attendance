@@ -1,6 +1,6 @@
 # blueprints/punch.py
 # --------------------------------------------------------
-# 5 分鐘換 QR Code + 自動重整頁面　（完整可用版本）
+# 5 分鐘換 QR Code＋自動刷新＋逾時強制重掃（完整覆蓋版）
 # --------------------------------------------------------
 
 from flask import (
@@ -10,8 +10,7 @@ from flask import (
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from datetime     import datetime, date, timedelta
 from calendar     import monthrange
-import time, re, io, base64, qrcode          # ← 新增 time；qrcode 已列
-# --------------------------------------------------------
+import time, re, io, base64, qrcode
 
 from extensions import db
 from models      import Employee, Checkin
@@ -19,18 +18,19 @@ from .           import CSS, NIGHT_END, merge_night
 
 punch_bp = Blueprint("punch", __name__, url_prefix="/punch")
 
-# ──────────────────────────────── 5 分鐘 QR Code 產生 ────────────────────────────────
+
+# ──────────────────────────────── 5 分鐘 QR 產生 ────────────────────────────────
 @punch_bp.route("/qrcode")
 def qrcode_view():
     """
-    產生只在 5 分鐘內有效的 QR Code，前端亦每 300 秒自動重整。
+    產生只在 5 分鐘內有效的 QR Code；前端每 300 秒自動刷新。
     """
     now_ts = int(time.time())
     s      = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
-    token  = s.dumps({"ts": now_ts})                         # 只簽時間戳
+    token  = s.dumps({"ts": now_ts})                       # 只簽時間戳
     url    = url_for("punch.form", t=token, _external=True)
 
-    # 產生 QR → Base64 嵌入
+    # 產生 QR → Base64
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
     qr.add_data(url); qr.make(fit=True)
     img = qr.make_image()
@@ -39,18 +39,32 @@ def qrcode_view():
 
     gen_time = datetime.fromtimestamp(now_ts).strftime("%H:%M:%S")
     return render_template_string(f"""<!doctype html><html><head>{CSS}
-<meta http-equiv="refresh" content="300">  <!-- 5 分鐘自動刷新 -->
+<meta http-equiv="refresh" content="300">
 </head><body>
-  <h3>即時 QR Code（生成時間 {gen_time}，每 5 分鐘更新）</h3>
+  <h3>即時 QR Code（{gen_time} 生成，5 分鐘換一次）</h3>
   <img src="data:image/png;base64,{b64}" alt="QR Code">
 </body></html>""")
 
 
 # ──────────────────────────────── 打卡表單 ────────────────────────────────
+MAX_AGE = 300      # 簽章有效秒數（5 分鐘）
+
+def _token_expired() -> bool:
+    """檢查 session 中簽章是否逾時。"""
+    qr_ts = session.get("qr_ts")
+    return (qr_ts is None) or (time.time() - qr_ts > MAX_AGE)
+
 @punch_bp.route("/", methods=["GET"])
 def form():
     err = request.args.get("err")
 
+    # ❶ 先檢查已驗證的 token 是否逾時
+    if session.get("token_ok") and _token_expired():
+        session.pop("token_ok", None)
+        session.pop("qr_ts",  None)
+        return redirect(url_for(".form", err="請重新掃描 QR Code"))
+
+    # ❷ 若尚未驗證，檢查傳入 token
     if not session.get("token_ok"):
         token = request.args.get("t")
         if not token:
@@ -59,11 +73,11 @@ def form():
         else:
             s = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
             try:
-                # ★ 只接受 300 秒內簽章
-                s.loads(token, max_age=300)
+                s.loads(token, max_age=MAX_AGE)
             except (BadSignature, SignatureExpired):
                 return redirect(url_for(".form", err="請重新掃描 QR Code"))
             session["token_ok"] = True
+            session["qr_ts"]   = time.time()
 
     return render_template_string(f"""<!doctype html><html><head>{CSS}</head><body>
   {f'<p class=error>{err}</p>' if err else ''}
@@ -80,7 +94,10 @@ def form():
 
 @punch_bp.route("/", methods=["POST"])
 def punch():
-    if not session.get("token_ok"):
+    # 再次保險：提交時也驗證有效期
+    if (not session.get("token_ok")) or _token_expired():
+        session.pop("token_ok", None)
+        session.pop("qr_ts",  None)
         return redirect(url_for(".form", err="請重新掃描 QR Code"))
 
     eid = request.form["eid"].strip()
@@ -102,13 +119,13 @@ def punch():
         msg, st = "打卡成功", "success"
 
     session.pop("token_ok", None)
+    session.pop("qr_ts",  None)
     return redirect(url_for(".card", eid=eid, st=st, msg=msg))
 
 
 # ──────────────────────────────── 員工月卡頁 ────────────────────────────────
 @punch_bp.route("/result/<eid>")
 def card(eid: str):
-    # 1️⃣ 取得查詢年月；預設當月
     ym_param = request.args.get("ym")
     today    = date.today()
     if ym_param and re.fullmatch(r"\d{4}-\d{2}", ym_param):
@@ -118,7 +135,6 @@ def card(eid: str):
         y, m = today.year, today.month
         ym   = f"{y}-{m:02d}"
 
-    # 2️⃣ 月份下拉（最近 6 個月）
     ym_opts, cursor = [], today.replace(day=1)
     for _ in range(6):
         ym_val = cursor.strftime("%Y-%m")
@@ -127,7 +143,6 @@ def card(eid: str):
         ym_opts.append(f'<option value="{ym_val}" {sel}>{ym_lab}</option>')
         cursor = (cursor - timedelta(days=1)).replace(day=1)
 
-    # 3️⃣ 其他資料
     emp = Employee.query.get_or_404(eid)
     days_in_month = monthrange(y, m)[1]
     next_m = (date(y, m, 1) + timedelta(days=32)).replace(day=1)

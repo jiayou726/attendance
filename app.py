@@ -9,9 +9,10 @@ from extensions import db, migrate
 # 藍圖
 from blueprints.auth      import auth_bp
 from blueprints.punch     import punch_bp
-from blueprints.employees import emp_bp
-from blueprints.records   import rec_bp
-from blueprints.export    import exp_bp
+from blueprints.employees       import emp_bp
+from blueprints.records         import rec_bp
+from blueprints.export          import exp_bp
+from blueprints.import_employees import import_bp
 
 
 def create_app() -> Flask:
@@ -27,6 +28,7 @@ def create_app() -> Flask:
     app.register_blueprint(emp_bp,  url_prefix="/admin")
     app.register_blueprint(rec_bp,  url_prefix="/admin")
     app.register_blueprint(exp_bp,  url_prefix="/admin")
+    app.register_blueprint(import_bp, url_prefix="/admin")
     app.register_blueprint(punch_bp)              # /punch
 
     # ── 首頁導向 ──
@@ -46,4 +48,4 @@ if __name__ == "__main__":
     # 雲端平台（Render、Railway…）會把埠號放在 PORT 環境變數
     port = int(os.environ.get("PORT", 5000))
     # 正式環境建議把 debug 關掉，以免洩漏 Stack Trace
-    create_app().run(host="0.0.0.0", port=port, debug=False)
+    create_app().run(host="0.0.0.0", port=port, debug=True)

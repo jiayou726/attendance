@@ -9,7 +9,6 @@ NIGHT_END = "04:00"
 LUNCH_POINT = 13  # 13:00
 
 
-
 # 共用 CSS 樣式
 CSS = """<style>
 body{font-family:Arial,"Noto Sans CJK TC",sans-serif;text-align:center;padding-top:30px;font-size:32px}

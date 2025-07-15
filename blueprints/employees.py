@@ -40,6 +40,7 @@ def list_employees():
       </table>
       <p>
         <a href="{url_for('emp.add_employee')}">新增員工</a> |
+        <a href="{url_for('imp.import_employees')}">批次匯入</a> |
         <a href="{url_for('rec.show_records')}">出勤卡查詢</a>
       </p>
     </body></html>

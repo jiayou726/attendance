@@ -11,3 +11,11 @@ class Config:
     )
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # ── SQLAlchemy 連線池設定 ──
+    #   pool_pre_ping: 送出簡單查詢檢查連線是否存活，可避免用到失效連線
+    #   pool_recycle:  若主機會在閒置一段時間後關閉連線，設定秒數可自動重連
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+    }

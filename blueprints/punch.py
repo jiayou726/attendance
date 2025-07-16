@@ -1,17 +1,16 @@
 # blueprints/punch.py
 # --------------------------------------------------------
-# 5 分鐘換 QR Code＋自動刷新＋逾時強制重掃
+#靜態「打卡」二維碼
 # 「返回」鍵修正 → 回到打卡表單 (/punch/)
 # --------------------------------------------------------
 
 from flask import (
     Blueprint, render_template_string, request,
-    redirect, url_for, session, current_app,
+    redirect, url_for,
 )
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from datetime     import datetime, date, timedelta
 from calendar     import monthrange
-import time, re, io, base64, qrcode
+import  re, io, base64, qrcode
 
 from extensions import db
 from models      import Employee, Checkin
@@ -23,54 +22,30 @@ punch_bp = Blueprint("punch", __name__, url_prefix="/punch")
 # ──────────────────────────────── 5 分鐘 QR 產生 ────────────────────────────────
 @punch_bp.route("/qrcode")
 def qrcode_view():
-    now_ts = int(time.time())
-    s      = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
-    token  = s.dumps({"ts": now_ts})
-    url    = url_for("punch.form", t=token, _external=True)
+    url = url_for("punch.form", _external=True)
 
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
-    qr.add_data(url); qr.make(fit=True)
+    qr.add_data(url)
+    qr.make(fit=True)
     img = qr.make_image()
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    gen_time = datetime.fromtimestamp(now_ts).strftime("%H:%M:%S")
-    return render_template_string(f"""<!doctype html><html><head>{CSS}
-<meta http-equiv="refresh" content="300">
-</head><body>
-  <h3>即時 QR Code（{gen_time} 生成，5 分鐘換一次）</h3>
-  <img src="data:image/png;base64,{b64}" alt="QR Code">
-</body></html>""")
-
+    return render_template_string(
+        f"""<!doctype html><html><head>{CSS}</head><body>
+  <h3>打卡 QR Code</h3>
+  <img src=\"data:image/png;base64,{b64}\" alt=\"QR Code\">
+</body></html>"""
+    )
 
 # ──────────────────────────────── 打卡表單 ────────────────────────────────
 MAX_AGE = 300  # 5 分鐘
-
-def _token_expired() -> bool:
-    qr_ts = session.get("qr_ts")
-    return (qr_ts is None) or (time.time() - qr_ts > MAX_AGE)
 
 @punch_bp.route("/", methods=["GET"])
 def form():
     err = request.args.get("err")
 
-    if session.get("token_ok") and _token_expired():
-        session.clear()
-        return redirect(url_for(".form", err="請重新掃描 QR Code"))
-
-    if not session.get("token_ok"):
-        token = request.args.get("t")
-        if not token:
-            if not err:
-                return redirect(url_for(".form", err="請重新掃描 QR Code"))
-        else:
-            s = URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
-            try:
-                s.loads(token, max_age=MAX_AGE)
-            except (BadSignature, SignatureExpired):
-                return redirect(url_for(".form", err="請重新掃描 QR Code"))
-            session["token_ok"] = True
-            session["qr_ts"]   = time.time()
 
     return render_template_string(f"""<!doctype html><html><head>{CSS}</head><body>
   {f'<p class=error>{err}</p>' if err else ''}
@@ -87,10 +62,7 @@ def form():
 
 @punch_bp.route("/", methods=["POST"])
 def punch():
-    if (not session.get("token_ok")) or _token_expired():
-        session.clear()
-        return redirect(url_for(".form", err="請重新掃描 QR Code"))
-
+    
     eid = request.form["eid"].strip()
     typ = request.form["type"]
     now = datetime.now()
@@ -109,7 +81,6 @@ def punch():
         db.session.commit()
         msg, st = "打卡成功", "success"
 
-    session.clear()
     return redirect(url_for(".card", eid=eid, st=st, msg=msg))
 
 

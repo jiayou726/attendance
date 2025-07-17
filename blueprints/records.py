@@ -1,7 +1,6 @@
 # blueprints/records.py
 # -*- coding: utf-8 -*-
-from flask.blueprints import Blueprint
-from flask import render_template_string, request, redirect, url_for, abort
+from flask import Blueprint, render_template_string, request, redirect, url_for, abort
 from datetime import date, timedelta
 from extensions import db
 from models import Employee, Checkin
@@ -10,6 +9,7 @@ import re
 
 rec_bp = Blueprint('rec', __name__, url_prefix='/admin')
 
+LEAVE_PTYPE = 'lv'             # ★ 修改：請假類型僅使用 2 碼縮寫，符合 VARCHAR(3)
 
 def require(role):
     """權限檢查示範（永遠通過）"""
@@ -22,7 +22,6 @@ def show_records():
     if require('mgr'):
         return abort(403)
 
-    # 讀取參數
     eid      = request.args.get('eid', '')
     ym_param = request.args.get('ym')
     today    = date.today()
@@ -90,8 +89,9 @@ def show_records():
         .all()
     )
 
+    # ★ 修改：假別判斷改用 LEAVE_PTYPE
     recs  = merge_night([(r.work_date, r.p_type, r.ts[11:16]) for r in raws])
-    notes = {r.work_date[8:10]: (r.note or '請假') for r in raws if r.p_type == 'leave'}
+    notes = {r.work_date[8:10]: (r.note or '請假') for r in raws if r.p_type == LEAVE_PTYPE}
 
     # 生成表格
     rows_html = ''
@@ -143,7 +143,7 @@ def show_records():
             f'<tr{tr_style}><td>{m:02d}-{dd}</td>'
             f'<td>{link("in",  inn or "-")}</td>'
             f'<td>{link("out", out or "-")}</td>'
-            f'<td>{link("leave", note or "-")}</td>'
+            f'<td>{link(LEAVE_PTYPE, note or "-")}</td>'          # ★ 修改
             f'<td>{reg_cell}</td><td>{ot2_cell}</td><td>{otx_cell}</td><td>{hol_cell}</td></tr>'
         )
 
@@ -181,7 +181,7 @@ def edit_record():
 
     # ★ 修正：rec 可能為 None，須先判斷
     if rec:
-        init_val = rec.note if typ == 'leave' else rec.ts[11:16]
+        init_val = rec.note if typ == LEAVE_PTYPE else rec.ts[11:16]
     else:
         init_val = ''
 
@@ -195,14 +195,14 @@ def edit_record():
 
         val = request.form.get('val', '').strip()
 
-        if typ == 'leave':
+        if typ == LEAVE_PTYPE:
             if not val:
                 return abort(400, '假別不可空白')
             if rec:
                 rec.note = val
             else:
                 db.session.add(Checkin(employee_id=emp_id, work_date=dt,
-                                       p_type='leave', ts=f'{dt}T00:00:00', note=val))
+                                       p_type=LEAVE_PTYPE, ts=f'{dt}T00:00:00', note=val))  # ★ 修改
         else:  # in/out
             if not re.fullmatch(r'[0-9]{2}:[0-9]{2}', val):
                 return abort(400, '請輸入 HH:MM')
@@ -217,9 +217,9 @@ def edit_record():
         return redirect(back)
 
     # GET：顯示編輯表單
-    title = {'in': '上班', 'out': '下班', 'leave': '備註 / 假別'}.get(typ, '未知')
+    title = {'in': '上班', 'out': '下班', LEAVE_PTYPE: '備註 / 假別'}  # ★ 修改
     return render_template_string(f"""<!doctype html><html><head>{CSS}</head><body>
-<h2>{emp_id}　{dt}　{title}</h2>
+<h2>{emp_id}　{dt}　{title.get(typ, '未知')}</h2>
 <form method="post">
 <input name="val" value="{init_val}" placeholder="HH:MM 或假別文字" style="width:180px"><br>
 <button type="submit">儲存</button>

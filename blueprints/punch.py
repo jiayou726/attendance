@@ -40,7 +40,6 @@ def qrcode_view():
     )
 
 # ──────────────────────────────── 打卡表單 ────────────────────────────────
-MAX_AGE = 300  # 5 分鐘
 
 @punch_bp.route("/", methods=["GET"])
 def form():
@@ -53,7 +52,7 @@ def form():
   <form method=post>
     <input name=eid placeholder="員工編號" required autofocus>
     <select name=type>
-      <option value=in>上班</option><option value=out>下班</option>
+      <option value=in>1.上班</option><option value=out>2.下班</option>
     </select>
     <button>打卡</button>
   </form>

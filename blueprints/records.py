@@ -159,7 +159,7 @@ def show_records():
 <tr><th>日期</th><th>上班</th><th>下班</th><th>備註 / 假別</th>
     <th>正班</th><th>加班≤2</th><th>加班&gt;2</th><th>假日</th></tr>
 {rows_html}{total_row}</table>
-<p><a href="{url_for('exp.exp', eid=eid, ym=ym)}">匯出 Excel</a> |
+<p><a href="{url_for('exp.export', eid=eid, ym=ym)}">匯出 Excel</a> |
    <a href="{url_for('emp.list_employees')}">返回員工管理</a></p>
 </body></html>""")
 

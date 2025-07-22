@@ -1,4 +1,4 @@
-# Python
+# Python 
 __pycache__/
 *.pyc
 
@@ -9,3 +9,4 @@ venv/
 # Database / Excel
 #attendance.db
 *.xlsx
+!static/薪資計算範本.xlsx

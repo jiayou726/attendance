@@ -13,7 +13,7 @@ class Checkin(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
     work_date   = db.Column(db.String(10), nullable=False)     
-    p_type      = db.Column(db.String(8), nullable=False)      
+    p_type      = db.Column(db.String(10), nullable=False)      
     ts          = db.Column(db.String(19), nullable=False)   
     note = db.Column(db.String(50))  # 允許輸入中文備註
   

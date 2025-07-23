@@ -1,0 +1,34 @@
+"""increase p_type length to 7
+
+Revision ID: 1234abcd5678
+Revises: prev_rev_id
+Create Date: 2025-07-23 09:15:00.000000
+
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision = "1234abcd5678"
+down_revision = "prev_rev_id"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.alter_column(
+        "checkin", "p_type",
+        existing_type=sa.String(length=3),
+        type_=sa.String(length=7),
+        existing_nullable=False,
+    )
+
+
+def downgrade() -> None:
+    op.alter_column(
+        "checkin", "p_type",
+        existing_type=sa.String(length=7),
+        type_=sa.String(length=3),
+        existing_nullable=False,
+    )

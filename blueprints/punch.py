@@ -1,12 +1,10 @@
-"""
-blueprints/punch.py — 自助打卡藍圖（含手機友善 CSS）
-------------------------------------------------------
-• 產生靜態 QR Code 導向打卡表單
-• 員工打卡／月卡查詢
-• CSS 採高對比、大字體，並以 rem 作單位，搭配 viewport meta
-  適配手機（螢幕寬 < 420px 自動放大字級）
-• 部分設計值（色碼、字級）參考 WCAG 2.x & A11y 建議（未經正式驗證）
-"""
+# blueprints/punch.py — 自助打卡藍圖（含手機友善 CSS）
+# ------------------------------------------------------
+# • 產生靜態 QR Code 導向打卡表單
+# • 員工打卡／月卡查詢
+# • CSS 採高對比、大字體，並以 rem 作單位，搭配 viewport meta
+#   適配手機（螢幕寬 < 420px 自動放大字級）
+# • 部分設計值（色碼、字級）參考 WCAG 2.x & A11y 建議（未經正式驗證）
 
 from flask import Blueprint, render_template_string, request, redirect, url_for
 from datetime import datetime, date, timedelta
@@ -118,7 +116,7 @@ def punch():
         msg, st = "已打過卡", "warn"
     else:
         db.session.add(Checkin(
-            employee_id=eid, work_date=wd, p_type=typ, ts=ts
+            employee_id=eid, work_date=wd, p_type=typ, ts=ts  # (長度已對應 models.py 之調整)
         ))
         db.session.commit()
         msg, st = "打卡成功", "success"
@@ -173,12 +171,12 @@ def card(eid: str):
 
     body = "".join(
         f"<tr><td>{m:02d}-{d:02d}</td>"
-        f"<td>{recs.get((f'{d:02d}','am-in'),  '-')}</td>"
-        f"<td>{recs.get((f'{d:02d}','am-out'), '-')}</td>"
-        f"<td>{recs.get((f'{d:02d}','pm-in'),  '-')}</td>"
-        f"<td>{recs.get((f'{d:02d}','pm-out'), '-')}</td>"
-        f"<td>{recs.get((f'{d:02d}','ot-in'),  '-')}</td>"
-        f"<td>{recs.get((f'{d:02d}','ot-out'), '-')}</td></tr>"
+        f"<td>{recs.get((f'{d:02d}','am-in'),  '-') }</td>"
+        f"<td>{recs.get((f'{d:02d}','am-out'), '-') }</td>"
+        f"<td>{recs.get((f'{d:02d}','pm-in'),  '-') }</td>"
+        f"<td>{recs.get((f'{d:02d}','pm-out'), '-') }</td>"
+        f"<td>{recs.get((f'{d:02d}','ot-in'),  '-') }</td>"
+        f"<td>{recs.get((f'{d:02d}','ot-out'), '-') }</td></tr>"
         for d in range(1, days_in_month + 1)
     )
 

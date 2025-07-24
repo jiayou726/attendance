@@ -27,23 +27,32 @@ import re  # 若其他檔案需要用到 re.fullmatch
 # ────────────────────────── 時間進位 ──────────────────────────
 def roundup(time_obj, is_in):
     """
-    時間進位：
-      - 上班 (is_in=True)：>45 分 → +1H；25–45 分 → +0.5H；其餘 → 捨去
-      - 下班 (is_in=False)：>55 分 → +1H；25–55 分 → +0.5H；其餘 → 捨去
+    依新規則進位：
+      ‑ 上班  (is_in=True) ──────────────
+          00 分   → 原整點
+          01–44  → 整點 + 0.5
+          45–59  → 下一整點
+      ‑ 下班  (is_in=False) ─────────────
+          00–24  → 原整點
+          25–54  → 整點 + 0.5
+          55–59  → 下一整點
     """
     h, m = time_obj.hour, time_obj.minute
-    if is_in:
-        if m > 45:
+
+    if is_in:          # 上班
+        if m == 0:
+            return h
+        elif m >= 45:
             return h + 1
-        if m >= 25:
+        else:          # 1‑44
             return h + 0.5
-        return h
-    else:
-        if m > 55:
+    else:              # 下班
+        if m < 25:     # 0‑24
+            return h
+        elif m < 55:   # 25‑54
+            return h + 0.5
+        else:          # 55‑59
             return h + 1
-        if m >= 25:
-            return h + 0.5
-        return h
 
 # ────────────────────────── 工時計算 ──────────────────────────
 def calc_hours(start, end, brk):

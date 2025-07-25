@@ -55,37 +55,34 @@ def roundup(time_obj, is_in):
             return h + 1
 
 # ────────────────────────── 工時計算 ──────────────────────────
-def calc_hours(start, end, brk):
+def calc_hours(start: str, end: str, brk: float, *, skip_break: bool = False):
     """
-    計算工時 (正班 ≤8h, 加班≤2h, 加班>2h)
-    只有當「進位後上班時數 < 13」且「進位後下班時數 > 13」時才扣 brk。
-    參數：
-      start, end : "HH:MM" 字串
-      brk        : 預設午休小時 (0, 0.5, 1)
-    回傳：
-      (reg, ot2, otx)  # 正班、加班≤2h、加班>2h
+    計算工時:
+      - 正班 ≤ 8h
+      - 加班≤2h (ot2)
+      - 加班>2h (otx)
+
+    只有「跨過 13:00」且 skip_break=False 才會扣預設午休 brk。
     """
     if not start or not end:
-        return 0, 0, 0
+        return 0.0, 0.0, 0.0
 
     t1 = datetime.strptime(start, "%H:%M").time()
     t2 = datetime.strptime(end,   "%H:%M").time()
     ih = roundup(t1, True)
     oh = roundup(t2, False)
 
-    # 跨日處理
+    # 跨日
     if oh <= ih:
         oh += 24
 
-    # 是否跨過午休檢查點 (13:00)
-    take_break = (ih < LUNCH_POINT) and (oh > LUNCH_POINT)
+    take_break = (ih < LUNCH_POINT) and (oh > LUNCH_POINT) and (not skip_break)
 
-    total = oh - ih - (brk if take_break else 0)
-    total = max(total, 0)
+    total = max(oh - ih - (brk if take_break else 0), 0)
 
-    reg  = min(total, 8)
-    ot2  = min(max(total - 8, 0), 2)
-    otx  = max(total - 10, 0)
+    reg = min(total, 8)
+    ot2 = min(max(total - 8, 0), 2)
+    otx = max(total - 10, 0)
     return round(reg, 1), round(ot2, 1), round(otx, 1)
 
 # ────────────────────────── 夜班下班合併 ──────────────────────────

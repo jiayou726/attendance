@@ -42,7 +42,7 @@ def roundup(time_obj, is_in):
     if is_in:          # 上班
         if m == 0:
             return h
-        elif m >= 45:
+        elif m >= 40:
             return h + 1
         else:          # 1‑44
             return h + 0.5

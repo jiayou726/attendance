@@ -151,7 +151,6 @@ def qrcode_view():
     <div class="qr">
       <img src="data:image/png;base64,{{ b64 }}" alt="QR Code">
     </div>
-    <div class="ver">目前版本：v{{ use_ver }}（最小 v{{ min_ver }}）</div>
 
     <div class="row" style="margin-bottom:16px;">
       <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">前往打卡表單</a>

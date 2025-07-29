@@ -6,14 +6,15 @@
 #   適配手機（螢幕寬 < 420px 自動放大字級）
 # • 部分設計值（色碼、字級）參考 WCAG 2.x & A11y 建議（未經正式驗證）
 
-from flask import Blueprint, render_template_string, request, redirect, url_for
-from datetime import datetime, date, timedelta
+from flask import Blueprint, render_template_string, request, redirect, url_for, current_app, session
 from calendar import monthrange
 import re, io, base64, qrcode
 
 from extensions import db
 from models import Employee, Checkin
 from . import NIGHT_END, merge_night
+QR_VER_KEY = "QR_VER_DELTA"   # 儲存目前使用的版本偏移（整站共用）
+QR_VER_SPAN = 6               # 變化範圍：最小可行版本 ~ 最小+5（最多 40）
 
 # ──────────────────────── 手機友善 CSS ────────────────────────
 CSS = r"""
@@ -53,23 +54,141 @@ HEAD = (
 
 punch_bp = Blueprint("punch", __name__, url_prefix="/punch")
 
+ADMIN_QR_PWD = "hr1234"      # 更新密碼
+QR_CONFIG_KEY = "QR_TEXT"    # 目前 QR 內容暫存於 app.config
+
 # ────────────────────────  QR Code 產生  ────────────────────────
-@punch_bp.route("/qrcode")
+@punch_bp.route("/qrcode", methods=["GET", "POST"])
 def qrcode_view():
-    url = url_for("punch.form", _external=True)
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
-    qr.add_data(url)
-    qr.make(fit=True)
-    img = qr.make_image()
+    # 1) 固定 QR 內容（網址不可編輯）
+    qr_text = url_for("punch.form", _external=True)
+
+    # 2) 先用自動模式找出「最小可行版本」
+    qr_auto = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=2,
+    )
+    qr_auto.add_data(qr_text)
+    qr_auto.make(fit=True)
+    min_ver = qr_auto.version  # 1~40 的其中一個（依內容與糾錯等級決定）
+
+    # 3) 讀取目前站台共用的版本偏移量（影響未驗證時顯示的預設圖）
+    delta = int(current_app.config.get(QR_VER_KEY, 0))
+
+    verified = False
+    msg = ""
+
+    if request.method == "POST":
+        if request.form.get("verified") == "1":
+            # 同頁後續操作（已驗證）
+            verified = True
+        else:
+            # 第一次需驗證密碼
+            pwd = request.form.get("pwd", "")
+            if pwd == ADMIN_QR_PWD:
+                verified = True
+                msg = "✅ 已驗證，可重新產生或下載圖片。"
+            else:
+                msg = "❌ 密碼錯誤。"
+
+        # 已驗證才允許更新：按「重新產生圖片」就把 delta+1 並寫回 config
+        if verified and request.form.get("action") == "regen":
+            delta += 1
+            current_app.config[QR_VER_KEY] = delta
+            msg = "✅ 已更新預設圖樣。"
+
+    # 4) 計算本次要用的版本號：
+    #    在最小可行版本 ~ 最小+QR_VER_SPAN-1 之間循環，但不超過 v40
+    max_ver = min(min_ver + QR_VER_SPAN - 1, 40)
+    span = max_ver - min_ver + 1
+    if span <= 0:
+        span = 1
+    use_ver = min_ver + (delta % span)
+
+    # 5) 以指定版本產生圖片（同網址、不同版本 → 圖樣會不同）
+    qr = qrcode.QRCode(
+        version=use_ver,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=2,
+    )
+    qr.add_data(qr_text)
+    qr.make(fit=False)  # 已指定 version，不再自動放大
+    img = qr.make_image(fill_color="black", back_color="white")
+
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
+
+    # 6) 頁面（未驗證：只看 QR + 密碼；已驗證：可重新產生與下載）
+    tpl = """
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  {{ HEAD|safe }}
+  <title>打卡 QR Code</title>
+  <style>
+    .wrap{max-width:720px;margin:40px auto;padding:0 16px;}
+    .card{border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06);}
+    .qr{display:grid;place-items:center;margin:16px 0 8px;}
+    .qr img{width:100%;max-width:360px;height:auto;}
+    .ver{color:#6b7280;font-size:.85rem;text-align:center;margin-bottom:16px;}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:center;}
+    .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;text-decoration:none;color:#111827;background:#fff;}
+    .btn.primary{background:#111827;color:#fff;border-color:#111827;}
+    input[type=password]{width:100%;max-width:360px;padding:10px 12px;border:1px solid #d1d5db;border-radius:10px;}
+    .label{font-size:.9rem;color:#374151;margin:.2rem 0 .5rem;text-align:center;}
+    .msg{margin-top:.75rem;color:#B22222;text-align:center;}
+    .hint{color:#6b7280;font-size:.85rem;margin-top:.5rem;text-align:center;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2>打卡 QR Code</h2>
+  <div class="card">
+    <div class="qr">
+      <img src="data:image/png;base64,{{ b64 }}" alt="QR Code">
+    </div>
+    <div class="ver">目前版本：v{{ use_ver }}（最小 v{{ min_ver }}）</div>
+
+    <div class="row" style="margin-bottom:16px;">
+      <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">前往打卡表單</a>
+    </div>
+
+    {% if not verified %}
+      <form method="post" autocomplete="off" class="row" style="flex-direction:column;align-items:center;">
+        <div class="label">管理密碼：</div>
+        <input type="password" name="pwd" placeholder="請輸入密碼">
+        <div class="row" style="margin-top:12px;">
+          <button class="btn primary" type="submit">驗證</button>
+        </div>
+      </form>
+    {% else %}
+      <form method="post" class="row" style="margin-top:4px;">
+        <input type="hidden" name="verified" value="1">
+        <button class="btn primary" type="submit" name="action" value="regen">重新產生圖片</button>
+        <a class="btn" download="punch_qr.png" href="data:image/png;base64,{{ b64 }}">下載 QR 圖片</a>
+      </form>
+      <div class="hint">提示：重新整理或再次進入本頁時，會重新要求密碼。預設圖樣已更新為目前版本。</div>
+    {% endif %}
+
+    {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+  </div>
+</div>
+</body>
+</html>
+"""
     return render_template_string(
-        f"<!doctype html><html><head>{HEAD}</head><body>"
-        "<h3>打卡 QR Code</h3>"
-        f"<img src='data:image/png;base64,{b64}' alt='QR Code'>"
-        f"<p><a href='{url}'>前往打卡表單</a></p>"
-        "</body></html>"
+        tpl,
+        HEAD=HEAD,
+        b64=b64,
+        qr_text=qr_text,
+        verified=verified,
+        msg=msg,
+        min_ver=min_ver,
+        use_ver=use_ver,
     )
 
 # ────────────────────────  打卡表單  ────────────────────────

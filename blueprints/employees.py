@@ -4,8 +4,8 @@
 from flask.blueprints import Blueprint
 from flask import render_template_string, request, redirect, url_for, abort
 from extensions import db
-from models     import Employee
-from .          import CSS          # 刪除 AREAS
+from models     import Employee, Checkin          # ← 增：引入 Checkin
+from .          import CSS
 
 emp_bp = Blueprint("emp", __name__, url_prefix="/admin")
 
@@ -68,7 +68,7 @@ def add_employee():
       <form method="post">
         員工編號：<input name="eid" required><br>
         姓名：<input name="name" required><br>
-        區域：<input name="area" required><br>   <!-- 改成自由輸入 -->
+        區域：<input name="area" required><br>
         預設午休(小時)：<select name="default_break">
           <option value="0">0</option>
           <option value="0.5">0.5</option>
@@ -100,7 +100,7 @@ def edit_employee(eid):
       <form method="post">
         員工編號：<input value="{eid}" readonly><br>
         姓名：<input name="name" value="{emp.name}" required><br>
-        區域：<input name="area" value="{emp.area}" required><br>  <!-- 改成自由輸入 -->
+        區域：<input name="area" value="{emp.area}" required><br>
         預設午休(小時)：<select name="default_break">
           <option value="0" {'selected' if emp.default_break==0 else ''}>0</option>
           <option value="0.5" {'selected' if emp.default_break==0.5 else ''}>0.5</option>
@@ -114,6 +114,13 @@ def edit_employee(eid):
 
 @emp_bp.route("/delete/<eid>", methods=["POST"])
 def delete_employee(eid):
-    Employee.query.filter_by(id=eid).delete()
+    emp = Employee.query.get_or_404(eid)
+
+    # ① 先刪除所有關聯 checkin
+    Checkin.query.filter_by(employee_id=eid).delete(synchronize_session=False)
+
+    # ② 再刪除員工
+    db.session.delete(emp)
     db.session.commit()
+
     return redirect(url_for("emp.list_employees"))

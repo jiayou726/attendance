@@ -28,6 +28,42 @@ exp_bp = Blueprint("exp", __name__, url_prefix="/admin")
 
 LEAVE_PTYPE = 'lv'   # 與 records.py 一致的請假類型
 
+# ─────────────── Excel 名稱安全規則 ───────────────
+FORBIDDEN = r'[\\/*?:\[\]]'   # Excel 禁用字元
+MAXLEN = 31                   # Excel 工作表名稱上限
+
+def make_new_title(old_title: str, ym: str, existing: set) -> str:
+    """
+    生成安全且唯一的新工作表名稱：
+    - 清洗禁用字元
+    - 加上 -報表-YYYYMM 後綴
+    - 截斷到 31 字元
+    - 如重名則加 -1, -2, ...
+    """
+    base = re.sub(FORBIDDEN, '_', (old_title or 'Sheet')).strip() or 'Sheet'
+    suffix = f"-報表-{ym}"
+    name = f"{base}{suffix}"
+
+    if len(name) > MAXLEN:
+        keep = MAXLEN - len(suffix)
+        if keep < 1:
+            # 理論上不會發生；若發生則退而求其次保留後綴尾段
+            name = suffix[-MAXLEN:]
+        else:
+            name = f"{base[:keep]}{suffix}"
+
+    candidate = name
+    n = 1
+    while candidate in existing:
+        add = f"-{n}"
+        if len(name) + len(add) > MAXLEN:
+            candidate = f"{name[:MAXLEN - len(add)]}{add}"
+        else:
+            candidate = f"{name}{add}"
+        n += 1
+    return candidate
+# ────────────────────────────────────────────────
+
 
 # ─────────────── Sheet 複製工具（保留欄寬/樣式/合併格） ────────────────
 def clone_sheet(src_ws, tgt_wb, new_title=None):
@@ -223,13 +259,16 @@ def export():
     buf.seek(0)
     wb_new = openpyxl.load_workbook(buf)
 
-    # 合併到範本
+    # 合併到範本（不刪既有 Sheet；以新名稱新增）
     tpl = Path(current_app.root_path) / "static" / "薪資計算範本.xlsx"
     wb_tpl = openpyxl.load_workbook(tpl)
+
+    existing = set(wb_tpl.sheetnames)
+    ym_token = f"{y}{m:02d}"
     for s in wb_new.worksheets:
-        if s.title in wb_tpl.sheetnames:
-            del wb_tpl[s.title]
-        clone_sheet(s, wb_tpl)
+        new_title = make_new_title(s.title, ym_token, existing)
+        clone_sheet(s, wb_tpl, new_title=new_title)
+        existing.add(new_title)
 
     out_buf = io.BytesIO()
     wb_tpl.save(out_buf)

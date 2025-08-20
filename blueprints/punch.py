@@ -1,10 +1,10 @@
+# -*- coding: utf-8 -*-
 # blueprints/punch.py — 自助打卡藍圖（含手機友善 CSS）
 # ------------------------------------------------------
-# • 產生靜態 QR Code 導向打卡表單
+# • 固定 QRCode 導向 /punch
+# • ★ 短效 gate（記錄首次載入之 IP + 到期）＋ 一次性 token（單次使用）
+# • 帶回家後 F5：因 IP 改變或 gate 到期，不再發新 token → 顯示「頁面失效」
 # • 員工打卡／月卡查詢
-# • CSS 採高對比、大字體，並以 rem 作單位，搭配 viewport meta
-#   適配手機（螢幕寬 < 420px 自動放大字級）
-# • 部分設計值（色碼、字級）參考 WCAG 2.x & A11y 建議（未經正式驗證）
 
 from flask import Blueprint, render_template_string, request, redirect, url_for, current_app, session
 from calendar import monthrange
@@ -14,6 +14,9 @@ from datetime import datetime, date, timedelta
 from extensions import db
 from models import Employee, Checkin
 from . import NIGHT_END, merge_night
+
+import time, secrets, hmac, hashlib
+
 QR_VER_KEY = "QR_VER_DELTA"   # 儲存目前使用的版本偏移（整站共用）
 QR_VER_SPAN = 6               # 變化範圍：最小可行版本 ~ 最小+5（最多 40）
 
@@ -57,6 +60,84 @@ punch_bp = Blueprint("punch", __name__, url_prefix="/punch")
 
 ADMIN_QR_PWD = "hr1234"      # 更新密碼
 QR_CONFIG_KEY = "QR_TEXT"    # 目前 QR 內容暫存於 app.config
+
+# ──────────────────────── 小工具 ────────────────────────
+def _client_ip() -> str:
+    """
+    取得用戶端 IP。若在反向代理（如 Render）後，建議在 app factory 使用 ProxyFix；
+    這裡僅取 remote_addr，不自行解析 X-Forwarded-For（安全考量）。
+    """
+    return request.remote_addr or ""
+
+def _bind_fingerprint() -> str:
+    """依設定把 IP/UA 摻入指紋（用於 token/驗證）"""
+    parts = []
+    if current_app.config.get("PUNCH_BIND_IP", True):
+        parts.append(_client_ip())
+    if current_app.config.get("PUNCH_BIND_UA", True):
+        parts.append((request.headers.get("User-Agent") or "")[:120])
+    base = "|".join(parts)
+    return hashlib.sha1(base.encode("utf-8")).hexdigest() if base else ""
+
+def _issue_gate_if_needed() -> dict:
+    """
+    若 session 尚無 gate，建立：
+      gate = {"ip": 當下 IP, "exp": now+TTL}
+    若已有 gate：
+      - 若 IP 改變或已過期 → 回傳 {"invalid": True, "reason": ...}
+      - 否則回傳 gate 本身
+    """
+    now = int(time.time())
+    ttl = int(current_app.config.get("PUNCH_GATE_TTL_SEC", 120))
+    gate = session.get("punch_gate")
+
+    if not gate:
+        gate = {"ip": _client_ip(), "exp": now + ttl}
+        session["punch_gate"] = gate
+        return gate
+
+    # gate 已存在：檢查是否仍在有效視窗且 IP 未改變
+    if gate.get("ip") != _client_ip():
+        return {"invalid": True, "reason": "IP 改變"}
+    if now > int(gate.get("exp", 0)):
+        return {"invalid": True, "reason": "已過期"}
+    return gate
+
+def _new_token() -> dict:
+    """
+    建立一次性 token，寫入 session：
+      {"value": "...", "exp": ts, "fp": 綁定指紋}
+    """
+    now = int(time.time())
+    ttl = int(current_app.config.get("PUNCH_TOKEN_TTL_SEC", 120))
+    tok = {
+        "value": secrets.token_urlsafe(12),
+        "exp": now + ttl,
+        "fp": _bind_fingerprint(),
+    }
+    session["punch_token"] = tok
+    return tok
+
+def _consume_token(token_from_form: str) -> bool:
+    """
+    驗證並消費一次性 token：
+      - 存在於 session
+      - 未過期
+      - 值相等
+      - 指紋一致（IP/UA）
+    驗證後無論成功或失敗都移除 token（單次使用）
+    """
+    try:
+        tok = session.get("punch_token") or {}
+        ok = (
+            token_from_form
+            and tok.get("value") == token_from_form
+            and int(time.time()) <= int(tok.get("exp", 0))
+            and tok.get("fp") == _bind_fingerprint()
+        )
+        return bool(ok)
+    finally:
+        session.pop("punch_token", None)
 
 # ────────────────────────  QR Code 產生  ────────────────────────
 @punch_bp.route("/qrcode", methods=["GET", "POST"])
@@ -191,15 +272,34 @@ def qrcode_view():
         use_ver=use_ver,
     )
 
-# ────────────────────────  打卡表單  ────────────────────────
+# ────────────────────────  打卡表單（GET）  ────────────────────────
 @punch_bp.route("/", methods=["GET"])
 def form():
     err = request.args.get("err")
+
+    # 1) gate 檢查／建立（只要 gate 存在且 IP 未變、未過期，就視為在場）
+    gate = _issue_gate_if_needed()
+    if gate.get("invalid"):
+        # 不再發 token，提示失效（需要回現場重新掃描）
+        reason = gate.get("reason", "")
+        return render_template_string(
+            f"<!doctype html><html><head>{HEAD}</head><body>"
+            f"{'<p class=error>'+('頁面失效：'+reason)+'</p>' if reason else '<p class=error>頁面失效</p>'}"
+            "<h2>員工打卡</h2>"
+            "<p>請回現場重新掃描 QR Code。</p>"
+            "<p><a href='/admin/login'>管理</a></p>"
+            "</body></html>"
+        )
+
+    # 2) gate 有效：發一次性 token＋顯示倒數
+    tok = _new_token()
+    ttl = max(0, tok["exp"] - int(time.time()))
+
     return render_template_string(
         f"<!doctype html><html><head>{HEAD}</head><body>"
         f"{'<p class=error>'+err+'</p>' if err else ''}"
         "<h2>員工打卡</h2>"
-        "<form method=post>"
+        "<form method=post id='pform'>"
         "<input name=eid placeholder='員工編號' required autofocus>"
         "<select name=type>"
         "<option value=am-in>1.上午上班</option>"
@@ -209,20 +309,47 @@ def form():
         "<option value=ot-in>5.加班上班</option>"
         "<option value=ot-out>6.加班下班</option>"
         "</select>"
-        "<button>打卡</button>"
+        f"<input type='hidden' name='token' value='{tok['value']}'>"
+        f"<div class='ttl'>本頁有效倒數：<span id='sec'>{ttl}</span> 秒，逾時請重新掃描。</div>"
+        "<button id='submitBtn'>打卡</button>"
         "</form>"
         "<p><a href='/admin/login'>管理</a></p>"
+        "<script>"
+        "  (function(){"
+        f"    var sec={ttl};"
+        "    var s=document.getElementById('sec');"
+        "    var btn=document.getElementById('submitBtn');"
+        "    var t=setInterval(function(){"
+        "      sec=Math.max(0,sec-1); s.textContent=sec;"
+        "      if(sec<=0){clearInterval(t); btn.setAttribute('disabled','disabled'); btn.classList.add('disabled');}"
+        "    },1000);"
+        "  })();"
+        "</script>"
         "</body></html>"
     )
 
-# ────────────────────────  打卡處理  ────────────────────────
+# ────────────────────────  打卡處理（POST）  ────────────────────────
 @punch_bp.route("/", methods=["POST"])
 def punch():
     eid = request.form["eid"].strip()
     typ = request.form["type"]
-    now = datetime.now()
-    wd  = now.date().isoformat()
-    ts  = now.isoformat(timespec="seconds")
+    token = (request.form.get("token") or "").strip()
+
+    # 1) gate 必須仍有效（IP 未變 & 未過期）
+    gate = session.get("punch_gate")
+    now = int(time.time())
+    if not gate or gate.get("ip") != _client_ip() or now > int(gate.get("exp", 0)):
+        # gate 失效後不再自動刷新，必須回現場重掃
+        return redirect(url_for(".form", err="頁面失效，請回現場重新掃描"))
+
+    # 2) 驗證並消費一次性 token（單次使用、未過期、指紋一致）
+    if not _consume_token(token):
+        return redirect(url_for(".form", err="頁面已過期或無效，請重新掃描"))
+
+    # 3) 原有打卡流程
+    now_dt = datetime.now()
+    wd  = now_dt.date().isoformat()
+    ts  = now_dt.isoformat(timespec="seconds")
 
     emp = Employee.query.get(eid)
     if not emp:
@@ -235,7 +362,7 @@ def punch():
         msg, st = "已打過卡", "warn"
     else:
         db.session.add(Checkin(
-            employee_id=eid, work_date=wd, p_type=typ, ts=ts  # (長度已對應 models.py 之調整)
+            employee_id=eid, work_date=wd, p_type=typ, ts=ts
         ))
         db.session.commit()
         msg, st = "打卡成功", "success"
@@ -254,7 +381,7 @@ def card(eid: str):
         y, m = today.year, today.month
         ym = f"{y}-{m:02d}"
 
-    # 月份下拉清單（近 6 個月）
+    # 月份下拉清單（近 6 個月）
     ym_opts, cursor = [], today.replace(day=1)
     for _ in range(6):
         ym_val = cursor.strftime("%Y-%m")

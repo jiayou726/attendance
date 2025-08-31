@@ -10,12 +10,12 @@
    - 以 xlsxwriter 產生後，合併到 static/薪資計算範本.xlsx，保留欄寬/樣式/合併格。
 
 2) 工時卡片總檔（每區每人各一張 Sheet）：/admin/export/punch_all?ym=YYYY-MM
-   - 欄位：『日期、上午上、上午下、下午上、下午下、加班上、加班下』
-   - 00:00 ~ NIGHT_END 的下班(out)歸前一日的「加班下」。
+   - 欄位（依你提供之圖片）：『日期、上午上、上午下、下午上、下午下、加班上、加班下、備註、正班、加班≤2、加班>2、假日』
+   - 00:00 ~ NIGHT_END 的下班(out)歸前一日的「加班下」；同時此規則也影響當日正班/加班的小時計算。
 """
 
 from flask import Blueprint, send_file, request, current_app, abort
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, time as dtime
 from extensions import db
 from models import Employee, Checkin
 from . import merge_night, calc_hours, NIGHT_END
@@ -157,19 +157,23 @@ def export():
                     .order_by(Checkin.work_date, Checkin.p_type, Checkin.ts)
                     .all())
 
-            # recs：(dd, p_type) -> HH:MM，00:00–02:59 out 歸前日
+            # recs：(dd, p_type) -> HH:MM，00:00–NIGHT_END out 歸前日
             recs = {}
             for r in raws:
                 hm = r.ts[11:16]
                 hour = int(hm[:2])
+                ne_h, ne_m = map(int, NIGHT_END.split(':'))
+                adj_prev = (r.p_type.endswith('-out') and
+                            (hour < ne_h or (hour == ne_h and int(hm[3:5]) <= ne_m)))
                 adj_date = (datetime.fromisoformat(r.work_date).date() - timedelta(days=1)).isoformat() \
-                           if r.p_type.endswith('-out') and hour <= 2 else r.work_date
+                           if adj_prev else r.work_date
                 if not adj_date.startswith(f"{y}-{m:02d}"):
                     continue
                 dd = adj_date[8:10]
                 recs[(dd, r.p_type)] = hm
             emp_raws[emp.id] = recs
 
+            # 請假／備註
             emp_notes[emp.id] = {r.work_date[8:10]: (r.note or '請假')
                                  for r in raws if r.p_type == LEAVE_PTYPE}
 
@@ -284,76 +288,25 @@ def export():
 
 # ======================================================================
 # 路由二：工時卡片總檔（每區每人各一張 Sheet）
-# 欄位：日期, 上午上, 上午下, 下午上, 下午下, 加班上, 加班下
-# 00:00 ~ NIGHT_END 的 out 歸前一日的加班下
+# 欄位：日期, 上午上, 上午下, 下午上, 下午下, 加班上, 加班下, 備註, 正班, 加班≤2, 加班>2, 假日
+# 00:00 ~ NIGHT_END 的 out 歸前一日
 # ======================================================================
 
-def _hm(ts: str) -> str:
-    """'YYYY-MM-DDTHH:MM:SS' → 'HH:MM'；若已是 'HH:MM' 直接回傳。"""
-    if len(ts) >= 16 and 'T' in ts:
-        return ts[11:16]
-    if len(ts) == 5 and ts[2] == ':':
-        return ts
-    try:
-        return datetime.fromisoformat(ts).strftime("%H:%M")
-    except Exception:
-        return ts
-
-
-def _assign_pairs_for_day(records):
-    """
-    將已排序的 records（僅含 in/out/lv）配對成三組：
-      (m_in, m_out), (a_in, a_out), (ot_in, ot_out)
-    規則：依出現順序填入三 pair；out 填入最後一個未完成 out 的 pair。
-    """
-    pairs = [{'in': '', 'out': ''}, {'in': '', 'out': ''}, {'in': '', 'out': ''}]
-
-    def find_place_for_out():
-        for i in (2, 1, 0):
-            if pairs[i]['in'] and not pairs[i]['out']:
-                return i
-        return None
-
-    for r in records:
-        if r['p_type'] == 'lv':
-            continue
-        if r['p_type'] == 'in':
-            for i in range(3):
-                if not pairs[i]['in']:
-                    pairs[i]['in'] = r['ts']
-                    break
-        elif r['p_type'] == 'out':
-            idx = find_place_for_out()
-            if idx is not None:
-                pairs[idx]['out'] = r['ts']
-
-    return (pairs[0]['in'], pairs[0]['out'],
-            pairs[1]['in'], pairs[1]['out'],
-            pairs[2]['in'], pairs[2]['out'])
-
-
-# ============================================================================
-# 路由二：工時卡片總檔（每區每人各一張 Sheet）
-# 6 段打卡；00:00–02:59 的 *-out 歸前一天
-# ============================================================================
-
-def _hm(ts: str) -> str:
-    """'YYYY-MM-DDTHH:MM:SS' → 'HH:MM'；若已是 'HH:MM' 直接回傳。"""
-    if len(ts) >= 16 and 'T' in ts:
-        return ts[11:16]
-    if len(ts) == 5 and ts[2] == ':':
-        return ts
-    try:
-        return datetime.fromisoformat(ts).strftime("%H:%M")
-    except Exception:
-        return ts                         # 未查證
-
-# 六段類型 → 欄位序
+# 六段類型 → 欄位序（前 6 欄是打卡時間）
 _COL_MAP = {
     'am-in': 1, 'am-out': 2,
     'pm-in': 3, 'pm-out': 4,
     'ot-in': 5, 'ot-out': 6,
 }
+
+def _night_end_time():
+    """將 NIGHT_END 'HH:MM' 轉為 datetime.time。"""
+    try:
+        hh, mm = map(int, NIGHT_END.split(':')[:2])
+        return dtime(hour=hh, minute=mm)
+    except Exception:
+        # 若參數格式不正確，保守採 02:59（未查證）
+        return dtime(hour=2, minute=59)
 
 @exp_bp.route("/export/punch_all")
 def export_punch_all():
@@ -363,13 +316,25 @@ def export_punch_all():
             if ym and re.fullmatch(r"\d{4}-\d{2}", ym)
             else (today.year, today.month))
     days = calendar.monthrange(y, m)[1]
+    month_prefix = f"{y}-{m:02d}"
+    nxt = (date(y, m, 1) + timedelta(days=32)).replace(day=1)
 
     emps = Employee.query.order_by(Employee.area, Employee.id).all()
+    if not emps:
+        return abort(400, "無員工資料")
 
+    ne_time = _night_end_time()
+
+    # 取本月資料＋下月首日 00:00~NIGHT_END 的 out（跨月歸前日）
     all_raws = (Checkin.query
                 .with_entities(Checkin.employee_id, Checkin.work_date,
-                               Checkin.p_type, Checkin.ts)
-                .filter(Checkin.work_date.like(f"{y}-{m:02d}%"))
+                               Checkin.p_type, Checkin.ts, Checkin.note)
+                .filter(
+                    (Checkin.work_date.like(f"{month_prefix}%")) |
+                    ((Checkin.work_date == nxt.isoformat()) &
+                     (Checkin.p_type.like('%-out')) &
+                     (Checkin.ts < f"{nxt}T{NIGHT_END}:00"))
+                )
                 .order_by(Checkin.employee_id, Checkin.work_date, Checkin.ts)
                 .all())
 
@@ -390,66 +355,133 @@ def export_punch_all():
     hol_fmt   = book.add_format({'border': 1, 'align': 'center', 'bg_color': '#EDEDED'})
     total_fmt = book.add_format({'bold': True, 'border': 1, 'align': 'center'})
 
+    headers = ['日期', '上午上', '上午下', '下午上', '下午下',
+               '加班上', '加班下', '備註', '正班', '加班≤2', '加班>2', '假日']
+
     for emp in emps:
-        ws = book.add_worksheet(f"{emp.area or ''}-{emp.id}-{emp.name}"[:31])
+        ws = book.add_worksheet(f"{(emp.area or '')}-{emp.id}-{emp.name}"[:31])
 
         # 標題
-        ws.merge_range(0, 0, 0, 6,
+        ws.merge_range(0, 0, 0, len(headers)-1,
                        f"{emp.name}（{emp.id}） 區域：{emp.area or ''}  {y}/{m:02d}",
                        title_fmt)
-        ws.merge_range(1, 0, 1, 6, "出勤天數：", sub_fmt)
+        ws.merge_range(1, 0, 1, len(headers)-1, "出勤天數：", sub_fmt)
 
-        headers = ['日期', '上午上', '上午下', '下午上', '下午下', '加班上', '加班下']
         for c, h in enumerate(headers):
             ws.write(2, c, h, hdr_fmt)
 
-        ws.set_column(0, 0, 10)
-        ws.set_column(1, 6, 12)
+        ws.set_column(0, 0, 10)      # 日期欄
+        ws.set_column(1, 6, 12)      # 六段打卡
+        ws.set_column(7, 7, 20)      # 備註
+        ws.set_column(8, 11, 10)     # 四個小時欄
         ws.freeze_panes(3, 1)
 
-        # 為每一天預留 6 欄
-        rec_by_day = {date(y, m, d).isoformat(): [''] * 6
+        # 為每一天預留 11 欄（不含日期）；前 6 欄打卡、接著備註、最後 4 欄為小時計算
+        rec_by_day = {date(y, m, d).isoformat(): [''] * 11
                       for d in range(1, days + 1)}
+        # 備註來源：請假（lv）或紀錄上的 note
+        notes_by_day = {date(y, m, d).isoformat(): [] for d in range(1, days + 1)}
 
+        # 整理打卡與備註；處理 00:00~NIGHT_END 的 out 歸前日
         for r in by_emp.get(emp.id, []):
             ts_dt = datetime.fromisoformat(r.ts)
             hm = ts_dt.strftime("%H:%M")
 
-            # 00:00–02:59 的 out 歸前一天
-            if r.p_type.endswith('-out') and ts_dt.hour <= 2:
+            # 決定歸屬日期
+            if r.p_type.endswith('-out') and ts_dt.time() <= ne_time:
                 tgt_date = (ts_dt.date() - timedelta(days=1)).isoformat()
             else:
                 tgt_date = r.work_date
 
-            # 只處理本月範圍
-            if tgt_date[:7] != f"{y}-{m:02d}":
+            if tgt_date[:7] != month_prefix:
+                continue
+            if tgt_date not in rec_by_day:
+                # 防跨月前一日（例如 1 號 00:30 歸 上月末）超出本月表格時略過
                 continue
 
+            # 六段打卡
             col = _COL_MAP.get(r.p_type)
             if col:
                 rec_by_day[tgt_date][col - 1] = hm
 
-        # 寫入表格
+            # 備註（請假或一般 note）
+            if r.p_type == LEAVE_PTYPE:
+                notes_by_day[tgt_date].append(r.note or '請假')
+            elif r.note:
+                notes_by_day[tgt_date].append(r.note)
+
+        # 寫入表格與每日工時計算（沿用月表演算法）
         attend_days = 0
         for d in range(1, days + 1):
             the_date = date(y, m, d)
             row = 3 + d - 1
-            fmt = hol_fmt if the_date.weekday() >= 5 else cell_fmt
+            is_weekend = the_date.weekday() >= 5
+            fmt = hol_fmt if is_weekend else cell_fmt
             cols = rec_by_day[the_date.isoformat()]
 
-            if any(cols):
+            # 取六段時間字串
+            s_am, e_am, s_pm, e_pm, s_ot, e_ot = cols[0], cols[1], cols[2], cols[3], cols[4], cols[5]
+
+            # 以月表同邏輯計算（正班最多 8、加班分 ≤2 與 >2；週末全部歸「假日」顯示）
+            reg = ot2 = otx = 0.0
+
+            # 上午：若無 am-out 但有 pm-out，允許用 pm-out 收尾（你的月表行為）
+            if s_am and (e_am or e_pm):
+                end_am = e_am or e_pm
+                has_pm_in = bool(s_pm)
+                h = sum(calc_hours(s_am, end_am, emp.default_break, skip_break=has_pm_in))
+                take_reg = min(h, 8 - reg); reg += take_reg
+                remain   = h - take_reg
+                take2    = min(remain, 2 - ot2); ot2 += take2; otx += remain - take2
+
+            # 下午
+            if s_pm and e_pm:
+                h = sum(calc_hours(s_pm, e_pm, emp.default_break, skip_break=True))
+                take_reg = min(h, 8 - reg); reg += take_reg
+                remain   = h - take_reg
+                take2    = min(remain, 2 - ot2); ot2 += take2; otx += remain - take2
+
+            # 加班
+            if s_ot and e_ot:
+                h = sum(calc_hours(s_ot, e_ot, emp.default_break, skip_break=True))
+                take2 = min(h, 2 - ot2); ot2 += take2; otx += h - take2
+
+            hol_hours = (reg + ot2 + otx) if is_weekend else 0.0
+
+            # 出勤天數（有任一時數則+1；僅備註/請假不算）
+            if reg or ot2 or otx or hol_hours:
                 attend_days += 1
 
+            # 寫入日期
             ws.write(row, 0, f"{m:02d}-{d:02d}", fmt)
-            for i, v in enumerate(cols, start=1):
-                ws.write(row, i, v, fmt)
 
-        # 總計列（只畫框）
+            # 寫入六段打卡
+            for i in range(6):
+                ws.write(row, 1 + i, cols[i], fmt)
+
+            # 備註（去重後以「；」串接）
+            note_txt = '；'.join(sorted(set(notes_by_day[the_date.isoformat()]))) if notes_by_day[the_date.isoformat()] else ''
+            ws.write(row, 7, note_txt, fmt)
+
+            # 寫入四個小時欄（週末全部放「假日」，平日各自填入）
+            if is_weekend:
+                ws.write(row, 8,  '', fmt)  # 正班
+                ws.write(row, 9,  '', fmt)  # 加班≤2
+                ws.write(row,10,  '', fmt)  # 加班>2
+                ws.write(row,11,  hol_hours or '', fmt)
+            else:
+                ws.write(row, 8,  reg or '', fmt)
+                ws.write(row, 9,  ot2 or '', fmt)
+                ws.write(row,10,  otx or '', fmt)
+                ws.write(row,11,  '', fmt)  # 假日
+
+        # 總計列（此檔僅卡片視覺用，總計列只畫框）
         tr = 3 + days
         ws.write(tr, 0, "總計", total_fmt)
-        for c in range(1, 7):
+        for c in range(1, len(headers)):
             ws.write(tr, c, '', total_fmt)
 
+        # 出勤天數
         ws.write(1, 0, f"出勤天數：{attend_days}", sub_fmt)
 
     writer.close()

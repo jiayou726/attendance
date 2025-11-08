@@ -13,6 +13,7 @@ from blueprints.employees       import emp_bp
 from blueprints.records         import rec_bp
 from blueprints.export          import exp_bp
 from blueprints.import_employees import import_bp
+from blueprints.order_tool import order_bp
 
 
 def create_app() -> Flask:
@@ -29,6 +30,7 @@ def create_app() -> Flask:
     app.register_blueprint(rec_bp,  url_prefix="/admin")
     app.register_blueprint(exp_bp,  url_prefix="/admin")
     app.register_blueprint(import_bp, url_prefix="/admin")
+    app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)              # /punch
 
     # ── 首頁導向 ──

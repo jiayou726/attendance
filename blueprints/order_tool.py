@@ -1,9 +1,10 @@
-"""叫貨 Excel 篩選工具 Blueprint."""
+"""叫貨 Excel 篩選工具 Blueprint。"""
 
 from __future__ import annotations
 
 import io
 import uuid
+from datetime import datetime
 from typing import List, Sequence
 
 import pandas as pd
@@ -11,6 +12,8 @@ from flask import Blueprint, abort, render_template_string, request, send_file
 
 # Excel 欄位群組起點，對應原本的 1,7,13,19,25...
 GROUP_STARTS: Sequence[int] = (1, 7, 13, 19, 25)
+HEADER_SCAN_ROWS = 6
+HEADER_SKIP_VALUES = {"廠商"}
 
 # 暫存轉出的 Excel，讓使用者可以下載。
 RESULT_CACHE: dict[str, bytes] = {}
@@ -70,6 +73,7 @@ HTML_TEMPLATE = """
             <thead>
               <tr>
                 <th>工作表</th>
+                <th>日期</th>
                 <th>廠商</th>
                 <th>品名</th>
                 <th>1箱g數</th>
@@ -81,6 +85,7 @@ HTML_TEMPLATE = """
               {% for row in result_rows %}
               <tr>
                 <td>{{ row["工作表"] }}</td>
+                <td>{{ row["日期"] }}</td>
                 <td>{{ row["廠商"] }}</td>
                 <td>{{ row["品名"] }}</td>
                 <td>{{ row["1箱g"] }}</td>
@@ -99,6 +104,38 @@ HTML_TEMPLATE = """
 """
 
 
+def _detect_group_date(df: pd.DataFrame, start: int) -> str:
+    """Return the label/date that sits on top of a 5-column group."""
+
+    if start >= df.shape[1]:
+        return ""
+
+    limit = min(HEADER_SCAN_ROWS, len(df))
+    candidates: list[str] = []
+
+    for cell in df.iloc[:limit, start]:
+        if pd.isna(cell):
+            continue
+
+        if isinstance(cell, datetime):
+            text = cell.strftime("%Y-%m-%d")
+        else:
+            text = str(cell).strip()
+
+        if not text:
+            continue
+
+        if any(marker in text for marker in ("月", "日", "/", "-")):
+            return text
+
+        if text in HEADER_SKIP_VALUES or text.startswith("用餐"):
+            continue
+
+        candidates.append(text)
+
+    return candidates[0] if candidates else ""
+
+
 def parse_keywords(raw: str) -> List[str]:
     return [kw.strip() for kw in raw.split(",") if kw.strip()]
 
@@ -111,6 +148,8 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
         df = pd.read_excel(xls, sheet_name=sheet)
         if df.empty:
             continue
+
+        group_dates = {start: _detect_group_date(df, start) for start in GROUP_STARTS}
 
         for _, row in df.iterrows():
             for start in GROUP_STARTS:
@@ -131,6 +170,7 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
                     rows.append(
                         {
                             "工作表": sheet,
+                            "日期": group_dates.get(start, ""),
                             "廠商": vendor,
                             "品名": item,
                             "1箱g": g1,

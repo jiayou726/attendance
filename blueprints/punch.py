@@ -178,30 +178,54 @@ def qrcode_view():
     b64 = base64.b64encode(buf.getvalue()).decode()
 
     tpl = """
-<!doctype html><html lang="zh-Hant"><head>{{ HEAD|safe }}<title>? QR Code</title>
-<style>.wrap{max-width:720px;margin:40px auto;padding:0 16px}.card{border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06)}.qr{display:grid;place-items:center;margin:16px 0 8px}.qr img{width:100%;max-width:360px;height:auto}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:center}.btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;text-decoration:none;color:#111827;background:#fff}.btn.primary{background:#111827;color:#fff;border-color:#111827}.label{font-size:.9rem;color:#374151;margin:.2rem 0 .5rem;text-align:center}.msg{margin-top:.75rem;color:#B22222;text-align:center}</style>
-</head><body>
-<div class="wrap"><h2>? QR Code</h2><div class="card">
-  <div class="qr"><img src="data:image/png;base64,{{ b64 }}" alt="QR Code"></div>
-  <div class="row" style="margin-bottom:16px;">
-    <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">?��??�卡表單</a>
-    <a class="btn" href="{{ order_tool_url }}" target="_blank" rel="noopener">?��?�叫貨專區</a>
-  </div>
-  {% if not verified %}
-  <form method="post" autocomplete="off" class="row" style="flex-direction:column;align-items:center;">
-    <div class="label">蝞∠?撖Ⅳ嚗?/div><input type="password" name="pwd" placeholder="隢撓?亙?蝣?>
-    <div class="row" style="margin-top:12px;"><button class="btn primary" type="submit">撽?</button></div>
-  </form>
-  {% else %}
-  <form method="post" class="row" style="margin-top:4px;">
-    <input type="hidden" name="verified" value="1">
-    <button class="btn primary" type="submit" name="action" value="regen">??Ｙ???</button>
-    <a class="btn" download="punch_qr.png" href="data:image/png;base64,{{ b64 }}">銝? QR ??</a>
-  </form>
-  {% endif %}
-  {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
-</div></div></body></html>
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    {{ HEAD|safe }}
+    <title>打卡 QR Code</title>
+    <style>
+      .wrap{max-width:720px;margin:40px auto;padding:0 16px}
+      .card{border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+      .qr{display:grid;place-items:center;margin:16px 0 8px}
+      .qr img{width:100%;max-width:360px;height:auto}
+      .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:center}
+      .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;text-decoration:none;color:#111827;background:#fff}
+      .btn.primary{background:#111827;color:#fff;border-color:#111827}
+      .label{font-size:.9rem;color:#374151;margin:.2rem 0 .5rem;text-align:center}
+      .msg{margin-top:.75rem;color:#B22222;text-align:center}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h2>打卡 QR Code</h2>
+      <div class="card">
+        <div class="qr"><img src="data:image/png;base64,{{ b64 }}" alt="QR Code"></div>
+        <div class="row" style="margin-bottom:16px;">
+          <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">前往線上打卡表單</a>
+          <a class="btn" href="{{ order_tool_url }}" target="_blank" rel="noopener">前往叫貨專區</a>
+        </div>
+        {% if not verified %}
+        <form method="post" autocomplete="off" class="row" style="flex-direction:column;align-items:center;">
+          <div class="label">管理密碼：</div>
+          <input type="password" name="pwd" placeholder="請輸入密碼">
+          <div class="row" style="margin-top:12px;">
+            <button class="btn primary" type="submit">驗證</button>
+          </div>
+        </form>
+        {% else %}
+        <form method="post" class="row" style="margin-top:4px;">
+          <input type="hidden" name="verified" value="1">
+          <button class="btn primary" type="submit" name="action" value="regen">產生新 QR 圖片</button>
+          <a class="btn" download="punch_qr.png" href="data:image/png;base64,{{ b64 }}">下載 QR 圖片</a>
+        </form>
+        {% endif %}
+        {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+      </div>
+    </div>
+  </body>
+</html>
 """
+
     return render_template_string(tpl, HEAD=HEAD, b64=b64, qr_text=qr_text, order_tool_url=order_tool_url)
 
 # ????????????????????????  ?亙嚗? QR ???圈ㄐ嚗?甈∠? token 銝血???/use嚗?????????????????????????

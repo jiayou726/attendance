@@ -1,11 +1,12 @@
-"""叫貨 Excel 篩選工具 Blueprint。"""
+﻿"""叫貨 Excel 篩選工具 Blueprint。"""
 
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from datetime import datetime
-from typing import List, Sequence
+from typing import List, Sequence, Tuple, Optional
 
 import pandas as pd
 from flask import Blueprint, abort, render_template_string, request, send_file
@@ -14,6 +15,9 @@ from flask import Blueprint, abort, render_template_string, request, send_file
 GROUP_STARTS: Sequence[int] = (1, 7, 13, 19, 25)
 HEADER_SCAN_ROWS = 6
 HEADER_SKIP_VALUES = {"廠商"}
+DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%m-%d", "%m/%d")
+WEEKDAY_LABELS = ("一", "二", "三", "四", "五", "六", "日")
+CURRENT_YEAR = datetime.now().year
 
 # 暫存轉出的 Excel，讓使用者可以下載。
 RESULT_CACHE: dict[str, bytes] = {}
@@ -136,6 +140,85 @@ def _detect_group_date(df: pd.DataFrame, start: int) -> str:
     return candidates[0] if candidates else ""
 
 
+def _parse_date_components(value: str) -> Optional[Tuple[int, int, int]]:
+    if not value:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    for fmt in DATE_FORMATS:
+        try:
+            dt = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+
+        year = dt.year if "%Y" in fmt else CURRENT_YEAR
+        return year, dt.month, dt.day
+
+    match = re.search(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})", text)
+    if match:
+        year, month, day = map(int, match.groups())
+        return year, month, day
+
+    match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})", text)
+    if match:
+        month, day = map(int, match.groups())
+        return CURRENT_YEAR, month, day
+
+    numbers = [int(n) for n in re.findall(r"\d+", text)]
+    if len(numbers) >= 3:
+        year, month, day = numbers[:3]
+        return year, month, day
+    if len(numbers) == 2:
+        month, day = numbers
+        return CURRENT_YEAR, month, day
+    if len(numbers) == 1:
+        day = numbers[0]
+        return CURRENT_YEAR, 1, day
+
+    return None
+
+
+def _format_date_display(value: str) -> Tuple[str, Optional[Tuple[int, int, int]]]:
+    components = _parse_date_components(value)
+    text = (value or "").strip()
+
+    if not components:
+        return text, None
+
+    year, month, day = components
+    try:
+        dt = datetime(year, month, day)
+    except ValueError:
+        return text or f"{year:04d}-{month:02d}-{day:02d}", components
+
+    has_week = bool(re.search(r"(週|星期|禮拜|\([一二三四五六日]\))", text))
+    base = text or dt.strftime("%Y-%m-%d")
+    if not has_week:
+        base = f"{base} ({WEEKDAY_LABELS[dt.weekday()]})"
+
+    return base, components
+
+
+def _row_sort_key(row: dict) -> Tuple[int, int, int, str, str, str]:
+    token = row.get("__date_token")
+    if token:
+        year, month, day = token
+    else:
+        year, month, day = (9999, 99, 99)
+
+    return (
+        year,
+        month,
+        day,
+        row.get("工作表", ""),
+        str(row.get("廠商", "")),
+        str(row.get("品名", "")),
+    )
+
+
 def parse_keywords(raw: str) -> List[str]:
     return [kw.strip() for kw in raw.split(",") if kw.strip()]
 
@@ -167,17 +250,24 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
 
                 text = f"{vendor} {item}".lower()
                 if any(kw in text for kw in lowered):
+                    raw_date = group_dates.get(start, "")
+                    display_date, token = _format_date_display(raw_date)
                     rows.append(
                         {
                             "工作表": sheet,
-                            "日期": group_dates.get(start, ""),
+                            "日期": display_date,
                             "廠商": vendor,
                             "品名": item,
                             "1箱g": g1,
                             "數量": qty,
                             "單位": unit,
+                            "__date_token": token,
                         }
                     )
+
+    rows.sort(key=_row_sort_key)
+    for row in rows:
+        row.pop("__date_token", None)
     return rows
 
 

@@ -72,14 +72,8 @@ def _bind_fingerprint() -> str:
     return hashlib.sha1(base.encode("utf-8")).hexdigest() if base else ""
 
 def _issue_or_refresh_gate_same_ip() -> dict:
-    """
-    gate = {"ip": ?Ⅳ?嗡? IP, "exp": ?唳???}
-    - session ??gate嚗遣蝡?
-    - ??gate 銝?IP ?寡?嚗nvalid嚗?摰??雯頝荔?
-    - ??gate 銝?IP ?詨?嚗?
-        * ?芷???瘝輻
-        * 撌脤????典? IP 銝?????嫣噶?曉???
-    """
+    """Return gate info tied to current client IP, issuing or refreshing as needed."""
+
     now = int(time.time())
     ttl = int(current_app.config.get("PUNCH_GATE_TTL_SEC", 120))
     cur_ip = _client_ip()
@@ -101,7 +95,8 @@ def _issue_or_refresh_gate_same_ip() -> dict:
     return gate
 
 def _new_token() -> dict:
-    """撱箇?銝甈⊥?token嚗? IP/UA ?? + ?唳?嚗?摮 session"""
+    """Issue a new single-use token bound to the current client fingerprint."""
+
     now = int(time.time())
     ttl = int(current_app.config.get("PUNCH_TOKEN_TTL_SEC", 120))
     tok = {
@@ -113,13 +108,15 @@ def _new_token() -> dict:
     return tok
 
 def _check_token_alive() -> tuple[bool, int]:
-    """靘?/use 撅內??剁?? (???, ?拚?蝘?"""
+    """Return (is_valid, seconds_left) for the session token."""
+
     tok = session.get("punch_token") or {}
     left = int(tok.get("exp", 0)) - int(time.time())
     return (bool(tok) and left > 0 and tok.get("fp") == _bind_fingerprint(), max(0, left))
 
 def _consume_token(token_from_form: str) -> bool:
-    """撽?銝行?鞎颱?甈⊥?token嚗隢??蝘駁嚗?""
+    """Validate and consume the pending session token regardless of outcome."""
+
     try:
         tok = session.get("punch_token") or {}
         ok = (
@@ -154,14 +151,14 @@ def qrcode_view():
         else:
             if request.form.get("pwd", "") == ADMIN_QR_PWD:
                 verified = True
-                msg = "??撌脤?霅??舫??啁??銝?????
+                msg = "管理密碼驗證成功，現在可以重新產生或下載 QR 圖片。"
             else:
-                msg = "??撖Ⅳ?航炊??
+                msg = "管理密碼錯誤，請再試一次。"
 
         if verified and request.form.get("action") == "regen":
             delta += 1
             current_app.config[QR_VER_KEY] = delta
-            msg = "??撌脫?圈?閮剖?璅??
+            msg = "已更新 QR 版本並重新產生圖片，請重新下載。"
 
     max_ver = min(min_ver + QR_VER_SPAN - 1, 40)
     span = max_ver - min_ver + 1
@@ -177,54 +174,55 @@ def qrcode_view():
     buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    tpl = """
-<!doctype html>
-<html lang="zh-Hant">
-  <head>
-    {{ HEAD|safe }}
-    <title>打卡 QR Code</title>
-    <style>
-      .wrap{max-width:720px;margin:40px auto;padding:0 16px}
-      .card{border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-      .qr{display:grid;place-items:center;margin:16px 0 8px}
-      .qr img{width:100%;max-width:360px;height:auto}
-      .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:center}
-      .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;text-decoration:none;color:#111827;background:#fff}
-      .btn.primary{background:#111827;color:#fff;border-color:#111827}
-      .label{font-size:.9rem;color:#374151;margin:.2rem 0 .5rem;text-align:center}
-      .msg{margin-top:.75rem;color:#B22222;text-align:center}
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <h2>打卡 QR Code</h2>
-      <div class="card">
-        <div class="qr"><img src="data:image/png;base64,{{ b64 }}" alt="QR Code"></div>
-        <div class="row" style="margin-bottom:16px;">
-          <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">前往線上打卡表單</a>
-          <a class="btn" href="{{ order_tool_url }}" target="_blank" rel="noopener">前往叫貨專區</a>
-        </div>
-        {% if not verified %}
-        <form method="post" autocomplete="off" class="row" style="flex-direction:column;align-items:center;">
-          <div class="label">管理密碼：</div>
-          <input type="password" name="pwd" placeholder="請輸入密碼">
-          <div class="row" style="margin-top:12px;">
-            <button class="btn primary" type="submit">驗證</button>
-          </div>
-        </form>
-        {% else %}
-        <form method="post" class="row" style="margin-top:4px;">
-          <input type="hidden" name="verified" value="1">
-          <button class="btn primary" type="submit" name="action" value="regen">產生新 QR 圖片</button>
-          <a class="btn" download="punch_qr.png" href="data:image/png;base64,{{ b64 }}">下載 QR 圖片</a>
-        </form>
-        {% endif %}
-        {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
-      </div>
-    </div>
-  </body>
-</html>
-"""
+    tpl = "\n".join([
+        '<!doctype html>',
+        '<html lang="zh-Hant">',
+        '  <head>',
+        '    {{ HEAD|safe }}',
+        '    <title>打卡 QR Code</title>',
+        '    <style>',
+        '      .wrap{max-width:720px;margin:40px auto;padding:0 16px}',
+        '      .card{border:1px solid #e5e7eb;border-radius:12px;padding:24px;box-shadow:0 2px 8px rgba(0,0,0,.06)}',
+        '      .qr{display:grid;place-items:center;margin:16px 0 8px}',
+        '      .qr img{width:100%;max-width:360px;height:auto}',
+        '      .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:center}',
+        '      .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;text-decoration:none;color:#111827;background:#fff}',
+        '      .btn.primary{background:#111827;color:#fff;border-color:#111827}',
+        '      .label{font-size:.9rem;color:#374151;margin:.2rem 0 .5rem;text-align:center}',
+        '      .msg{margin-top:.75rem;color:#B22222;text-align:center}',
+        '    </style>',
+        '  </head>',
+        '  <body>',
+        '    <div class="wrap">',
+        '      <h2>打卡 QR Code</h2>',
+        '      <div class="card">',
+        '        <div class="qr"><img src="data:image/png;base64,{{ b64 }}" alt="QR Code"></div>',
+        '        <div class="row" style="margin-bottom:16px;">',
+        '          <a class="btn primary" href="{{ qr_text }}" target="_blank" rel="noopener">前往線上打卡表單</a>',
+        '          <a class="btn" href="{{ order_tool_url }}" target="_blank" rel="noopener">前往叫貨專區</a>',
+        '        </div>',
+        '        {% if not verified %}',
+        '        <form method="post" autocomplete="off" class="row" style="flex-direction:column;align-items:center;">',
+        '          <div class="label">管理密碼：</div>',
+        '          <input type="password" name="pwd" placeholder="請輸入密碼">',
+        '          <div class="row" style="margin-top:12px;">',
+        '            <button class="btn primary" type="submit">驗證</button>',
+        '          </div>',
+        '        </form>',
+        '        {% else %}',
+        '        <form method="post" class="row" style="margin-top:4px;">',
+        '          <input type="hidden" name="verified" value="1">',
+        '          <button class="btn primary" type="submit" name="action" value="regen">產生新 QR 圖片</button>',
+        '          <a class="btn" download="punch_qr.png" href="data:image/png;base64,{{ b64 }}">下載 QR 圖片</a>',
+        '        </form>',
+        '        {% endif %}',
+        '        {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}',
+        '      </div>',
+        '    </div>',
+        '  </body>',
+        '</html>'
+    ])
+
 
     return render_template_string(tpl, HEAD=HEAD, b64=b64, qr_text=qr_text, order_tool_url=order_tool_url)
 
@@ -233,12 +231,12 @@ def qrcode_view():
 def form():
     gate = _issue_or_refresh_gate_same_ip()
     if gate.get("invalid"):
-        reason = gate.get("reason", "撌脣仃??)
+        reason = gate.get("reason", "Gate expired")
         return render_template_string(
             f"<!doctype html><html><head>{HEAD}</head><body>"
-            f"<p class='error'>?憭望?嚗reason}</p>"
-            "<h2>?∪極?</h2><p>隢??曉??? QR Code??/p>"
-            "<p><a href='/admin/login'>蝞∠?</a></p></body></html>"
+            f"<p class='error'>無法使用打卡頁面：{reason}</p>"
+            "<h2>線上打卡</h2><p>請回到原裝置重新掃描 QR Code。</p>"
+            "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
     tok = _new_token()  # 瘥活???賜? token
@@ -252,9 +250,9 @@ def use():
     if not tk or tk != tok.get("value"):
         return render_template_string(
             f"<!doctype html><html><head>{HEAD}</head><body>"
-            "<p class='error'>?憭望?嚗oken 銝泵??摮</p>"
-            "<h2>?∪極?</h2><p>隢??曉??? QR Code??/p>"
-            "<p><a href='/admin/login'>蝞∠?</a></p></body></html>"
+            "<p class='error'>無效的憑證，請重新掃描 QR Code。</p>"
+            "<h2>線上打卡</h2><p>請回到原裝置重新掃描 QR Code。</p>"
+            "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
     # gate 敹?隞???& IP ?芾?嚗oken 敹?隞???
@@ -266,30 +264,30 @@ def use():
     if not ok_gate or not ok_tok:
         return render_template_string(
             f"<!doctype html><html><head>{HEAD}</head><body>"
-            "<p class='error'>?憭望?嚗歇??</p>"
-            "<h2>?∪極?</h2><p>隢??曉??? QR Code??/p>"
-            "<p><a href='/admin/login'>蝞∠?</a></p></body></html>"
+            "<p class='error'>此連線已失效，請重新掃描 QR Code。</p>"
+            "<h2>線上打卡</h2><p>請回到原裝置重新掃描 QR Code。</p>"
+            "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
     # 憿舐內銵典嚗idden 撣?token嚗?? left 蝘??寧 f-string嚗?? % ?澆???
     return render_template_string(
         f"<!doctype html><html><head>{HEAD}</head><body>"
-        "<h2>?∪極?</h2>"
+        "<h2>線上打卡</h2>"
         "<form method='post' action='/punch/'>"
-        "<input name='eid' placeholder='?∪極蝺刻?' required autofocus>"
+        "<input name='eid' placeholder='員工編號' required autofocus>"
         "<select name='type'>"
-        "<option value='am-in'>1.銝?銝</option>"
-        "<option value='am-out'>2.銝?銝</option>"
-        "<option value='pm-in'>3.銝?銝</option>"
-        "<option value='pm-out'>4.銝?銝</option>"
-        "<option value='ot-in'>5.?銝</option>"
-        "<option value='ot-out'>6.?銝</option>"
+        "<option value='am-in'>1. 上午上班</option>"
+        "<option value='am-out'>2. 上午下班</option>"
+        "<option value='pm-in'>3. 下午上班</option>"
+        "<option value='pm-out'>4. 下午下班</option>"
+        "<option value='ot-in'>5. 加班上班</option>"
+        "<option value='ot-out'>6. 加班下班</option>"
         "</select>"
         f"<input type='hidden' name='token' value='{tok['value']}'>"
-        f"<div class='ttl'>?祇????嚗?span id='sec'>{left}</span> 蝘??暹?隢??唳???/div>"
-        "<button id='submitBtn'>?</button>"
+        f"<div class='ttl'>此頁面將在 <span id='sec'>{left}</span> 秒後失效，請儘速提交。</div>"
+        "<button id='submitBtn'>送出打卡</button>"
         "</form>"
-        "<p><a href='/admin/login'>蝞∠?</a></p>"
+        "<p><a href='/admin/login'>管理登入</a></p>"
         "<script>(function(){"
         f"var sec={left};"
         "var s=document.getElementById('sec');"
@@ -313,11 +311,11 @@ def punch():
     gate = session.get("punch_gate")
     now = int(time.time())
     if not gate or gate.get("ip") != _client_ip() or now > int(gate.get("exp", 0)):
-        return redirect(url_for(".form", err="?憭望?嚗???湧??唳???))
+        return redirect(url_for(".form", err="連線已失效，請重新掃描 QR Code。"))
 
     # token ?格活撽?
     if not _consume_token(token):
-        return redirect(url_for(".form", err="?撌脤????⊥?嚗????"))
+        return redirect(url_for(".form", err="Token 已失效，請重新掃描 QR Code。"))
 
     # ???瘚?
     now_dt = datetime.now()
@@ -326,15 +324,15 @@ def punch():
 
     emp = Employee.query.get(eid)
     if not emp:
-        return redirect(url_for(".card", eid=eid, st="error", msg="?∪極銝???))
+        return redirect(url_for(".card", eid=eid, st="error", msg="查無此員工。"))
 
     dup = Checkin.query.filter_by(employee_id=eid, work_date=wd, p_type=typ).first()
     if dup:
-        msg, st = "撌脫??", "warn"
+        msg, st = "本時段已打卡，請勿重複。", "warn"
     else:
         db.session.add(Checkin(employee_id=eid, work_date=wd, p_type=typ, ts=ts))
         db.session.commit()
-        msg, st = "???", "success"
+        msg, st = "打卡完成。", "success"
 
     return redirect(url_for(".card", eid=eid, st=st, msg=msg))
 
@@ -392,21 +390,23 @@ def card(eid: str):
     )
 
     st, msg = request.args.get("st"), request.args.get("msg")
+    status_html = f"<h3 class='{st}'>{msg}</h3>" if st else ""
     return render_template_string(
         f"<!doctype html><html><head>{HEAD}</head><body>"
-        f"{f'<h3 class={st}>{msg}</h3>' if st else ''}"
-        f"<h3>{emp.name}嚗eid}嚗????{emp.area}?{y}/{m}</h3>"
+        f"{status_html}"
+        f"<h3>{emp.name}（員工編號：{eid}，單位：{emp.area}） {y}/{m}</h3>"
         "<form method='get' id='ymForm'>"
         f"<input type='hidden' name='eid' value='{eid}'>"
-        "?遢嚗?select name='ym' onchange='ymForm.submit()'>"
+        "<label for='ymSelect'>選擇月份：</label>"
+        "<select id='ymSelect' name='ym' onchange='ymForm.submit()'>"
         f"{''.join(ym_opts)}</select></form>"
         "<table>"
-        "<tr><th>?交?</th><th>銝?銝?/th><th>銝?銝?/th>"
-        "<th>銝?銝?/th><th>銝?銝?/th>"
-        "<th>?銝?/th><th>?銝?/th></tr>"
+        "<tr><th>日期</th><th>上午上班</th><th>上午下班</th>"
+        "<th>下午上班</th><th>下午下班</th>"
+        "<th>加班上班</th><th>加班下班</th></tr>"
         f"{body}"
         "</table>"
-        f"<p><a href='{url_for('.form')}'>餈??</a></p>"
+        f"<p><a href='{url_for('.form')}'>返回線上打卡</a></p>"
         "</body></html>"
     )
 

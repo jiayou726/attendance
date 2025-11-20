@@ -78,6 +78,7 @@ HTML_TEMPLATE = """
               <tr>
                 <th>工作表</th>
                 <th>日期</th>
+                <th>菜名</th>
                 <th>廠商</th>
                 <th>品名</th>
                 <th>1箱g數</th>
@@ -90,6 +91,7 @@ HTML_TEMPLATE = """
               <tr>
                 <td>{{ row["工作表"] }}</td>
                 <td>{{ row["日期"] }}</td>
+                <td>{{ row["菜名"] }}</td>
                 <td>{{ row["廠商"] }}</td>
                 <td>{{ row["品名"] }}</td>
                 <td>{{ row["1箱g"] }}</td>
@@ -234,10 +236,22 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
 
         group_dates = {start: _detect_group_date(df, start) for start in GROUP_STARTS}
 
+        dish_history: dict[int, str] = {}
+
         for _, row in df.iterrows():
             for start in GROUP_STARTS:
                 if start + 4 >= len(row):
                     continue
+
+                dish_name = ""
+                if start - 1 >= 0:
+                    cell = row.iloc[start - 1]
+                    if cell is not None and not (isinstance(cell, float) and pd.isna(cell)):
+                        candidate = str(cell).strip()
+                        if candidate:
+                            dish_history[start] = candidate
+                if dish_history.get(start):
+                    dish_name = dish_history[start]
 
                 vendor = row.iloc[start]
                 item = row.iloc[start + 1]
@@ -256,6 +270,7 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
                         {
                             "工作表": sheet,
                             "日期": display_date,
+                            "菜名": dish_name,
                             "廠商": vendor,
                             "品名": item,
                             "1箱g": g1,

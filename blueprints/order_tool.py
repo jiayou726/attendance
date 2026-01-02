@@ -77,10 +77,10 @@ HTML_TEMPLATE = """
             <thead>
               <tr>
                 <th>工作表</th>
-                <th>日期</th>
+                <th>要吃的日期</th>
                 <th>菜名</th>
                 <th>廠商</th>
-                <th>品名</th>
+                <th>品名-製造商</th>
                 <th>1箱g數</th>
                 <th>數量</th>
                 <th>單位</th>
@@ -90,10 +90,10 @@ HTML_TEMPLATE = """
               {% for row in result_rows %}
               <tr>
                 <td>{{ row["工作表"] }}</td>
-                <td>{{ row["日期"] }}</td>
+                <td>{{ row["要吃的日期"] }}</td>
                 <td>{{ row["菜名"] }}</td>
                 <td>{{ row["廠商"] }}</td>
-                <td>{{ row["品名"] }}</td>
+                <td>{{ row["品名-製造商"] }}</td>
                 <td>{{ row["1箱g"] }}</td>
                 <td>{{ row["數量"] }}</td>
                 <td>{{ row["單位"] }}</td>
@@ -217,7 +217,7 @@ def _row_sort_key(row: dict) -> Tuple[int, int, int, str, str, str]:
         day,
         row.get("工作表", ""),
         str(row.get("廠商", "")),
-        str(row.get("品名", "")),
+        str(row.get("品名-製造商", "")),
     )
 
 
@@ -269,10 +269,10 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
                     rows.append(
                         {
                             "工作表": sheet,
-                            "日期": display_date,
+                            "要吃的日期": display_date,
                             "菜名": dish_name,
                             "廠商": vendor,
-                            "品名": item,
+                            "品名-製造商": item,
                             "1箱g": g1,
                             "數量": qty,
                             "單位": unit,

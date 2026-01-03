@@ -79,7 +79,7 @@ HTML_TEMPLATE = """
                 <th>工作表</th>
                 <th>要吃的日期</th>
                 <th>菜名</th>
-                <th>廠商</th>
+                <th>訂貨廠商</th>
                 <th>品名-製造商</th>
                 <th>1箱g數</th>
                 <th>數量</th>
@@ -92,7 +92,7 @@ HTML_TEMPLATE = """
                 <td>{{ row["工作表"] }}</td>
                 <td>{{ row["要吃的日期"] }}</td>
                 <td>{{ row["菜名"] }}</td>
-                <td>{{ row["廠商"] }}</td>
+                <td>{{ row["訂貨廠商"] }}</td>
                 <td>{{ row["品名-製造商"] }}</td>
                 <td>{{ row["1箱g"] }}</td>
                 <td>{{ row["數量"] }}</td>
@@ -216,13 +216,19 @@ def _row_sort_key(row: dict) -> Tuple[int, int, int, str, str, str]:
         month,
         day,
         row.get("工作表", ""),
-        str(row.get("廠商", "")),
+        str(row.get("訂貨廠商", "")),
         str(row.get("品名-製造商", "")),
     )
 
 
 def parse_keywords(raw: str) -> List[str]:
     return [kw.strip() for kw in raw.split(",") if kw.strip()]
+
+
+def _clean_cell(value):
+    if pd.isna(value):
+        return ""
+    return value
 
 
 def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
@@ -262,7 +268,9 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
                 if pd.isna(vendor) and pd.isna(item):
                     continue
 
-                text = f"{vendor} {item}".lower()
+                vendor_text = "" if pd.isna(vendor) else str(vendor)
+                item_text = "" if pd.isna(item) else str(item)
+                text = f"{vendor_text} {item_text}".lower()
                 if any(kw in text for kw in lowered):
                     raw_date = group_dates.get(start, "")
                     display_date, token = _format_date_display(raw_date)
@@ -271,11 +279,11 @@ def filter_workbook(xls: pd.ExcelFile, keywords: Sequence[str]) -> list[dict]:
                             "工作表": sheet,
                             "要吃的日期": display_date,
                             "菜名": dish_name,
-                            "廠商": vendor,
-                            "品名-製造商": item,
-                            "1箱g": g1,
-                            "數量": qty,
-                            "單位": unit,
+                            "訂貨廠商": _clean_cell(vendor),
+                            "品名-製造商": _clean_cell(item),
+                            "1箱g": _clean_cell(g1),
+                            "數量": _clean_cell(qty),
+                            "單位": _clean_cell(unit),
                             "__date_token": token,
                         }
                     )

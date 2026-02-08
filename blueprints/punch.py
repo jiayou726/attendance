@@ -10,7 +10,7 @@
 
 from flask import Blueprint, render_template_string, request, redirect, url_for, current_app, session
 from calendar import monthrange
-import re, io, base64, qrcode
+import re, io, base64, qrcode, math, json
 from datetime import datetime, date, timedelta
 
 from extensions import db
@@ -128,6 +128,31 @@ def _consume_token(token_from_form: str) -> bool:
         return bool(ok)
     finally:
         session.pop("punch_token", None)
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = math.sin(d_lat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(d_lon / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def _geofence_points() -> list[tuple[float, float]]:
+    points = current_app.config.get("PUNCH_GEOFENCE_POINTS") or []
+    clean: list[tuple[float, float]] = []
+    for p in points:
+        try:
+            lat, lon = p
+            clean.append((float(lat), float(lon)))
+        except Exception:
+            continue
+    return clean
+
+def _nearest_distance_m(lat: float, lon: float, points: list[tuple[float, float]]) -> float | None:
+    if not points:
+        return None
+    return min(_haversine_m(lat, lon, p_lat, p_lon) for p_lat, p_lon in points)
 
 # ????????????????????????  QR Code ?Ｙ??? ????????????????????????
 @punch_bp.route("/qrcode", methods=["GET", "POST"])
@@ -269,6 +294,11 @@ def use():
             "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
+    geofence_enabled = bool(current_app.config.get("PUNCH_GEOFENCE_ENABLED", False))
+    allow_radius_m = float(current_app.config.get("PUNCH_ALLOW_RADIUS_M", 100))
+    require_accuracy_m = float(current_app.config.get("PUNCH_REQUIRE_ACCURACY_M", 150))
+    points = _geofence_points()
+
     # 憿舐內銵典嚗idden 撣?token嚗?? left 蝘??寧 f-string嚗?? % ?澆???
     return render_template_string(
         f"<!doctype html><html><head>{HEAD}</head><body>"
@@ -283,19 +313,71 @@ def use():
         "<option value='ot-in'>5. 加班上班</option>"
         "<option value='ot-out'>6. 加班下班</option>"
         "</select>"
+        "<input type='hidden' id='geoLat' name='lat'>"
+        "<input type='hidden' id='geoLng' name='lng'>"
+        "<input type='hidden' id='geoAcc' name='acc'>"
         f"<input type='hidden' name='token' value='{tok['value']}'>"
         f"<div class='ttl'>此頁面將在 <span id='sec'>{left}</span> 秒後失效，請儘速提交。</div>"
-        "<button id='submitBtn'>送出打卡</button>"
+        "<div class='ttl' id='geoStatus'>定位中，請稍候…</div>"
+        "<button id='submitBtn' disabled>送出打卡</button>"
         "</form>"
         "<p><a href='/admin/login'>管理登入</a></p>"
         "<script>(function(){"
         f"var sec={left};"
+        f"var geofenceEnabled={json.dumps(geofence_enabled)};"
+        f"var allowRadius={allow_radius_m};"
+        f"var requireAccuracy={require_accuracy_m};"
+        f"var points={json.dumps(points)};"
         "var s=document.getElementById('sec');"
         "var btn=document.getElementById('submitBtn');"
+        "var st=document.getElementById('geoStatus');"
+        "var latInput=document.getElementById('geoLat');"
+        "var lngInput=document.getElementById('geoLng');"
+        "var accInput=document.getElementById('geoAcc');"
+        "function setReady(ok,msg){"
+        "  st.textContent=msg;"
+        "  if(ok){btn.removeAttribute('disabled');btn.classList.remove('disabled');}"
+        "  else{btn.setAttribute('disabled','disabled');btn.classList.add('disabled');}"
+        "}"
+        "function toRad(d){return d*Math.PI/180;}"
+        "function distM(lat1,lon1,lat2,lon2){"
+        "  var R=6371000;"
+        "  var dLat=toRad(lat2-lat1);"
+        "  var dLon=toRad(lon2-lon1);"
+        "  var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);"
+        "  return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));"
+        "}"
+        "function nearest(lat,lon){"
+        "  if(!points.length){return null;}"
+        "  var m=Infinity;"
+        "  for(var i=0;i<points.length;i++){"
+        "    var p=points[i];"
+        "    var d=distM(lat,lon,p[0],p[1]);"
+        "    if(d<m){m=d;}"
+        "  }"
+        "  return m;"
+        "}"
         "var t=setInterval(function(){"
         "  sec=Math.max(0,sec-1); s.textContent=sec;"
         "  if(sec<=0){clearInterval(t); btn.setAttribute('disabled','disabled'); btn.classList.add('disabled');}"
         "},1000);"
+        "if(!geofenceEnabled){setReady(true,'可打卡（未啟用定位限制）');return;}"
+        "if(!points.length){setReady(false,'未設定打卡地點，請聯絡管理員。');return;}"
+        "if(!navigator.geolocation){setReady(false,'此裝置不支援定位。');return;}"
+        "navigator.geolocation.getCurrentPosition(function(pos){"
+        "  var lat=pos.coords.latitude;"
+        "  var lng=pos.coords.longitude;"
+        "  var acc=pos.coords.accuracy || 9999;"
+        "  latInput.value=String(lat);"
+        "  lngInput.value=String(lng);"
+        "  accInput.value=String(acc);"
+        "  if(acc>requireAccuracy){setReady(false,'定位精度不足（'+Math.round(acc)+'m），請移動到空曠處再試。');return;}"
+        "  var d=nearest(lat,lng);"
+        "  if(d!==null && d<=allowRadius){setReady(true,'可打卡（距離最近地點 '+Math.round(d)+'m）');}"
+        "  else{setReady(false,'不在打卡範圍內（最近 '+Math.round(d||0)+'m）');}"
+        "},function(){"
+        "  setReady(false,'請允許定位權限後重試。');"
+        "},{enableHighAccuracy:true,timeout:10000,maximumAge:0});"
         "})();</script>"
         "</body></html>"
     )
@@ -316,6 +398,28 @@ def punch():
     # token ?格活撽?
     if not _consume_token(token):
         return redirect(url_for(".form", err="Token 已失效，請重新掃描 QR Code。"))
+
+    # 位置圍欄後端二次驗證
+    if current_app.config.get("PUNCH_GEOFENCE_ENABLED", False):
+        try:
+            lat = float((request.form.get("lat") or "").strip())
+            lng = float((request.form.get("lng") or "").strip())
+            acc = float((request.form.get("acc") or "").strip())
+        except Exception:
+            return redirect(url_for(".card", eid=eid, st="error", msg="定位資料無效，請重新操作。"))
+
+        max_acc = float(current_app.config.get("PUNCH_REQUIRE_ACCURACY_M", 150))
+        if acc > max_acc:
+            return redirect(url_for(".card", eid=eid, st="error", msg="定位精度不足，請移動到空曠處再試。"))
+
+        points = _geofence_points()
+        if not points:
+            return redirect(url_for(".card", eid=eid, st="error", msg="尚未設定打卡地點。"))
+
+        allow_radius_m = float(current_app.config.get("PUNCH_ALLOW_RADIUS_M", 100))
+        nearest_m = _nearest_distance_m(lat, lng, points)
+        if nearest_m is None or nearest_m > allow_radius_m:
+            return redirect(url_for(".card", eid=eid, st="error", msg="不在打卡範圍內。"))
 
     # ???瘚?
     now_dt = datetime.now()

@@ -31,7 +31,7 @@ class Config:
 
     # 打卡定位圍欄（任一座標點半徑內可打卡）
     PUNCH_GEOFENCE_ENABLED = os.getenv("PUNCH_GEOFENCE_ENABLED", "1") == "1"
-    PUNCH_ALLOW_RADIUS_M = float(os.getenv("PUNCH_ALLOW_RADIUS_M", "100"))
+    PUNCH_ALLOW_RADIUS_M = float(os.getenv("PUNCH_ALLOW_RADIUS_M", "500"))
     PUNCH_REQUIRE_ACCURACY_M = float(os.getenv("PUNCH_REQUIRE_ACCURACY_M", "250"))
     PUNCH_GEOFENCE_POINTS = [
         (24.842556724831017, 121.2107761047848),    # t1

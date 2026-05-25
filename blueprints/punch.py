@@ -35,6 +35,13 @@ CSS = r"""
   input,select,button{font-size:1rem;padding:.6em .8em;border:2px solid var(--fg);border-radius:var(--radius);}
   button{background:var(--accent);color:#fff;cursor:pointer;box-shadow:var(--shadow);}
   button:active{transform:scale(.97);}
+  .type-picker{position:relative;}
+  .type-display{width:100%;box-sizing:border-box;background:#fff;color:var(--fg);box-shadow:none;text-align:left;display:block;}
+  .type-display:after{content:"⌄";float:right;}
+  .type-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:10;background:#fff;border:2px solid var(--fg);border-radius:var(--radius);box-shadow:var(--shadow);}
+  .type-menu.open{display:block;}
+  .type-option{width:100%;box-sizing:border-box;background:#fff;color:var(--fg);border:0;border-radius:0;box-shadow:none;text-align:left;}
+  .type-option + .type-option{border-top:1px solid #ddd;}
   a{color:var(--accent);}
   table{width:100%;border-collapse:collapse;margin:0 auto 1.2em;}
   th,td{border:1px solid var(--fg);padding:.6em .4em;text-align:center;font-size:.9rem;}
@@ -305,14 +312,17 @@ def use():
         "<h2>線上打卡</h2>"
         "<form method='post' action='/punch/'>"
         "<input name='eid' placeholder='員工編號' required autofocus>"
-        "<select name='type'>"
-        "<option value='am-in'>1. 上午上班</option>"
-        "<option value='am-out'>2. 上午下班</option>"
-        "<option value='pm-in'>3. 下午上班</option>"
-        "<option value='pm-out'>4. 下午下班</option>"
-        "<option value='ot-in'>5. 加班上班</option>"
-        "<option value='ot-out'>6. 加班下班</option>"
-        "</select>"
+        "<input type='hidden' id='punchType' name='type' required>"
+        "<div class='type-picker'>"
+        "<button type='button' id='typeDisplay' class='type-display'>請選擇打卡時段</button>"
+        "<div id='typeMenu' class='type-menu'>"
+        "<button type='button' class='type-option' data-value='am-in'>1. 上午上班</button>"
+        "<button type='button' class='type-option' data-value='am-out'>2. 上午下班</button>"
+        "<button type='button' class='type-option' data-value='pm-in'>3. 下午上班</button>"
+        "<button type='button' class='type-option' data-value='pm-out'>4. 下午下班</button>"
+        "<button type='button' class='type-option' data-value='ot-in'>5. 加班上班</button>"
+        "<button type='button' class='type-option' data-value='ot-out'>6. 加班下班</button>"
+        "</div></div>"
         "<input type='hidden' id='geoLat' name='lat'>"
         "<input type='hidden' id='geoLng' name='lng'>"
         "<input type='hidden' id='geoAcc' name='acc'>"
@@ -334,11 +344,27 @@ def use():
         "var latInput=document.getElementById('geoLat');"
         "var lngInput=document.getElementById('geoLng');"
         "var accInput=document.getElementById('geoAcc');"
-        "function setReady(ok,msg){"
-        "  st.textContent=msg;"
-        "  if(ok){btn.removeAttribute('disabled');btn.classList.remove('disabled');}"
+        "var typeInput=document.getElementById('punchType');"
+        "var typeDisplay=document.getElementById('typeDisplay');"
+        "var typeMenu=document.getElementById('typeMenu');"
+        "var geoReady=false;"
+        "var typeReady=false;"
+        "function refreshSubmit(msg){"
+        "  if(msg){st.textContent=msg;}"
+        "  if(geoReady&&typeReady){btn.removeAttribute('disabled');btn.classList.remove('disabled');}"
         "  else{btn.setAttribute('disabled','disabled');btn.classList.add('disabled');}"
         "}"
+        "function setReady(ok,msg){"
+        "  geoReady=!!ok;"
+        "  refreshSubmit(msg);"
+        "}"
+        "typeDisplay.onclick=function(){"
+        "  if(typeMenu.className.indexOf('open')>=0){typeMenu.className='type-menu';}"
+        "  else{typeMenu.className='type-menu open';}"
+        "};"
+        "var opts=typeMenu.getElementsByTagName('button');"
+        "for(var oi=0;oi<opts.length;oi++){opts[oi].onclick=function(){typeInput.value=this.getAttribute('data-value');typeDisplay.innerHTML=this.innerHTML;typeMenu.className='type-menu';typeReady=true;refreshSubmit('');};}"
+        "document.onclick=function(e){var t=e.target||e.srcElement;if(t!==typeDisplay&&t.parentNode!==typeMenu){typeMenu.className='type-menu';}};"
         "function toRad(d){return d*Math.PI/180;}"
         "function distM(lat1,lon1,lat2,lon2){"
         "  var R=6371000;"
@@ -386,8 +412,10 @@ def use():
 @punch_bp.route("/", methods=["POST"])
 def punch():
     eid = request.form["eid"].strip()
-    typ = request.form["type"]
+    typ = (request.form.get("type") or "").strip()
     token = (request.form.get("token") or "").strip()
+    if typ not in {"am-in", "am-out", "pm-in", "pm-out", "ot-in", "ot-out"}:
+        return redirect(url_for(".card", eid=eid, st="error", msg="請選擇打卡時段。"))
 
     # gate 敹?隞???IP ?芾?銝??嚗?
     gate = session.get("punch_gate")

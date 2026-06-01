@@ -26,7 +26,7 @@ class Config:
     # 一次性 token 的時效（秒）
     PUNCH_TOKEN_TTL_SEC = int(os.getenv("PUNCH_TOKEN_TTL_SEC", "120"))
     # 是否把 IP/UA 摻入驗證（降低轉傳風險）
-    PUNCH_BIND_IP = os.getenv("PUNCH_BIND_IP", "1") == "1"
+    PUNCH_BIND_IP = os.getenv("PUNCH_BIND_IP", "0") == "1"
     PUNCH_BIND_UA = os.getenv("PUNCH_BIND_UA", "1") == "1"
 
     # 打卡定位圍欄（任一座標點半徑內可打卡）

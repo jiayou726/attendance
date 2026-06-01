@@ -66,36 +66,54 @@ QR_CONFIG_KEY = "QR_TEXT"
 
 # ???????????????????????? 撌亙 ????????????????????????
 def _client_ip() -> str:
-    # ?亙??隞??敺遣霅啣 app factory ??ProxyFix嚗ㄐ?? remote_addr嚗??剁?
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
     return request.remote_addr or ""
+
+def _client_ua() -> str:
+    return (request.headers.get("User-Agent") or "")[:120]
 
 def _bind_fingerprint() -> str:
     parts = []
     if current_app.config.get("PUNCH_BIND_IP", True):
         parts.append(_client_ip())
     if current_app.config.get("PUNCH_BIND_UA", True):
-        parts.append((request.headers.get("User-Agent") or "")[:120])
+        parts.append(_client_ua())
     base = "|".join(parts)
     return hashlib.sha1(base.encode("utf-8")).hexdigest() if base else ""
 
+def _new_gate(now: int, ttl: int) -> dict:
+    return {
+        "bind": _bind_fingerprint(),
+        "ip": _client_ip(),
+        "ua": _client_ua(),
+        "exp": now + ttl,
+    }
+
 def _issue_or_refresh_gate_same_ip() -> dict:
-    """Return gate info tied to current client IP, issuing or refreshing as needed."""
+    """Return gate info tied to the configured client fingerprint."""
 
     now = int(time.time())
     ttl = int(current_app.config.get("PUNCH_GATE_TTL_SEC", 120))
-    cur_ip = _client_ip()
+    cur_bind = _bind_fingerprint()
     gate = session.get("punch_gate")
 
     if not gate:
-        gate = {"ip": cur_ip, "exp": now + ttl}
+        gate = _new_gate(now, ttl)
         session["punch_gate"] = gate
         return gate
 
-    if gate.get("ip") != cur_ip:
-        return {"invalid": True, "reason": "IP ?寡?"}
+    if "bind" not in gate:
+        gate = _new_gate(now, ttl)
+        session["punch_gate"] = gate
+        return gate
+
+    if gate.get("bind") != cur_bind:
+        return {"invalid": True, "reason": "裝置驗證失效"}
 
     if now > int(gate.get("exp", 0)):
-        gate = {"ip": cur_ip, "exp": now + ttl}
+        gate = _new_gate(now, ttl)
         session["punch_gate"] = gate
         return gate
 
@@ -290,7 +308,7 @@ def use():
     # gate 敹?隞???& IP ?芾?嚗oken 敹?隞???
     gate = session.get("punch_gate")
     now = int(time.time())
-    ok_gate = gate and gate.get("ip") == _client_ip() and now <= int(gate.get("exp", 0))
+    ok_gate = gate and gate.get("bind") == _bind_fingerprint() and now <= int(gate.get("exp", 0))
     ok_tok, left = _check_token_alive()
 
     if not ok_gate or not ok_tok:
@@ -420,7 +438,7 @@ def punch():
     # gate 敹?隞???IP ?芾?銝??嚗?
     gate = session.get("punch_gate")
     now = int(time.time())
-    if not gate or gate.get("ip") != _client_ip() or now > int(gate.get("exp", 0)):
+    if not gate or gate.get("bind") != _bind_fingerprint() or now > int(gate.get("exp", 0)):
         return redirect(url_for(".form", err="連線已失效，請重新掃描 QR Code。"))
 
     # token ?格活撽?

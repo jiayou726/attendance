@@ -3,6 +3,7 @@ import flask.blueprints   # 這行一定放最上面
 
 import os
 from flask import Flask, redirect, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 from config     import Config
 from extensions import db, migrate
 
@@ -19,6 +20,7 @@ from blueprints.order_tool import order_bp
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     # ── 初始化 ORM / Migrate ──
     db.init_app(app)

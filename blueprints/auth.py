@@ -1,34 +1,98 @@
-from flask import Blueprint, render_template_string, request, session, redirect, url_for, abort
+from secrets import compare_digest
+from urllib.parse import urlparse
+
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
+
 from . import CSS
 
-PASSWORDS = {"hr": "hr1234", "mgr": "mgr1234"}
 
 auth_bp = Blueprint("auth", __name__)
 
-@auth_bp.route("/login", methods=["GET","POST"])
-def login():
-    err=""
-    if request.method=="POST":
-        role = request.form["role"]
-        pw   = request.form["pw"]
-        if role in PASSWORDS and pw == PASSWORDS[role]:
-            session["role"]=role
-            return redirect("/admin/")
-        err="<p style='color:red'>錯誤</p>"
-    opt = "".join(f"<option value={r}>{'人資' if r=='hr' else '主管'}</option>"
-                  for r in PASSWORDS)
-    return render_template_string(f"""<!doctype html><html><head>{CSS}</head><body>
-    <h2>管理登入</h2>{err}
-    <form method=post>
-      <select name=role>{opt}</select><br>
-      <input type=password name=pw required><br>
-      <button>登入</button>
-    </form>
-    <p><a href="/">回首頁</a></p></body></html>""")
 
-def require(role):
-    r=session.get("role")
-    if not r:             # 未登入
-        return redirect("/admin/login")
-    if role=="hr" and r!="hr":
+def _passwords() -> dict[str, str]:
+    return {
+        "hr": current_app.config.get("ADMIN_HR_PASSWORD", ""),
+        "mgr": current_app.config.get("ADMIN_MGR_PASSWORD", ""),
+    }
+
+
+def _safe_next(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or not value.startswith("/"):
+        return None
+    return value
+
+
+@auth_bp.route("/login", methods=["GET", "POST"])
+def login():
+    err = ""
+    passwords = _passwords()
+    configured = any(passwords.values())
+    next_url = _safe_next(request.args.get("next") or request.form.get("next"))
+
+    if request.method == "POST":
+        role = request.form.get("role", "")
+        pw = request.form.get("pw", "")
+        expected = passwords.get(role, "")
+
+        if expected and compare_digest(pw, expected):
+            session.clear()
+            session["role"] = role
+            session.permanent = True
+            return redirect(next_url or "/admin/")
+
+        err = "<p style='color:#b42318'>帳號角色或密碼錯誤。</p>"
+
+    options = "".join(
+        f'<option value="{role}">{"人資" if role == "hr" else "主管"}</option>'
+        for role, password in passwords.items()
+        if password
+    )
+
+    if not configured:
+        err = (
+            "<p style='color:#b42318'>管理密碼尚未設定。請在部署環境設定 "
+            "ADMIN_HR_PASSWORD 或 ADMIN_MGR_PASSWORD。</p>"
+        )
+
+    disabled = "disabled" if not configured else ""
+    hidden_next = f'<input type="hidden" name="next" value="{next_url}">' if next_url else ""
+
+    return render_template_string(
+        f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">{CSS}</head><body>
+        <h2>管理登入</h2>{err}
+        <form method="post">
+          {hidden_next}
+          <select name="role" {disabled}>{options}</select><br>
+          <input type="password" name="pw" autocomplete="current-password" required {disabled}><br>
+          <button {disabled}>登入</button>
+        </form>
+        <p><a href="/">回首頁</a></p></body></html>"""
+    )
+
+
+@auth_bp.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("auth.login"))
+
+
+def require(role=None):
+    """相容既有呼叫方式：無登入回登入頁；role='hr' 時只允許 HR。"""
+    current_role = session.get("role")
+    if not current_role:
+        return redirect(url_for("auth.login", next=request.path))
+    if role == "hr" and current_role != "hr":
         abort(403)
+    return None

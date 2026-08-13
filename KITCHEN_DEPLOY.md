@@ -29,40 +29,51 @@ Required:
 
 When `PRODUCTION=1`, the app intentionally refuses to start if `SECRET_KEY` or all admin passwords are missing, or if kitchen CSRF is disabled.
 
-## 3. Supabase / migration warning
+## 3. Supabase / schema warning
 
-This repository has historical Alembic migration drift around old attendance table names. Therefore **do not blindly run `flask db migrate` against production Supabase**.
+This repository has historical Alembic migration drift around old attendance table names. Therefore **do not blindly run `flask db migrate` or a full historical `flask db upgrade` against production Supabase**.
 
-The manually reviewed migration is:
+Two kitchen-only tools are provided:
+
+- `scripts/bootstrap_kitchen_schema.py`
+- `migrations/versions/kitchen20260813_prod.py`
+
+Both are intentionally limited to `kitchen_*` tables and must never drop, rename or alter `employee` / `checkin`.
+
+### Case A: production has no kitchen_* tables yet
+
+This is the safest initial deployment path.
+
+After setting the real server-side `DATABASE_URL` and production secrets, run:
+
+```bash
+python scripts/bootstrap_kitchen_schema.py
+```
+
+The script creates only the final kitchen tables in dependency order. It does not call `db.create_all()` for attendance tables.
+
+If it finds an existing kitchen table whose columns do not match the final model, it **refuses to alter it** and exits. This is intentional fail-closed behavior.
+
+### Case B: production/staging already has older MVP kitchen_* tables
+
+Do not use the bootstrap script to silently patch them. Use a staging clone first and review/apply:
 
 `migrations/versions/kitchen20260813_prod.py`
 
-It is intentionally written to touch only these tables:
-
-- `kitchen_school`
-- `kitchen_supplier`
-- `kitchen_ingredient`
-- `kitchen_recipe`
-- `kitchen_recipe_ingredient`
-- `kitchen_menu_plan`
-- `kitchen_menu_plan_item`
-- `kitchen_menu_assignment`
-- `kitchen_purchase_order`
-- `kitchen_purchase_order_item`
-
-It must never drop, rename or alter `employee` / `checkin`.
+The reviewed migration can add the missing production columns/tables while remaining kitchen-only.
 
 ### Recommended release procedure
 
-1. Clone the current production database to a staging/test PostgreSQL project when possible.
-2. Inspect `alembic_version` and current table names first.
-3. Confirm the staging database already has the same attendance schema used by production.
-4. Run the reviewed migration on staging.
-5. Re-run the kitchen regression tests against staging.
-6. Verify attendance/punch still works.
-7. Only then apply the exact same reviewed migration to production.
+1. Inspect the current Supabase table list and `alembic_version` first.
+2. Prefer a staging/test Supabase project cloned from production.
+3. Confirm staging attendance tables match production.
+4. If no kitchen tables exist, test `python scripts/bootstrap_kitchen_schema.py` on staging.
+5. If older kitchen tables exist, test the reviewed kitchen-only migration on staging instead.
+6. Run the full kitchen regression tests.
+7. Verify existing attendance/admin pages and `/punch` still work.
+8. Only then repeat the same kitchen-only schema operation on production.
 
-If the production database has no `alembic_version` table, do not guess or stamp it without first inspecting the schema. Ask for a schema dump / table list and decide the correct stamp point before running Alembic.
+If production has no `alembic_version` table, do not guess or stamp it without inspecting the schema first.
 
 ## 4. Business-flow acceptance test
 

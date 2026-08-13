@@ -7,7 +7,7 @@
   <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.purchases', start=order.service_date, end=order.service_date) }}">← 採購歷史</a>{% if order.status == 'confirmed' %}<a class="btn" href="{{ url_for('order_tool.purchase_detail', order_id=order.id, print=1) }}" target="_blank">列印 / 另存 PDF</a>{% endif %}</div>
 </div>
 
-{% if order.status == 'confirmed' %}<div class="flash success">此單已確認並保存 snapshot。之後修改食材價格或菜色配方，不會改變這張歷史採購單。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">此單已取消；如需重新使用，請重開草稿。</div>{% else %}<div class="flash warning">目前是草稿，請先確認「實際叫貨量、單價、廠商」再按「確認叫貨單」。草稿不提供正式 PDF，避免誤拿去叫貨。</div>{% endif %}
+{% if order.status == 'confirmed' %}<div class="flash success">此單已確認並保存 snapshot。之後修改食材價格或菜色配方，不會改變這張歷史採購單。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">此單已取消；重新產生該日期需求時可重新啟用為草稿。</div>{% else %}<div class="flash warning">目前是草稿，請先確認「實際叫貨量、單價、廠商」再按「確認叫貨單」。草稿不提供正式 PDF，避免誤拿去叫貨。</div>{% endif %}
 
 <div class="grid">
   <section class="card span-12 no-print">
@@ -26,10 +26,10 @@
       <thead><tr><th>食材</th><th class="right">需求量</th><th class="right">需求換算</th><th class="right">建議叫貨</th><th>實際叫貨</th><th>單價</th><th class="right">金額</th><th>備註</th></tr></thead>
       <tbody>{% for item in order.items %}<tr>
         <td>{{ item.ingredient_name_snapshot }}</td>
-        <td class="right"><b>{{ '%.3f'|format((item.required_grams|float)/1000) }} kg</b><br><span class="muted">{{ '%.0f'|format(item.required_grams|float) }} g</span></td>
-        <td class="right">{{ '%.4f'|format(item.required_qty|float) }} {{ item.purchase_unit_snapshot }}</td>
+        <td class="right"><b>{{ required_display(item) }}</b></td>
+        <td class="right">{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</td>
         <td class="right"><b>{{ trim_decimal(item.recommended_order_qty) }} {{ item.purchase_unit_snapshot }}</b></td>
-        {% if order.status == 'draft' %}<td colspan="4"><form method="post" action="{{ url_for('order_tool.purchase_item_update', item_id=item.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>實際數量</label><input name="actual_order_qty" type="number" min="0" step="0.0001" value="{{ item.actual_order_qty }}" required></div><div class="field"><label>單價 / {{ item.purchase_unit_snapshot }}</label><input name="unit_price" type="number" min="0" step="0.0001" value="{{ item.unit_price_snapshot }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ item.note or '' }}"></div><button class="btn secondary">更新這項</button></form><div class="right"><b>目前金額 ${{ '%.2f'|format(item.amount|float) }}</b></div></td>
+        {% if order.status == 'draft' %}<td colspan="4"><form method="post" action="{{ url_for('order_tool.purchase_item_update', item_id=item.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>實際數量</label><input name="actual_order_qty" type="number" min="0" step="0.0001" value="{{ item.actual_order_qty }}" required></div><div class="field"><label>單價 / {{ item.purchase_unit_snapshot }}</label><input name="unit_price" type="number" min="0" step="0.0001" value="{{ item.unit_price_snapshot }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ item.note or '' }}"></div><button class="btn secondary">更新這項</button></form><div class="right"><b>目前金額 ${{ '%.2f'|format(item.amount|float) }}</b>{% if item.manual_override %}<br><span class="pill warn">人工調整，重新計算會保留</span>{% endif %}</div></td>
         {% else %}<td>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</td><td>${{ '%.4f'|format(item.unit_price_snapshot|float) }}/{{ item.purchase_unit_snapshot }}</td><td class="right">${{ '%.2f'|format(item.amount|float) }}</td><td>{{ item.note or '-' }}</td>{% endif %}
       </tr>{% endfor %}</tbody>
     </table></div>{% else %}<div class="empty">此採購單沒有項目。</div>{% endif %}

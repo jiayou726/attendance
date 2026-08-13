@@ -1,23 +1,23 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}採購單 {{ order.service_date }} {{ order.supplier_name_snapshot }}{% endblock %}
 {% block content %}
-<div class="print-title"><h1>每日訂購單</h1><div>{{ order.service_date }}｜{{ order.supplier_name_snapshot }}</div></div>
+<div class="print-title"><h1>{{ '每日訂購單' if order.status == 'confirmed' else '採購草稿－不可叫貨' }}</h1><div>{{ order.service_date }}｜{{ order.supplier_name_snapshot }}</div></div>
 <div class="top">
   <div><h1>{{ order.service_date }}｜{{ order.supplier_name_snapshot }}</h1><div class="muted">採購單 #{{ order.id }}・{{ status_label(order.status) }}</div></div>
-  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.purchases', start=order.service_date, end=order.service_date) }}">← 採購歷史</a><a class="btn" href="{{ url_for('order_tool.purchase_detail', order_id=order.id, print=1) }}" target="_blank">列印 / 另存 PDF</a></div>
+  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.purchases', start=order.service_date, end=order.service_date) }}">← 採購歷史</a>{% if order.status == 'confirmed' %}<a class="btn" href="{{ url_for('order_tool.purchase_detail', order_id=order.id, print=1) }}" target="_blank">列印 / 另存 PDF</a>{% endif %}</div>
 </div>
 
-{% if order.status == 'confirmed' %}<div class="flash success">此單已確認並保存 snapshot。之後修改食材價格或菜色配方，不會改變這張歷史採購單。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">此單已取消；如需重新使用，請重開草稿。</div>{% endif %}
+{% if order.status == 'confirmed' %}<div class="flash success">此單已確認並保存 snapshot。之後修改食材價格或菜色配方，不會改變這張歷史採購單。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">此單已取消；如需重新使用，請重開草稿。</div>{% else %}<div class="flash warning">目前是草稿，請先確認「實際叫貨量、單價、廠商」再按「確認叫貨單」。草稿不提供正式 PDF，避免誤拿去叫貨。</div>{% endif %}
 
 <div class="grid">
   <section class="card span-12 no-print">
     <div class="row between center-y">
       <div><h2>採購單設定</h2><span class="pill {{ 'ok' if order.status == 'confirmed' else ('off' if order.status == 'cancelled' else 'warn') }}">{{ status_label(order.status) }}</span></div>
       <div class="actions">
-        {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_confirm', order_id=order.id) }}" onsubmit="return confirm('確認後這張採購單會鎖定為歷史 snapshot，確定嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn ok">確認叫貨單</button></form><form method="post" action="{{ url_for('order_tool.purchase_cancel', order_id=order.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">取消</button></form>{% else %}<form method="post" action="{{ url_for('order_tool.purchase_reopen', order_id=order.id) }}" onsubmit="return confirm('重開後可修改這張單，確定嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn warn">重開草稿</button></form>{% endif %}
+        {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_confirm', order_id=order.id) }}" onsubmit="return confirm('你已核對廠商、實際叫貨量與單價嗎？確認後會鎖定為歷史叫貨單。')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn ok">確認叫貨單</button></form><form method="post" action="{{ url_for('order_tool.purchase_cancel', order_id=order.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">取消</button></form>{% else %}<form method="post" action="{{ url_for('order_tool.purchase_reopen', order_id=order.id) }}" onsubmit="return confirm('重開後可修改這張單，確定嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn warn">重開草稿</button></form>{% endif %}
       </div>
     </div>
-    {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_update', order_id=order.id) }}" class="row main-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>廠商</label><select name="supplier_id"><option value="">未指定</option>{% for s in suppliers %}<option value="{{ s.id }}" {% if order.supplier_id == s.id %}selected{% endif %}>{{ s.name }}{{ '（停用）' if not s.active else '' }}</option>{% endfor %}</select></div><div class="field"><label>備註</label><input name="note" value="{{ order.note or '' }}"></div><button class="btn">儲存單頭</button></form>{% else %}<div class="muted">備註：{{ order.note or '無' }}</div>{% endif %}
+    {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_update', order_id=order.id) }}" class="row main-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>廠商</label><select name="supplier_id"><option value="">未指定</option>{% for s in suppliers %}<option value="{{ s.id }}" {% if order.supplier_id == s.id %}selected{% endif %}>{{ s.name }}{{ '（停用）' if not s.active else '' }}</option>{% endfor %}</select></div><div class="field"><label>整張單備註</label><input name="note" value="{{ order.note or '' }}"></div><button class="btn">儲存單頭</button></form>{% else %}<div class="muted">備註：{{ order.note or '無' }}</div>{% endif %}
   </section>
 
   <section class="card span-12 purchase-group">
@@ -29,11 +29,11 @@
         <td class="right"><b>{{ '%.3f'|format((item.required_grams|float)/1000) }} kg</b><br><span class="muted">{{ '%.0f'|format(item.required_grams|float) }} g</span></td>
         <td class="right">{{ '%.4f'|format(item.required_qty|float) }} {{ item.purchase_unit_snapshot }}</td>
         <td class="right"><b>{{ trim_decimal(item.recommended_order_qty) }} {{ item.purchase_unit_snapshot }}</b></td>
-        {% if order.status == 'draft' %}<td colspan="4"><form method="post" action="{{ url_for('order_tool.purchase_item_update', item_id=item.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>實際數量</label><input name="actual_order_qty" type="number" min="0" step="0.0001" value="{{ item.actual_order_qty }}" required></div><div class="field"><label>單價 / {{ item.purchase_unit_snapshot }}</label><input name="unit_price" type="number" min="0" step="0.0001" value="{{ item.unit_price_snapshot }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ item.note or '' }}"></div><button class="btn secondary">更新</button></form><div class="right"><b>目前金額 ${{ '%.2f'|format(item.amount|float) }}</b></div></td>
+        {% if order.status == 'draft' %}<td colspan="4"><form method="post" action="{{ url_for('order_tool.purchase_item_update', item_id=item.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>實際數量</label><input name="actual_order_qty" type="number" min="0" step="0.0001" value="{{ item.actual_order_qty }}" required></div><div class="field"><label>單價 / {{ item.purchase_unit_snapshot }}</label><input name="unit_price" type="number" min="0" step="0.0001" value="{{ item.unit_price_snapshot }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ item.note or '' }}"></div><button class="btn secondary">更新這項</button></form><div class="right"><b>目前金額 ${{ '%.2f'|format(item.amount|float) }}</b></div></td>
         {% else %}<td>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</td><td>${{ '%.4f'|format(item.unit_price_snapshot|float) }}/{{ item.purchase_unit_snapshot }}</td><td class="right">${{ '%.2f'|format(item.amount|float) }}</td><td>{{ item.note or '-' }}</td>{% endif %}
       </tr>{% endfor %}</tbody>
     </table></div>{% else %}<div class="empty">此採購單沒有項目。</div>{% endif %}
   </section>
 </div>
-{% if do_print %}<script>window.addEventListener('load',()=>window.print());</script>{% endif %}
+{% if do_print and order.status == 'confirmed' %}<script>window.addEventListener('load',()=>window.print());</script>{% endif %}
 {% endblock %}

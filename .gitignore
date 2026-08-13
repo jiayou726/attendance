@@ -1,12 +1,26 @@
-# Python 
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Virtual env
 venv/
-.env/
+.venv/
 
-# Database / Excel
-#attendance.db
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+
+# Local databases / office exports
+attendance.db
+*.db-journal
+*.sqlite
+*.sqlite3
 *.xlsx
 !static/薪資計算範本.xlsx
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

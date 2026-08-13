@@ -1,0 +1,293 @@
+/* Mobile-first enhancement for /admin/order-tool only.
+   Loaded by app.py only on kitchen pages, so attendance UI is untouched. */
+
+:root {
+  --k-mobile-bg: #f4f6f8;
+  --k-mobile-card: #ffffff;
+  --k-mobile-text: #17202a;
+  --k-mobile-muted: #667085;
+  --k-mobile-line: #e5e7eb;
+  --k-mobile-brand: #1769aa;
+  --k-mobile-brand-soft: #eaf3fb;
+  --k-mobile-danger: #b42318;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body { min-height: 100dvh; }
+
+/* Better touch targets on every screen size. */
+input,
+select,
+textarea,
+.btn,
+.nav a {
+  min-height: 44px;
+}
+
+input,
+select,
+textarea {
+  font-size: 16px; /* prevents iOS Safari auto zoom */
+}
+
+.btn {
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.card {
+  overflow: hidden;
+}
+
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visual cue for horizontally scrollable tables. */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.table-scroll > table {
+  min-width: 620px;
+}
+
+.nav a.active {
+  background: var(--k-mobile-brand-soft);
+  color: var(--k-mobile-brand);
+  font-weight: 750;
+}
+
+@media (max-width: 800px) {
+  body {
+    background: var(--k-mobile-bg);
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+
+  .wrap {
+    width: 100%;
+    max-width: none;
+    padding: 12px;
+  }
+
+  /* The first header becomes the mobile app bar. */
+  .wrap > .top.no-print {
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    margin: -12px -12px 14px;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+    min-height: 58px;
+    background: rgba(255,255,255,.96);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--k-mobile-line);
+    box-shadow: 0 1px 8px rgba(16,24,40,.05);
+  }
+
+  .wrap > .top.no-print > h1 {
+    font-size: 20px;
+    line-height: 1.2;
+    letter-spacing: -.01em;
+  }
+
+  /* Existing navigation becomes a thumb-friendly bottom bar. */
+  .wrap > .top.no-print > .nav {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    background: rgba(255,255,255,.98);
+    border-top: 1px solid var(--k-mobile-line);
+    box-shadow: 0 -4px 16px rgba(16,24,40,.08);
+  }
+
+  .wrap > .top.no-print > .nav::-webkit-scrollbar { display: none; }
+
+  .wrap > .top.no-print > .nav a {
+    flex: 0 0 68px;
+    min-width: 68px;
+    min-height: 54px;
+    padding: 7px 5px;
+    border-radius: 12px;
+    background: transparent;
+    color: #475467;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.15;
+    text-align: center;
+    white-space: normal;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wrap > .top.no-print > .nav a.active {
+    background: var(--k-mobile-brand-soft);
+    color: var(--k-mobile-brand);
+  }
+
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 16px; }
+
+  .grid {
+    gap: 12px;
+  }
+
+  .span-4,
+  .span-5,
+  .span-6,
+  .span-7,
+  .span-8,
+  .span-12 {
+    grid-column: span 12;
+  }
+
+  .card {
+    border-radius: 14px;
+    padding: 15px;
+    box-shadow: 0 1px 4px rgba(16,24,40,.04);
+  }
+
+  /* Dashboard statistics stay compact on phones. */
+  .grid > .card.span-4 {
+    grid-column: span 4;
+    padding: 12px 8px;
+    text-align: center;
+  }
+  .grid > .card.span-4 .stat {
+    font-size: 26px;
+  }
+  .grid > .card.span-4 .muted {
+    font-size: 11px;
+  }
+
+  /* Forms become one-control-per-row and easy to use with one thumb. */
+  .row {
+    width: 100%;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .field {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  label {
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 48px;
+    padding: 11px 12px;
+    border-radius: 11px;
+  }
+
+  .card > form > .btn,
+  .card > form > button.btn,
+  .row > .btn,
+  .row > button.btn {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 12px;
+  }
+
+  /* Do not stretch destructive buttons inside data rows. */
+  form.inline .btn {
+    min-width: 68px;
+    min-height: 40px;
+    padding: 7px 10px;
+  }
+
+  /* Existing tables were display:block; wrapper handles scrolling instead. */
+  table {
+    display: table;
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  th,
+  td {
+    padding: 11px 10px;
+    font-size: 13px;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .table-scroll {
+    margin: 0 -15px;
+    width: calc(100% + 30px);
+    padding: 0 15px 5px;
+  }
+
+  .table-scroll::after {
+    content: "左右滑動查看更多";
+    display: block;
+    width: max-content;
+    margin: 7px 0 0 auto;
+    color: var(--k-mobile-muted);
+    font-size: 11px;
+  }
+
+  .pill {
+    font-size: 11px;
+  }
+
+  .notice {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Secondary page headings should not compete with the app bar. */
+  .wrap > .top:not(.no-print) {
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .wrap > .top:not(.no-print) > .btn,
+  .wrap > .top:not(.no-print) > a.btn {
+    width: 100%;
+  }
+
+  /* Purchase output: quantity is the key field on a phone. */
+  .purchase-group td:nth-child(2) {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 430px) {
+  .wrap { padding: 10px; }
+  .wrap > .top.no-print { margin-left: -10px; margin-right: -10px; }
+  .card { padding: 13px; }
+  .grid { gap: 10px; }
+  .table-scroll { margin-left: -13px; width: calc(100% + 26px); padding-left: 13px; padding-right: 13px; }
+}
+
+@media print {
+  body { padding-bottom: 0 !important; }
+  .table-scroll { overflow: visible; }
+  .table-scroll > table { min-width: 0; }
+  .table-scroll::after { display: none; }
+}

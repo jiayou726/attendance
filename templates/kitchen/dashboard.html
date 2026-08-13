@@ -1,0 +1,35 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}團膳管理{% endblock %}
+{% block content %}
+<div class="grid dashboard-kpis">
+  <section class="card span-4"><div class="kpi"><div class="muted">啟用菜色</div><div class="stat">{{ recipe_count }}</div></div></section>
+  <section class="card span-4"><div class="kpi"><div class="muted">啟用食材</div><div class="stat">{{ ingredient_count }}</div></div></section>
+  <section class="card span-4"><div class="kpi"><div class="muted">供餐學校</div><div class="stat">{{ school_count }}</div></div></section>
+
+  <section class="card span-12">
+    <div class="top">
+      <div><h2>未來 7 天菜單</h2><div class="muted">中央菜單可同時指派多間學校與各自人數。</div></div>
+      <a class="btn" href="{{ url_for('order_tool.plans') }}">新增 / 編輯菜單</a>
+    </div>
+    {% if plans %}
+    <div class="table-scroll"><table>
+      <thead><tr><th>日期</th><th>餐別</th><th>菜單</th><th>菜色</th><th>學校 / 人數</th><th>狀態</th><th></th></tr></thead>
+      <tbody>{% for p in plans %}<tr>
+        <td>{{ p.service_date }}</td><td>{{ p.meal_type }}</td><td>{{ p.name }}</td>
+        <td>{{ p.items|length }} 道</td><td>{{ p.assignments|length }} 校 / {{ p.assignments|sum(attribute='headcount') }} 人</td>
+        <td><span class="pill {{ 'ok' if p.status == 'confirmed' else 'warn' }}">{{ '已確認' if p.status == 'confirmed' else '草稿' }}</span></td>
+        <td><a href="{{ url_for('order_tool.plan_detail', plan_id=p.id) }}">開啟</a></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty">這 7 天還沒有菜單。</div>{% endif %}
+  </section>
+
+  <section class="card span-12">
+    <div class="top"><div><h2>最近採購單</h2><div class="muted">正式保存的叫貨紀錄，不會因主檔日後修改而改變。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>
+    {% if recent_orders %}<div class="table-scroll"><table>
+      <thead><tr><th>日期</th><th>廠商</th><th>狀態</th><th class="right">金額</th><th></th></tr></thead>
+      <tbody>{% for o in recent_orders %}<tr><td>{{ o.service_date }}</td><td>{{ o.supplier_name_snapshot }}</td><td><span class="pill {{ 'ok' if o.status == 'confirmed' else ('off' if o.status == 'cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td><a href="{{ url_for('order_tool.purchase_detail', order_id=o.id) }}">開啟</a></td></tr>{% endfor %}</tbody>
+    </table></div>{% else %}<div class="empty">尚未建立採購單。</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

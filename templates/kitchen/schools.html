@@ -1,0 +1,29 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}學校 / 客戶{% endblock %}
+{% block content %}
+<div class="grid">
+  <section class="card span-5">
+    <h2>{{ '編輯學校 / 客戶' if edit_row else '新增學校 / 客戶' }}</h2>
+    <form class="main-form" method="post" action="{{ url_for('order_tool.school_update', school_id=edit_row.id) if edit_row else url_for('order_tool.schools') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label>名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}" placeholder="例如：內小"></div><br>
+      <div class="field"><label>代碼（可空白）</label><input name="code" value="{{ edit_row.code if edit_row and edit_row.code else '' }}" placeholder="例如：1-08"></div><br>
+      <button class="btn">{{ '儲存修改' if edit_row else '新增' }}</button>
+      {% if edit_row %}<a class="btn secondary" href="{{ url_for('order_tool.schools') }}">取消</a>{% endif %}
+    </form>
+  </section>
+
+  <section class="card span-7">
+    <h2>學校清單</h2>
+    {% if rows %}<div class="table-scroll"><table>
+      <thead><tr><th>代碼</th><th>名稱</th><th>狀態</th><th>操作</th></tr></thead>
+      <tbody>{% for r in rows %}<tr>
+        <td>{{ r.code or '-' }}</td><td>{{ r.name }}</td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
+        <td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.schools', edit=r.id) }}">編輯</a>
+          <form method="post" action="{{ url_for('order_tool.school_toggle', school_id=r.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn {{ 'danger' if r.active else 'ok' }}">{{ '停用' if r.active else '恢復' }}</button></form>
+        </div></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>{% else %}<div class="empty">尚無資料。</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

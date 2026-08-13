@@ -1,0 +1,30 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}菜單{% endblock %}
+{% block content %}
+<div class="grid">
+  <section class="card span-4">
+    <h2>建立中央菜單</h2>
+    <form class="main-form" method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label>供餐日期</label><input name="service_date" type="date" value="{{ today }}" required></div><br>
+      <div class="field"><label>餐別</label><select name="meal_type">{% for meal in meal_types %}<option value="{{ meal }}" {% if meal == '午餐' %}selected{% endif %}>{{ meal }}</option>{% endfor %}</select></div><br>
+      <div class="field"><label>菜單名稱</label><input name="name" value="中央菜單" required></div><br>
+      <div class="field"><label>備註</label><textarea name="note"></textarea></div><br>
+      <button class="btn">建立並排菜</button>
+    </form>
+  </section>
+
+  <section class="card span-8">
+    <div class="top"><div><h2>{{ start }} 起 14 天</h2><div class="muted">可建立多個餐別或不同菜單。</div></div><form method="get" class="row"><div class="field"><label>起始日</label><input name="start" type="date" value="{{ start }}"></div><button class="btn secondary">查看</button></form></div>
+    {% if rows %}<div class="table-scroll"><table>
+      <thead><tr><th>日期</th><th>餐別</th><th>菜單</th><th>菜色</th><th>供餐</th><th>狀態</th><th></th></tr></thead>
+      <tbody>{% for p in rows %}<tr><td>{{ p.service_date }}</td><td>{{ p.meal_type }}</td><td>{{ p.name }}</td><td>{{ p.items|length }} 道</td><td>{{ p.assignments|length }} 校 / {{ p.assignments|sum(attribute='headcount') }} 人</td><td><span class="pill {{ 'ok' if p.status == 'confirmed' else 'warn' }}">{{ '已確認' if p.status == 'confirmed' else '草稿' }}</span></td><td><a href="{{ url_for('order_tool.plan_detail', plan_id=p.id) }}">編輯</a></td></tr>{% endfor %}</tbody>
+    </table></div>{% else %}<div class="empty">這段期間沒有菜單。</div>{% endif %}
+  </section>
+
+  <section class="card span-12">
+    <h2>週菜單預覽</h2>
+    <div class="week-grid">{% for day in days %}<div class="day-card"><div class="date">{{ day.date }}<br><span class="muted">{{ day.weekday }}</span></div>{% if day.plans %}{% for p in day.plans %}<div class="dish"><b>{{ p.meal_type }}</b>｜{{ p.name }}</div>{% for item in p.items %}<div class="dish"><span class="pill">{{ item.recipe.category or '-' }}</span> {{ item.recipe.name }}</div>{% endfor %}{% endfor %}{% else %}<div class="muted">尚無菜單</div>{% endif %}</div>{% endfor %}</div>
+  </section>
+</div>
+{% endblock %}

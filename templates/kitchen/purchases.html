@@ -1,0 +1,25 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}採購叫貨{% endblock %}
+{% block content %}
+<div class="grid">
+  <section class="card span-12">
+    <div class="top"><div><h2>產生採購草稿</h2><div class="muted">依菜單、各校人數與配方計算需求；只會更新草稿，不會覆蓋已確認歷史單。</div></div></div>
+    <form method="post" action="{{ url_for('order_tool.generate_purchases') }}" class="row main-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label>開始日期</label><input name="start" type="date" value="{{ start }}" required></div>
+      <div class="field"><label>結束日期</label><input name="end" type="date" value="{{ end }}" required></div>
+      <button class="btn">產生 / 更新草稿</button>
+    </form>
+  </section>
+
+  <section class="card span-12">
+    <div class="top"><div><h2>採購單歷史</h2><div class="muted">已確認單據保存當時的需求量、採購規格、單價與實際叫貨量。</div></div><form method="get" class="row"><div class="field"><label>開始</label><input name="start" type="date" value="{{ start }}"></div><div class="field"><label>結束</label><input name="end" type="date" value="{{ end }}"></div><button class="btn secondary">篩選</button></form></div>
+    {% if orders %}<div class="table-scroll"><table>
+      <thead><tr><th>日期</th><th>廠商</th><th>狀態</th><th>項目</th><th class="right">金額</th><th>更新時間</th><th></th></tr></thead>
+      <tbody>{% for o in orders %}<tr>
+        <td>{{ o.service_date }}</td><td>{{ o.supplier_name_snapshot }}</td><td><span class="pill {{ 'ok' if o.status == 'confirmed' else ('off' if o.status == 'cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td>{{ o.items|length }}</td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td>{{ o.updated_at.strftime('%Y-%m-%d %H:%M') if o.updated_at else '-' }}</td><td><a class="btn secondary" href="{{ url_for('order_tool.purchase_detail', order_id=o.id) }}">開啟</a></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>{% else %}<div class="empty">這段期間沒有採購單。</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -4,15 +4,16 @@
 <div class="grid">
   <section class="card span-5">
     <h2>{{ '編輯食材' if edit_row else '新增食材' }}</h2>
-    <div class="muted">配方永遠用 g/人；這裡設定實際叫貨單位與價格，例如 kg、箱、斤。</div><br>
+    <div class="muted">先選配方是用「g/人」還是「個/人」，再設定實際採購單位，例如 kg、箱、斤、個。</div><br>
     <form class="main-form" method="post" action="{{ url_for('order_tool.ingredient_update', ingredient_id=edit_row.id) if edit_row else url_for('order_tool.ingredients') }}">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <div class="field"><label>食材名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}" placeholder="骨腿丁"></div><br>
+      <div class="field"><label>食材名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}" placeholder="骨腿丁 / 棒棒腿"></div><br>
       <div class="field"><label>預設供應商</label><select name="supplier_id"><option value="">未指定</option>{% for s in suppliers %}<option value="{{ s.id }}" {% if edit_row and edit_row.supplier_id == s.id %}selected{% endif %}>{{ s.name }}{{ '（停用）' if not s.active else '' }}</option>{% endfor %}</select></div><br>
       <div class="row">
+        <div class="field"><label>配方基本單位</label><select name="base_unit" required>{% for base in base_units %}<option value="{{ base }}" {% if (edit_row.base_unit if edit_row else 'g') == base %}selected{% endif %}>{{ base }}/人</option>{% endfor %}</select><div class="muted">肉丁、蔬菜通常選 g；雞腿、蛋可選 個。</div></div>
         <div class="field"><label>採購單位</label><select name="purchase_unit" required>{% for unit in units %}<option value="{{ unit }}" {% if (edit_row.purchase_unit if edit_row else 'kg') == unit %}selected{% endif %}>{{ unit }}</option>{% endfor %}</select></div>
-        <div class="field"><label>每單位幾克</label><input name="grams_per_purchase_unit" type="number" step="0.001" min="0.001" required value="{{ edit_row.grams_per_purchase_unit if edit_row else 1000 }}"></div>
       </div><br>
+      <div class="field"><label>1 個採購單位包含多少基本單位</label><input name="grams_per_purchase_unit" type="number" step="0.001" min="0.001" required value="{{ edit_row.grams_per_purchase_unit if edit_row else 1000 }}"><div class="muted">例：g + kg 填 1000；個 + 箱（每箱50支）填 50；個 + 個 填 1。</div></div><br>
       <div class="row">
         <div class="field"><label>每採購單位單價（元）</label><input name="unit_price" type="number" step="0.0001" min="0" required value="{{ edit_row.unit_price if edit_row else 0 }}"></div>
         <div class="field"><label>最小叫貨增量</label><input name="order_increment" type="number" step="0.0001" min="0.0001" required value="{{ edit_row.order_increment if edit_row else 0.001 }}"><div class="muted">箱通常填 1；kg 可填 0.001。</div></div>
@@ -26,10 +27,10 @@
   <section class="card span-7">
     <h2>食材清單</h2>
     {% if rows %}<div class="table-scroll"><table>
-      <thead><tr><th>食材</th><th>供應商</th><th>採購規格</th><th class="right">單價</th><th>狀態</th><th>操作</th></tr></thead>
+      <thead><tr><th>食材</th><th>供應商</th><th>配方單位</th><th>採購規格</th><th class="right">單價</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>{% for r in rows %}<tr>
-        <td>{{ r.name }}</td><td>{{ r.supplier.name if r.supplier else '⚠ 未指定' }}</td>
-        <td>1 {{ r.purchase_unit }} = {{ '%.3f'|format(r.grams_per_purchase_unit|float) }} g<br><span class="muted">增量 {{ r.order_increment }}</span></td>
+        <td>{{ r.name }}</td><td>{{ r.supplier.name if r.supplier else '⚠ 未指定' }}</td><td>{{ r.base_unit or 'g' }}/人</td>
+        <td>1 {{ r.purchase_unit }} = {{ trim_decimal(r.grams_per_purchase_unit) }} {{ r.base_unit or 'g' }}<br><span class="muted">增量 {{ r.order_increment }}</span></td>
         <td class="right">${{ '%.2f'|format(r.unit_price|float) }}/{{ r.purchase_unit }}</td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
         <td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.ingredients', edit=r.id) }}">編輯</a><form method="post" action="{{ url_for('order_tool.ingredient_toggle', ingredient_id=r.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn {{ 'danger' if r.active else 'ok' }}">{{ '停用' if r.active else '恢復' }}</button></form></div></td>
       </tr>{% endfor %}</tbody>

@@ -1,0 +1,45 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}{{ plan.service_date }} {{ plan.name }}{% endblock %}
+{% block content %}
+<div class="top">
+  <div><h1>{{ plan.service_date }}・{{ plan.meal_type }}・{{ plan.name }}</h1><div class="muted">{{ '已確認，菜單已鎖定。' if plan.status == 'confirmed' else '先排菜，再設定每間學校當日人數。' }}</div></div>
+  <a class="btn secondary" href="{{ url_for('order_tool.plans') }}">← 菜單清單</a>
+</div>
+
+{% if has_confirmed_orders %}<div class="notice">這一天已有已確認採購單。歷史採購內容已 snapshot，不會因主檔變更而改變；若要修改本日正式採購，請先到採購單重開草稿。</div>{% endif %}
+
+<div class="grid">
+  <section class="card span-12">
+    <div class="row between center-y"><div><h2>菜單基本資料</h2><span class="pill {{ 'ok' if plan.status == 'confirmed' else 'warn' }}">{{ '已確認' if plan.status == 'confirmed' else '草稿' }}</span></div>
+      <div class="actions no-print">
+        <form method="post" action="{{ url_for('order_tool.plan_copy', plan_id=plan.id) }}" class="row"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input name="target_date" type="date" required><button class="btn secondary">複製到指定日期</button></form>
+        {% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.plan_confirm', plan_id=plan.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn ok">確認菜單</button></form>{% elif not has_confirmed_orders %}<form method="post" action="{{ url_for('order_tool.plan_reopen', plan_id=plan.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn warn">重開草稿</button></form>{% endif %}
+      </div>
+    </div>
+    {% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.plan_update', plan_id=plan.id) }}" class="row main-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>日期</label><input name="service_date" type="date" value="{{ plan.service_date }}" required></div><div class="field"><label>餐別</label><select name="meal_type">{% for meal in meal_types %}<option {% if plan.meal_type == meal %}selected{% endif %}>{{ meal }}</option>{% endfor %}</select></div><div class="field"><label>名稱</label><input name="name" value="{{ plan.name }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ plan.note or '' }}"></div><button class="btn">儲存</button></form>{% else %}<div class="muted">備註：{{ plan.note or '無' }}</div>{% endif %}
+  </section>
+
+  <section class="card span-6 {{ 'locked' if plan.status == 'confirmed' else '' }}">
+    <h2>① 今日菜色</h2>
+    {% if plan.items %}<div class="table-scroll"><table><thead><tr><th>分類</th><th>菜色</th><th class="right">AP 生料</th><th></th></tr></thead><tbody>
+      {% for x in plan.items %}<tr><td><span class="pill">{{ x.recipe.category or '-' }}</span></td><td>{{ x.recipe.name }}</td><td class="right">{{ '%.1f'|format(recipe_total_g(x.recipe)|float) }} g/人</td><td>{% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.plan_item_delete', row_id=x.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form>{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<div class="empty">尚未排菜。</div>{% endif %}
+    {% if plan.status == 'draft' %}<hr><h3>加入菜色</h3>{% if recipes %}<form method="post" action="{{ url_for('order_tool.plan_item_add', plan_id=plan.id) }}" class="row"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><select name="recipe_id">{% for r in recipes %}<option value="{{ r.id }}">{{ r.category or '未分類' }}｜{{ r.name }}</option>{% endfor %}</select></div><button class="btn">加入</button></form>{% else %}<div class="notice">目前沒有啟用中的菜色。</div>{% endif %}{% endif %}
+  </section>
+
+  <section class="card span-6 {{ 'locked' if plan.status == 'confirmed' else '' }}">
+    <h2>② 分配學校 / 人數</h2>
+    {% if plan.assignments %}<div class="table-scroll"><table><thead><tr><th>學校</th><th>當日人數</th><th></th></tr></thead><tbody>
+      {% for x in plan.assignments %}<tr><td>{{ x.school.name }}</td><td>{% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.assignment_update', row_id=x.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input style="max-width:120px" name="headcount" type="number" min="0" value="{{ x.headcount }}" required><button class="btn secondary">更新</button></form>{% else %}{{ x.headcount }}{% endif %}</td><td>{% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.assignment_delete', row_id=x.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form>{% endif %}</td></tr>{% endfor %}
+      <tr><td><b>總人數</b></td><td><b>{{ total_people }}</b></td><td></td></tr>
+    </tbody></table></div>{% else %}<div class="empty">尚未分配學校。</div>{% endif %}
+    {% if plan.status == 'draft' %}<hr><h3>加入學校</h3>{% if schools %}<form method="post" action="{{ url_for('order_tool.assignment_add', plan_id=plan.id) }}" class="row"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>學校</label><select name="school_id">{% for s in schools %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select></div><div class="field"><label>當日人數</label><input name="headcount" type="number" min="0" required></div><button class="btn">加入</button></form>{% else %}<div class="notice">目前沒有啟用中的學校。</div>{% endif %}{% endif %}
+  </section>
+
+  <section class="card span-12">
+    <div class="top"><div><h2>③ 採購叫貨</h2><div class="muted">會把同一天所有學校的人數展開配方並依供應商分單。草稿採購量可人工修正，確認後保存 snapshot。</div></div><form method="post" action="{{ url_for('order_tool.generate_purchases') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="start" value="{{ plan.service_date }}"><input type="hidden" name="end" value="{{ plan.service_date }}"><button class="btn">產生 / 更新今日採購草稿</button></form></div>
+  </section>
+
+  {% if plan.status == 'draft' %}<section class="card span-12 no-print"><div class="row between center-y"><div><h3>刪除草稿菜單</h3><div class="muted">只允許刪除草稿；已確認菜單需先重開。</div></div><form method="post" action="{{ url_for('order_tool.plan_delete', plan_id=plan.id) }}" onsubmit="return confirm('確定刪除這張菜單？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">刪除菜單</button></form></div></section>{% endif %}
+</div>
+{% endblock %}

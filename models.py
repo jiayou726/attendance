@@ -1,4 +1,6 @@
 # models.py
+from datetime import datetime
+
 from extensions import db
 
 
@@ -25,8 +27,8 @@ class Checkin(db.Model):
 
 
 # ─────────────────────────────────────────────
-# 團膳 / 萬能廚師替代模組
-# 中央菜單 → 分配學校與人數 → Recipe BOM → 採購彙總
+# 團膳正式模組
+# Recipe BOM（g / 人）→ 菜單 → 學校人數 → 採購單 snapshot
 # ─────────────────────────────────────────────
 
 
@@ -37,6 +39,8 @@ class KitchenSchool(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     code = db.Column(db.String(50), unique=True)
     active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class KitchenSupplier(db.Model):
@@ -46,6 +50,9 @@ class KitchenSupplier(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     phone = db.Column(db.String(50))
     note = db.Column(db.String(255))
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class KitchenIngredient(db.Model):
@@ -53,14 +60,21 @@ class KitchenIngredient(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
-    # 採購單價預設以每 kg 計價；每人配方固定以 g 儲存
-    unit_price = db.Column(db.Numeric(12, 4), nullable=False, default=0)
-    supplier_id = db.Column(
-        db.Integer,
-        db.ForeignKey("kitchen_supplier.id"),
-        nullable=True,
-    )
+    supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
+
+    # 配方底層一律以 g 計算；採購則用 purchase_unit。
+    # 例：kg => 1000g；箱 => 18000g；斤 => 600g。
+    purchase_unit = db.Column(db.String(20), nullable=False, default="kg")
+    grams_per_purchase_unit = db.Column(db.Numeric(14, 3), nullable=False, default=1000)
+    # unit_price 是「每一個 purchase_unit」的價格。
+    unit_price = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    # 建議叫貨量往上取整的最小增量。kg 可設 0.001；箱通常設 1。
+    order_increment = db.Column(db.Numeric(14, 4), nullable=False, default=0.001)
+
     note = db.Column(db.String(255))
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     supplier = db.relationship("KitchenSupplier")
 
@@ -71,9 +85,12 @@ class KitchenRecipe(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False, unique=True)
     category = db.Column(db.String(50))  # 主食 / 主菜 / 副菜 / 湯品 / 青菜...
-    # 成品預計每人打菜量（例如 95g）；可空白，不參與採購計算
+    # 成品預計每人打菜量（例如 95g）；不參與 AP 採購計算。
     serving_output_g = db.Column(db.Numeric(10, 2), nullable=True)
     note = db.Column(db.String(255))
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     ingredients = db.relationship(
         "KitchenRecipeIngredient",
@@ -97,14 +114,14 @@ class KitchenRecipeIngredient(db.Model):
         db.ForeignKey("kitchen_ingredient.id"),
         nullable=False,
     )
-    # AP 採購個人量：每人需要幾克，例如骨腿丁 88g
-    grams_per_person = db.Column(db.Numeric(10, 3), nullable=False)
+    # AP 採購個人量：每人需要幾克，例如骨腿丁 88g。
+    grams_per_person = db.Column(db.Numeric(12, 3), nullable=False)
 
     recipe = db.relationship("KitchenRecipe", back_populates="ingredients")
     ingredient = db.relationship("KitchenIngredient")
 
     __table_args__ = (
-        db.UniqueConstraint("recipe_id", "ingredient_id"),
+        db.UniqueConstraint("recipe_id", "ingredient_id", name="uq_kitchen_recipe_ingredient"),
     )
 
 
@@ -114,8 +131,11 @@ class KitchenMenuPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     service_date = db.Column(db.Date, nullable=False, index=True)
     meal_type = db.Column(db.String(30), nullable=False, default="午餐")
-    name = db.Column(db.String(120))
+    name = db.Column(db.String(120), nullable=False, default="中央菜單")
     note = db.Column(db.String(255))
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft / confirmed
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     items = db.relationship(
         "KitchenMenuPlanItem",
@@ -130,7 +150,7 @@ class KitchenMenuPlan(db.Model):
     )
 
     __table_args__ = (
-        db.UniqueConstraint("service_date", "meal_type", "name"),
+        db.UniqueConstraint("service_date", "meal_type", "name", name="uq_kitchen_menu_plan_identity"),
     )
 
 
@@ -154,7 +174,7 @@ class KitchenMenuPlanItem(db.Model):
     recipe = db.relationship("KitchenRecipe")
 
     __table_args__ = (
-        db.UniqueConstraint("plan_id", "recipe_id"),
+        db.UniqueConstraint("plan_id", "recipe_id", name="uq_kitchen_menu_plan_recipe"),
     )
 
 
@@ -178,5 +198,63 @@ class KitchenMenuAssignment(db.Model):
     school = db.relationship("KitchenSchool")
 
     __table_args__ = (
-        db.UniqueConstraint("plan_id", "school_id"),
+        db.UniqueConstraint("plan_id", "school_id", name="uq_kitchen_menu_assignment"),
+    )
+
+
+class KitchenPurchaseOrder(db.Model):
+    __tablename__ = "kitchen_purchase_order"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_date = db.Column(db.Date, nullable=False, index=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
+    # 穩定 key 避免廠商改名後產生重複單；未指定供應商使用 "unassigned"。
+    supplier_key = db.Column(db.String(100), nullable=False)
+    supplier_name_snapshot = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft / confirmed / cancelled
+    note = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship("KitchenSupplier")
+    items = db.relationship(
+        "KitchenPurchaseOrderItem",
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="KitchenPurchaseOrderItem.ingredient_name_snapshot",
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint("service_date", "supplier_key", name="uq_kitchen_purchase_order_supplier_day"),
+    )
+
+
+class KitchenPurchaseOrderItem(db.Model):
+    __tablename__ = "kitchen_purchase_order_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(
+        db.Integer,
+        db.ForeignKey("kitchen_purchase_order.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ingredient_id = db.Column(db.Integer, db.ForeignKey("kitchen_ingredient.id"), nullable=True)
+
+    # 下列欄位全部是 snapshot；正式單確認後不再從 master data 回算。
+    ingredient_name_snapshot = db.Column(db.String(120), nullable=False)
+    required_grams = db.Column(db.Numeric(16, 3), nullable=False, default=0)
+    required_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    purchase_unit_snapshot = db.Column(db.String(20), nullable=False)
+    grams_per_purchase_unit_snapshot = db.Column(db.Numeric(16, 3), nullable=False)
+    recommended_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    actual_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    unit_price_snapshot = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    amount = db.Column(db.Numeric(18, 4), nullable=False, default=0)
+    note = db.Column(db.String(255))
+
+    order = db.relationship("KitchenPurchaseOrder", back_populates="items")
+    ingredient = db.relationship("KitchenIngredient")
+
+    __table_args__ = (
+        db.UniqueConstraint("order_id", "ingredient_id", name="uq_kitchen_purchase_order_item"),
     )

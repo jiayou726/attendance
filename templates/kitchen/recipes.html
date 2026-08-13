@@ -17,8 +17,9 @@
 
   <section class="card span-7">
     <h2>菜色清單</h2>
+    <div class="muted">這裡的生料合計只加總 g 類食材；「個/人」食材請點進配方查看。</div><br>
     {% if rows %}<div class="table-scroll"><table>
-      <thead><tr><th>分類</th><th>菜色</th><th class="right">AP 生料</th><th class="right">打菜量</th><th>狀態</th><th>操作</th></tr></thead>
+      <thead><tr><th>分類</th><th>菜色</th><th class="right">g 類 AP 生料</th><th class="right">打菜量</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>{% for r in rows %}<tr>
         <td><span class="pill">{{ r.category or '未分類' }}</span></td><td>{{ r.name }}</td><td class="right">{{ '%.1f'|format(recipe_total_g(r)|float) }} g/人</td><td class="right">{{ ('%.1f'|format(r.serving_output_g|float) ~ ' g') if r.serving_output_g is not none else '-' }}</td>
         <td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>

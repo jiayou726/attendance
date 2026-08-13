@@ -18,9 +18,11 @@ from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
 
 
-def create_app() -> Flask:
+def create_app(config_overrides=None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
+    if config_overrides:
+        app.config.update(config_overrides)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     db.init_app(app)

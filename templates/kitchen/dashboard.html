@@ -6,6 +6,21 @@
   <section class="card span-4"><div class="kpi"><div class="muted">啟用食材</div><div class="stat">{{ ingredient_count }}</div></div></section>
   <section class="card span-4"><div class="kpi"><div class="muted">供餐學校</div><div class="stat">{{ school_count }}</div></div></section>
 
+  {% if recipe_count == 0 or ingredient_count == 0 or school_count == 0 %}
+  <section class="card span-12 onboarding">
+    <h2>第一次使用？照這個順序就好</h2>
+    <div class="muted">不用一次把所有資料建完。先用一間學校、一個廠商、一個食材、一個菜色跑通即可。</div>
+    <div class="onboarding-steps">
+      <a class="onboarding-step {{ 'done' if school_count else '' }}" href="{{ url_for('order_tool.schools') }}"><b>1. 學校</b><span>{{ '已有資料 ✓' if school_count else '先建立供餐學校' }}</span></a>
+      <a class="onboarding-step" href="{{ url_for('order_tool.suppliers') }}"><b>2. 廠商</b><span>建立叫貨供應商</span></a>
+      <a class="onboarding-step {{ 'done' if ingredient_count else '' }}" href="{{ url_for('order_tool.ingredients') }}"><b>3. 食材</b><span>{{ '已有資料 ✓' if ingredient_count else '設定食材、單價、規格' }}</span></a>
+      <a class="onboarding-step {{ 'done' if recipe_count else '' }}" href="{{ url_for('order_tool.recipes') }}"><b>4. 菜色配方</b><span>{{ '已有資料 ✓' if recipe_count else '建立菜色與每人 AP 用量' }}</span></a>
+      <a class="onboarding-step" href="{{ url_for('order_tool.plans') }}"><b>5. 菜單</b><span>排菜並輸入各校人數</span></a>
+      <a class="onboarding-step" href="{{ url_for('order_tool.purchases') }}"><b>6. 採購</b><span>產生草稿、確認後再叫貨</span></a>
+    </div>
+  </section>
+  {% endif %}
+
   <section class="card span-12">
     <div class="top">
       <div><h2>未來 7 天菜單</h2><div class="muted">中央菜單可同時指派多間學校與各自人數。</div></div>

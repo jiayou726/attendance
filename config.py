@@ -22,6 +22,7 @@ def _database_url() -> str:
 class Config:
     # 正式環境必須在部署平台設定 SECRET_KEY。
     # 本機未設定時使用隨機值，因此重啟後 session 會失效，但不會把固定秘密放進 repo。
+    SECRET_KEY_CONFIGURED = bool(os.getenv("SECRET_KEY"))
     SECRET_KEY = os.getenv("SECRET_KEY") or os.urandom(32)
 
     SQLALCHEMY_DATABASE_URI = _database_url()

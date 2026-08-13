@@ -36,7 +36,7 @@ def create_app() -> Flask:
     app.register_blueprint(punch_bp)              # /punch
 
     # ── 團膳頁專用 responsive UI ──
-    # 只對 /admin/order-tool 注入 CSS，不影響既有打卡、薪資等頁面。
+    # 只對 /admin/order-tool 注入 CSS / JS，不影響既有打卡、薪資等頁面。
     @app.after_request
     def inject_kitchen_responsive_ui(response):
         if (
@@ -47,12 +47,17 @@ def create_app() -> Flask:
             html = response.get_data(as_text=True)
             css_tag = (
                 '<link rel="stylesheet" '
-                'href="/static/kitchen_mobile.css?v=2">'
+                'href="/static/kitchen_mobile.css?v=3">'
             )
+            js_tag = '<script src="/static/kitchen_ui.js?v=1" defer></script>'
+
             if "</head>" in html and "kitchen_mobile.css" not in html:
                 html = html.replace("</head>", f"{css_tag}</head>", 1)
-                response.set_data(html)
-                response.headers["Content-Length"] = len(response.get_data())
+            if "</body>" in html and "kitchen_ui.js" not in html:
+                html = html.replace("</body>", f"{js_tag}</body>", 1)
+
+            response.set_data(html)
+            response.headers["Content-Length"] = len(response.get_data())
         return response
 
     # ── 首頁導向 ──

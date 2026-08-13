@@ -28,7 +28,7 @@ class Checkin(db.Model):
 
 # ─────────────────────────────────────────────
 # 團膳正式模組
-# Recipe BOM（g / 人）→ 菜單 → 學校人數 → 採購單 snapshot
+# Recipe BOM（每人 AP 數量，可用 g 或 個）→ 菜單 → 學校人數 → 採購 snapshot
 # ─────────────────────────────────────────────
 
 
@@ -62,13 +62,13 @@ class KitchenIngredient(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
 
-    # 配方底層一律以 g 計算；採購則用 purchase_unit。
-    # 例：kg => 1000g；箱 => 18000g；斤 => 600g。
+    # 配方基本單位：大部分食材用 g；雞腿、蛋等可用 個。
+    base_unit = db.Column(db.String(10), nullable=False, default="g")
     purchase_unit = db.Column(db.String(20), nullable=False, default="kg")
+    # 欄位名稱沿用舊 schema；實際語意為「1 採購單位包含多少 base_unit」。
+    # base_unit=g：1 kg = 1000；base_unit=個：1 箱 = 50（個）。
     grams_per_purchase_unit = db.Column(db.Numeric(14, 3), nullable=False, default=1000)
-    # unit_price 是「每一個 purchase_unit」的價格。
     unit_price = db.Column(db.Numeric(14, 4), nullable=False, default=0)
-    # 建議叫貨量往上取整的最小增量。kg 可設 0.001；箱通常設 1。
     order_increment = db.Column(db.Numeric(14, 4), nullable=False, default=0.001)
 
     note = db.Column(db.String(255))
@@ -84,8 +84,8 @@ class KitchenRecipe(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False, unique=True)
-    category = db.Column(db.String(50))  # 主食 / 主菜 / 副菜 / 湯品 / 青菜...
-    # 成品預計每人打菜量（例如 95g）；不參與 AP 採購計算
+    category = db.Column(db.String(50))
+    # 成品預計每人打菜量（g）；不參與 AP 採購計算。
     serving_output_g = db.Column(db.Numeric(10, 2), nullable=True)
     note = db.Column(db.String(255))
     active = db.Column(db.Boolean, nullable=False, default=True)
@@ -114,7 +114,8 @@ class KitchenRecipeIngredient(db.Model):
         db.ForeignKey("kitchen_ingredient.id"),
         nullable=False,
     )
-    # AP 採購個人量：每人需要幾克，例如骨腿丁 88g
+    # 欄位名稱沿用舊 schema；實際語意為「每人 AP 數量」，單位由 ingredient.base_unit 決定。
+    # 例：骨腿丁 88 g/人；棒棒腿 1 個/人。
     grams_per_person = db.Column(db.Numeric(12, 3), nullable=False)
 
     recipe = db.relationship("KitchenRecipe", back_populates="ingredients")
@@ -133,7 +134,7 @@ class KitchenMenuPlan(db.Model):
     meal_type = db.Column(db.String(30), nullable=False, default="午餐")
     name = db.Column(db.String(120), nullable=False, default="中央菜單")
     note = db.Column(db.String(255))
-    status = db.Column(db.String(20), nullable=False, default="draft")  # draft / confirmed
+    status = db.Column(db.String(20), nullable=False, default="draft")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -208,10 +209,11 @@ class KitchenPurchaseOrder(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     service_date = db.Column(db.Date, nullable=False, index=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
-    # 穩定 key 避免廠商改名後產生重複單；未指定供應商使用 "unassigned"。
+    # supplier_key 保留「系統原始分組來源」，人工換廠商不改 key，避免重新計算時產生重複草稿。
     supplier_key = db.Column(db.String(100), nullable=False)
     supplier_name_snapshot = db.Column(db.String(120), nullable=False)
-    status = db.Column(db.String(20), nullable=False, default="draft")  # draft / confirmed / cancelled
+    supplier_overridden = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")
     note = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -240,8 +242,9 @@ class KitchenPurchaseOrderItem(db.Model):
     )
     ingredient_id = db.Column(db.Integer, db.ForeignKey("kitchen_ingredient.id"), nullable=True)
 
-    # 下列欄位全部是 snapshot；正式單確認後不再從 master data 回算。
     ingredient_name_snapshot = db.Column(db.String(120), nullable=False)
+    base_unit_snapshot = db.Column(db.String(10), nullable=False, default="g")
+    # 欄位名稱 required_grams 沿用舊 schema；實際為 required base-unit amount。
     required_grams = db.Column(db.Numeric(16, 3), nullable=False, default=0)
     required_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     purchase_unit_snapshot = db.Column(db.String(20), nullable=False)
@@ -251,6 +254,8 @@ class KitchenPurchaseOrderItem(db.Model):
     unit_price_snapshot = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     amount = db.Column(db.Numeric(18, 4), nullable=False, default=0)
     note = db.Column(db.String(255))
+    # 使用者手動改過數量/單價/備註後，重新產生需求時保留人工值。
+    manual_override = db.Column(db.Boolean, nullable=False, default=False)
 
     order = db.relationship("KitchenPurchaseOrder", back_populates="items")
     ingredient = db.relationship("KitchenIngredient")

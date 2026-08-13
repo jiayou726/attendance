@@ -2,7 +2,7 @@
 import flask.blueprints   # 這行一定放最上面
 
 import os
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, url_for, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config     import Config
 from extensions import db, migrate
@@ -34,6 +34,26 @@ def create_app() -> Flask:
     app.register_blueprint(import_bp, url_prefix="/admin")
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)              # /punch
+
+    # ── 團膳頁專用 responsive UI ──
+    # 只對 /admin/order-tool 注入 CSS，不影響既有打卡、薪資等頁面。
+    @app.after_request
+    def inject_kitchen_responsive_ui(response):
+        if (
+            request.path.startswith("/admin/order-tool")
+            and response.mimetype == "text/html"
+            and response.status_code < 400
+        ):
+            html = response.get_data(as_text=True)
+            css_tag = (
+                '<link rel="stylesheet" '
+                'href="/static/kitchen_mobile.css?v=2">'
+            )
+            if "</head>" in html and "kitchen_mobile.css" not in html:
+                html = html.replace("</head>", f"{css_tag}</head>", 1)
+                response.set_data(html)
+                response.headers["Content-Length"] = len(response.get_data())
+        return response
 
     # ── 首頁導向 ──
     @app.route("/")

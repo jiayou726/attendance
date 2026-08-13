@@ -2,7 +2,7 @@
 import flask.blueprints
 
 import os
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, request, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
@@ -23,6 +23,16 @@ def create_app(config_overrides=None) -> Flask:
     app.config.from_object(Config)
     if config_overrides:
         app.config.update(config_overrides)
+
+    # 正式環境 fail closed：少了秘密或管理密碼就不要假裝安全上線。
+    if app.config.get("PRODUCTION", False):
+        if not app.config.get("SECRET_KEY_CONFIGURED", False):
+            raise RuntimeError("PRODUCTION=1 時必須設定 SECRET_KEY。")
+        if not (app.config.get("ADMIN_HR_PASSWORD") or app.config.get("ADMIN_MGR_PASSWORD")):
+            raise RuntimeError("PRODUCTION=1 時至少要設定一組管理後台密碼。")
+        if not app.config.get("KITCHEN_CSRF_ENABLED", True):
+            raise RuntimeError("PRODUCTION=1 時不可關閉 KITCHEN_CSRF_ENABLED。")
+
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     db.init_app(app)
@@ -35,6 +45,14 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(import_bp, url_prefix="/admin")
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)
+
+    @app.before_request
+    def protect_admin_pages():
+        # /punch 不在 /admin 下，因此既有打卡流程不受影響。
+        if request.path.startswith("/admin") and request.path not in {"/admin/login", "/admin/logout"}:
+            if not session.get("role"):
+                return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
+        return None
 
     @app.route("/")
     def home():

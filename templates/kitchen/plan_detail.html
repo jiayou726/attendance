@@ -21,7 +21,8 @@
 
   <section class="card span-6 {{ 'locked' if plan.status == 'confirmed' else '' }}">
     <h2>① 今日菜色</h2>
-    {% if plan.items %}<div class="table-scroll"><table><thead><tr><th>分類</th><th>菜色</th><th class="right">AP 生料</th><th></th></tr></thead><tbody>
+    <div class="muted">下方克數只加總 g 類食材；「個/人」食材仍會在採購計算中正常計入。</div><br>
+    {% if plan.items %}<div class="table-scroll"><table><thead><tr><th>分類</th><th>菜色</th><th class="right">g 類 AP 生料</th><th></th></tr></thead><tbody>
       {% for x in plan.items %}<tr><td><span class="pill">{{ x.recipe.category or '-' }}</span></td><td>{{ x.recipe.name }}</td><td class="right">{{ '%.1f'|format(recipe_total_g(x.recipe)|float) }} g/人</td><td>{% if plan.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.plan_item_delete', row_id=x.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form>{% endif %}</td></tr>{% endfor %}
     </tbody></table></div>{% else %}<div class="empty">尚未排菜。</div>{% endif %}
     {% if plan.status == 'draft' %}<hr><h3>加入菜色</h3>{% if recipes %}<form method="post" action="{{ url_for('order_tool.plan_item_add', plan_id=plan.id) }}" class="row"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><select name="recipe_id">{% for r in recipes %}<option value="{{ r.id }}">{{ r.category or '未分類' }}｜{{ r.name }}</option>{% endfor %}</select></div><button class="btn">加入</button></form>{% else %}<div class="notice">目前沒有啟用中的菜色。</div>{% endif %}{% endif %}
@@ -37,7 +38,7 @@
   </section>
 
   <section class="card span-12">
-    <div class="top"><div><h2>③ 採購叫貨</h2><div class="muted">會把同一天所有學校的人數展開配方並依供應商分單。草稿採購量可人工修正，確認後保存 snapshot。</div></div><form method="post" action="{{ url_for('order_tool.generate_purchases') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="start" value="{{ plan.service_date }}"><input type="hidden" name="end" value="{{ plan.service_date }}"><button class="btn">產生 / 更新今日採購草稿</button></form></div>
+    <div class="top"><div><h2>③ 採購叫貨</h2><div class="muted">會把同一天所有學校的人數展開配方並依供應商分單。草稿採購量可人工修正；重新計算需求時人工調整會保留，確認後保存 snapshot。</div></div><form method="post" action="{{ url_for('order_tool.generate_purchases') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="start" value="{{ plan.service_date }}"><input type="hidden" name="end" value="{{ plan.service_date }}"><button class="btn">產生 / 更新今日採購草稿</button></form></div>
   </section>
 
   {% if plan.status == 'draft' %}<section class="card span-12 no-print"><div class="row between center-y"><div><h3>刪除草稿菜單</h3><div class="muted">只允許刪除草稿；已確認菜單需先重開。</div></div><form method="post" action="{{ url_for('order_tool.plan_delete', plan_id=plan.id) }}" onsubmit="return confirm('確定刪除這張菜單？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">刪除菜單</button></form></div></section>{% endif %}

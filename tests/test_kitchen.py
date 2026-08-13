@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -11,11 +12,14 @@ from models import (
     KitchenMenuAssignment,
     KitchenMenuPlan,
     KitchenPurchaseOrder,
+    KitchenPurchaseOrderItem,
     KitchenRecipe,
     KitchenRecipeIngredient,
     KitchenSchool,
     KitchenSupplier,
 )
+
+TEST_DAY = date(2026, 8, 13)
 
 
 @pytest.fixture()
@@ -59,6 +63,16 @@ def _ids(app):
         }
 
 
+def _ids_partial(app):
+    with app.app_context():
+        school = KitchenSchool.query.filter_by(name="內小").one_or_none()
+        supplier = KitchenSupplier.query.filter_by(name="測試肉品").one_or_none()
+        return {
+            "school": school.id if school else None,
+            "supplier": supplier.id if supplier else None,
+        }
+
+
 def _seed_core_via_routes(app, client):
     assert client.post("/admin/order-tool/schools", data={"name": "內小", "code": "1-08"}).status_code == 302
     assert client.post("/admin/order-tool/suppliers", data={"name": "測試肉品", "phone": "02-12345678"}).status_code == 302
@@ -89,16 +103,6 @@ def _seed_core_via_routes(app, client):
     return ids
 
 
-def _ids_partial(app):
-    with app.app_context():
-        school = KitchenSchool.query.filter_by(name="內小").one_or_none()
-        supplier = KitchenSupplier.query.filter_by(name="測試肉品").one_or_none()
-        return {
-            "school": school.id if school else None,
-            "supplier": supplier.id if supplier else None,
-        }
-
-
 def _create_plan(app, client, ids, service_date="2026-08-13", headcount=801):
     assert client.post("/admin/order-tool/plans", data={
         "service_date": service_date,
@@ -106,8 +110,9 @@ def _create_plan(app, client, ids, service_date="2026-08-13", headcount=801):
         "name": "中央菜單",
         "note": "",
     }).status_code == 302
+    service_day = date.fromisoformat(service_date)
     with app.app_context():
-        plan = KitchenMenuPlan.query.filter_by(service_date=service_date, meal_type="午餐", name="中央菜單").one()
+        plan = KitchenMenuPlan.query.filter_by(service_date=service_day, meal_type="午餐", name="中央菜單").one()
         plan_id = plan.id
     assert client.post(f"/admin/order-tool/plans/{plan_id}/items", data={"recipe_id": str(ids["recipe"])}).status_code == 302
     assert client.post(f"/admin/order-tool/plans/{plan_id}/assignments", data={
@@ -146,7 +151,7 @@ def test_static_pages_render_and_attendance_models_survive(app, authed_client):
     assert b"kitchen_mobile.css" in response.data
 
     with app.app_context():
-        assert Employee.query.get(9001).name == "原打卡員工"
+        assert db.session.get(Employee, 9001).name == "原打卡員工"
         assert Checkin.query.filter_by(employee_id=9001).count() == 1
 
 
@@ -161,7 +166,7 @@ def test_full_801_person_purchase_calculation_and_snapshot(app, authed_client):
     assert response.status_code == 302
 
     with app.app_context():
-        order = KitchenPurchaseOrder.query.filter_by(service_date="2026-08-13").one()
+        order = KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).one()
         item = order.items[0]
         assert item.required_grams == Decimal("70488.000")
         assert item.required_qty == Decimal("70.4880")
@@ -194,10 +199,9 @@ def test_full_801_person_purchase_calculation_and_snapshot(app, authed_client):
         assert item.amount == Decimal("5780.0160")
         assert db.session.get(KitchenMenuPlan, plan_id).status == "confirmed"
 
-    # 已確認的日期不可被「重新產生」偷偷覆寫。
     authed_client.post("/admin/order-tool/purchases/generate", data={"start": "2026-08-13", "end": "2026-08-13"})
     with app.app_context():
-        item = KitchenPurchaseOrder.query.filter_by(service_date="2026-08-13").one().items[0]
+        item = KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).one().items[0]
         assert item.required_grams == Decimal("70488.000")
         assert item.unit_price_snapshot == Decimal("82.0000")
 
@@ -216,37 +220,37 @@ def test_cross_school_aggregation(app, authed_client):
     authed_client.post("/admin/order-tool/purchases/generate", data={"start": "2026-08-13", "end": "2026-08-13"})
 
     with app.app_context():
-        item = KitchenPurchaseOrder.query.filter_by(service_date="2026-08-13").one().items[0]
-        # (801 + 586) * 88g = 122,056g = 122.056kg
+        item = KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).one().items[0]
         assert item.required_grams == Decimal("122056.000")
         assert item.required_qty == Decimal("122.0560")
 
 
 def test_supplier_grouping(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
-    plan_id = _create_plan(app, authed_client, ids, headcount=801)
+    _create_plan(app, authed_client, ids, headcount=801)
 
     authed_client.post("/admin/order-tool/suppliers", data={"name": "測試蔬菜"})
     with app.app_context():
         veg_supplier = KitchenSupplier.query.filter_by(name="測試蔬菜").one()
+        veg_supplier_id = veg_supplier.id
     authed_client.post("/admin/order-tool/ingredients", data={
         "name": "洋芋",
-        "supplier_id": str(veg_supplier.id),
+        "supplier_id": str(veg_supplier_id),
         "purchase_unit": "kg",
         "grams_per_purchase_unit": "1000",
         "unit_price": "20",
         "order_increment": "0.001",
     })
     with app.app_context():
-        potato = KitchenIngredient.query.filter_by(name="洋芋").one()
+        potato_id = KitchenIngredient.query.filter_by(name="洋芋").one().id
     authed_client.post(f"/admin/order-tool/recipes/{ids['recipe']}/ingredients", data={
-        "ingredient_id": str(potato.id),
+        "ingredient_id": str(potato_id),
         "grams_per_person": "8",
     })
     authed_client.post("/admin/order-tool/purchases/generate", data={"start": "2026-08-13", "end": "2026-08-13"})
 
     with app.app_context():
-        orders = KitchenPurchaseOrder.query.filter_by(service_date="2026-08-13").all()
+        orders = KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).all()
         assert len(orders) == 2
         assert {o.supplier_name_snapshot for o in orders} == {"測試肉品", "測試蔬菜"}
         potato_order = next(o for o in orders if o.supplier_name_snapshot == "測試蔬菜")
@@ -315,12 +319,10 @@ def test_csrf_protects_kitchen_post(tmp_path):
     with client.session_transaction() as sess:
         sess["role"] = "mgr"
 
-    # 沒 token 不得新增。
     client.post("/admin/order-tool/schools", data={"name": "不該成功"})
     with app.app_context():
         assert KitchenSchool.query.filter_by(name="不該成功").first() is None
 
-    # GET 會建立 session token；帶 token 後可正常新增。
     client.get("/admin/order-tool/schools")
     with client.session_transaction() as sess:
         token = sess["_kitchen_csrf"]

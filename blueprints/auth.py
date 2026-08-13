@@ -36,9 +36,10 @@ def _safe_next(value: str | None) -> str | None:
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
-    err = ""
+    error = ""
     passwords = _passwords()
-    configured = any(passwords.values())
+    configured_roles = [(role, "人資" if role == "hr" else "主管") for role, pw in passwords.items() if pw]
+    configured = bool(configured_roles)
     next_url = _safe_next(request.args.get("next") or request.form.get("next"))
 
     if request.method == "POST":
@@ -52,33 +53,30 @@ def login():
             session.permanent = True
             return redirect(next_url or "/admin/")
 
-        err = "<p style='color:#b42318'>帳號角色或密碼錯誤。</p>"
-
-    options = "".join(
-        f'<option value="{role}">{"人資" if role == "hr" else "主管"}</option>'
-        for role, password in passwords.items()
-        if password
-    )
+        error = "帳號角色或密碼錯誤。"
 
     if not configured:
-        err = (
-            "<p style='color:#b42318'>管理密碼尚未設定。請在部署環境設定 "
-            "ADMIN_HR_PASSWORD 或 ADMIN_MGR_PASSWORD。</p>"
-        )
+        error = "管理密碼尚未設定。請在部署環境設定 ADMIN_HR_PASSWORD 或 ADMIN_MGR_PASSWORD。"
 
-    disabled = "disabled" if not configured else ""
-    hidden_next = f'<input type="hidden" name="next" value="{next_url}">' if next_url else ""
-
+    template = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">{CSS}</head><body>
+    <h2>管理登入</h2>
+    {{% if error %}}<p style="color:#b42318">{{{{ error }}}}</p>{{% endif %}}
+    <form method="post">
+      {{% if next_url %}}<input type="hidden" name="next" value="{{{{ next_url }}}}">{{% endif %}}
+      <select name="role" {{% if not configured %}}disabled{{% endif %}}>
+        {{% for value, label in roles %}}<option value="{{{{ value }}}}">{{{{ label }}}}</option>{{% endfor %}}
+      </select><br>
+      <input type="password" name="pw" autocomplete="current-password" required {{% if not configured %}}disabled{{% endif %}}><br>
+      <button {{% if not configured %}}disabled{{% endif %}}>登入</button>
+    </form>
+    <p><a href="/">回首頁</a></p></body></html>"""
     return render_template_string(
-        f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">{CSS}</head><body>
-        <h2>管理登入</h2>{err}
-        <form method="post">
-          {hidden_next}
-          <select name="role" {disabled}>{options}</select><br>
-          <input type="password" name="pw" autocomplete="current-password" required {disabled}><br>
-          <button {disabled}>登入</button>
-        </form>
-        <p><a href="/">回首頁</a></p></body></html>"""
+        template,
+        error=error,
+        next_url=next_url,
+        roles=configured_roles,
+        configured=configured,
     )
 
 

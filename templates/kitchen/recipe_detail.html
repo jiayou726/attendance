@@ -1,0 +1,36 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}{{ recipe.name }}{% endblock %}
+{% block content %}
+<div class="top">
+  <div><h1>{{ recipe.name }}</h1><div class="muted">每人 AP 採購配方。打菜量 {{ recipe.serving_output_g if recipe.serving_output_g is not none else '-' }} g/人。</div></div>
+  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.recipes') }}">← 菜色清單</a><form method="post" action="{{ url_for('order_tool.recipe_copy', recipe_id=recipe.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn">複製此菜色</button></form></div>
+</div>
+
+<div class="grid">
+  <section class="card span-8">
+    <h2>目前配方</h2>
+    {% if recipe.ingredients %}<div class="table-scroll"><table>
+      <thead><tr><th>食材</th><th>每人 AP</th><th>採購單價</th><th class="right">每人成本</th><th>修改</th></tr></thead>
+      <tbody>{% for x in recipe.ingredients %}<tr>
+        <td>{{ x.ingredient.name }}{% if not x.ingredient.active %}<br><span class="pill off">食材已停用</span>{% endif %}</td>
+        <td><form class="row center-y" method="post" action="{{ url_for('order_tool.recipe_ingredient_update', row_id=x.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input style="max-width:120px" name="grams_per_person" type="number" min="0.001" step="0.001" value="{{ x.grams_per_person }}" required><span>g</span><button class="btn secondary">更新</button></form></td>
+        <td>${{ '%.2f'|format(x.ingredient.unit_price|float) }}/{{ x.ingredient.purchase_unit }}</td>
+        <td class="right">${{ '%.3f'|format(component_cost(x)|float) }}</td>
+        <td><form method="post" action="{{ url_for('order_tool.recipe_ingredient_delete', row_id=x.id) }}" onsubmit="return confirm('確定移除此食材？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    <hr><div class="row between center-y"><b>每份 AP 生料：{{ '%.1f'|format(total_g|float) }} g</b><b>每份原料成本：約 ${{ '%.2f'|format(total_cost|float) }}</b></div>
+    {% else %}<div class="empty">還沒有食材。</div>{% endif %}
+  </section>
+
+  <section class="card span-4">
+    <h2>加入食材</h2>
+    {% if ingredients %}<form class="main-form" method="post" action="{{ url_for('order_tool.recipe_ingredient_add', recipe_id=recipe.id) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label>食材</label><select name="ingredient_id" required>{% for i in ingredients %}<option value="{{ i.id }}">{{ i.name }}｜{{ i.purchase_unit }}</option>{% endfor %}</select></div><br>
+      <div class="field"><label>每人 AP 採購量（g）</label><input name="grams_per_person" type="number" min="0.001" step="0.001" required placeholder="例如 88"></div><br>
+      <button class="btn">加入配方</button>
+    </form>{% else %}<div class="notice">沒有可用食材，請先建立或恢復食材。</div><a class="btn" href="{{ url_for('order_tool.ingredients') }}">去建立食材</a>{% endif %}
+  </section>
+</div>
+{% endblock %}

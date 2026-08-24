@@ -1,0 +1,65 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}單日食材採購明細{% endblock %}
+{% block content %}
+<section class="summary-week-head procurement-head">
+  <div>
+    <div class="eyebrow">步驟 3</div>
+    <h1>食材採購明細</h1>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依這一天各校勾選菜色、人數與配方自動合併。</div>
+  </div>
+  <nav class="week-switcher" aria-label="切換採購日期">
+    <a class="btn secondary" href="{{ url_for('order_tool.procurement', date=previous_date.isoformat()) }}">← 前一天</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">回各校菜單</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.procurement', date=next_date.isoformat()) }}">後一天 →</a>
+  </nav>
+</section>
+
+<section class="card procurement-date-card">
+  <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row main-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <div class="field"><label>採購需求日期</label><input name="date" type="date" value="{{ service_date.isoformat() }}" required></div>
+    <button class="btn" type="submit">選這一天並重新計算</button>
+  </form>
+</section>
+
+{% if pending_recipes %}
+<div class="flash warning">以下菜色仍有食材克數待確認，未設定的需求不會列入：{{ pending_recipes|join('、') }}</div>
+{% endif %}
+
+{% if rows %}
+<form method="post" action="{{ url_for('order_tool.procurement_save') }}" class="procurement-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="date" value="{{ service_date.isoformat() }}">
+  <datalist id="supplier-search-options">
+    {% for supplier in suppliers %}<option value="{{ supplier.name }}">{{ supplier.name }}</option>{% endfor %}
+  </datalist>
+  <section class="card procurement-sheet">
+    <div class="top">
+      <div><h2>{{ service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">廠商欄可點開選擇，也可以直接打字搜尋名稱。</div></div>
+      <button class="btn ok" type="submit">儲存採購明細</button>
+    </div>
+    <div class="table-scroll"><table class="procurement-table">
+      <thead><tr><th>食材名稱</th><th>總供餐人次</th><th>系統需求量</th><th>實際採購量</th><th>交貨日期／時段</th><th>供應廠商</th></tr></thead>
+      <tbody>
+      {% for row in rows %}{% set item = row.item %}{% set order = row.order %}
+      <tr>
+        <td><input type="hidden" name="item_ids" value="{{ item.id }}"><b>{{ item.ingredient_name_snapshot }}</b></td>
+        <td><b>{{ row.total_people }}</b> 人次</td>
+        <td><b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small></td>
+        <td><div class="input-unit"><input name="actual_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.actual_order_qty) }}" required><span>{{ item.purchase_unit_snapshot }}</span></div></td>
+        <td><div class="delivery-fields"><input name="delivery_date_{{ item.id }}" type="date" value="{{ (item.delivery_date or service_date).isoformat() }}" required><select name="delivery_slot_{{ item.id }}"><option{% if item.delivery_slot != '下午' %} selected{% endif %}>上午</option><option{% if item.delivery_slot == '下午' %} selected{% endif %}>下午</option></select></div></td>
+        <td><input class="supplier-search-input" name="supplier_{{ item.id }}" type="search" list="supplier-search-options" value="{{ order.supplier.name if order.supplier else '' }}" placeholder="搜尋或選擇廠商" autocomplete="off"></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+  <div class="school-save-bar"><button class="btn ok" type="submit">儲存 {{ service_date.strftime('%m/%d') }} 採購明細</button></div>
+</form>
+{% else %}
+<section class="card empty procurement-empty">
+  <h2>這一天還沒有採購明細</h2>
+  <p>確認各校這一天的菜色與人數後，按上方「選這一天並重新計算」。</p>
+</section>
+{% endif %}
+{% endblock %}

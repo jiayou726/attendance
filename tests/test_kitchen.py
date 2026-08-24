@@ -264,6 +264,53 @@ def test_school_menu_can_import_school_excel_directly(app, authed_client):
         assert "沙茶雞肉" in [item.recipe.name for item in plan.items]
 
 
+def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    payload = {"school_id": str(ids["school"]), "week": "2026-08-10"}
+    for offset in range(7):
+        day = date(2026, 8, 10) + timedelta(days=offset)
+        payload[f"headcount_{day.isoformat()}"] = "0"
+    payload["headcount_2026-08-13"] = "801"
+    payload["recipes_2026-08-13"] = str(ids["recipe"])
+    authed_client.post("/admin/order-tool/summary/schools/save", data=payload)
+
+    response = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+        follow_redirects=True,
+    )
+    page = response.get_data(as_text=True)
+    assert all(label in page for label in (
+        "食材名稱", "總供餐人次", "系統需求量", "實際採購量", "交貨日期／時段", "供應廠商"
+    ))
+    assert 'list="supplier-search-options"' in page
+    assert ">801</b> 人次" in page
+
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+    saved = authed_client.post("/admin/order-tool/summary/procurement/save", data={
+        "date": "2026-08-13",
+        "item_ids": str(item_id),
+        f"actual_{item_id}": "71",
+        f"delivery_date_{item_id}": "2026-08-12",
+        f"delivery_slot_{item_id}": "下午",
+        f"supplier_{item_id}": "測試肉品",
+    })
+    assert saved.status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("71")
+        assert item.delivery_date == date(2026, 8, 12)
+        assert item.delivery_slot == "下午"
+        assert item.order.supplier.name == "測試肉品"
+
+
 def _menu_upload_file():
     workbook = Workbook()
     hidden = workbook.active

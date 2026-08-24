@@ -36,6 +36,19 @@
   </form>
 </section>
 
+<section class="card school-next-step">
+  <div>
+    <span class="pill ok">單日採購流程</span>
+    <h2>選一天進入採購明細</h2>
+    <div class="muted">那一天所有學校的菜色與人數都確認後，再產生該日食材需求。</div>
+  </div>
+  <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <div class="field"><label>採購日期</label><input name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ week_start.isoformat() }}" required></div>
+    <button class="btn ok" type="submit">下一步：產生這一天需求 →</button>
+  </form>
+</section>
+
 <form method="post" action="{{ url_for('order_tool.school_menus_save') }}" class="school-week-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="school_id" value="{{ selected_school.id }}">

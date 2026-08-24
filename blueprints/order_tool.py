@@ -1047,9 +1047,11 @@ def _requirements_for_date(service_date: date):
                         "supplier_name": supplier_name,
                         "ingredient": ing,
                         "required_amount": Decimal("0"),
+                        "total_people": 0,
                     }
                     grouped[supplier_key][ing.id] = current
                 current["required_amount"] += base_amount
+                current["total_people"] += people
     return grouped
 
 
@@ -1192,6 +1194,36 @@ def _editable_school_plan(school: KitchenSchool, service_date: date) -> KitchenM
     return plan
 
 
+def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[int], set[date]]:
+    week_end = week_start + timedelta(days=6)
+    schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
+    central_plans = KitchenMenuPlan.query.filter(
+        KitchenMenuPlan.service_date.between(week_start, week_end),
+        KitchenMenuPlan.meal_type == "午餐",
+        db.or_(KitchenMenuPlan.name == "中央菜單", ~KitchenMenuPlan.assignments.any()),
+    ).all()
+    required_dates = {plan.service_date for plan in central_plans if plan.items}
+    assignments = (
+        KitchenMenuAssignment.query.join(KitchenMenuPlan)
+        .filter(
+            KitchenMenuPlan.service_date.between(week_start, week_end),
+            KitchenMenuPlan.meal_type == "午餐",
+            KitchenMenuAssignment.school_id.in_([school.id for school in schools] or [-1]),
+        )
+        .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
+        .all()
+    )
+    dates_by_school: dict[int, set[date]] = defaultdict(set)
+    for assignment in assignments:
+        if assignment.plan.items:
+            dates_by_school[assignment.school_id].add(assignment.plan.service_date)
+    complete_ids = {
+        school.id for school in schools
+        if required_dates and required_dates.issubset(dates_by_school[school.id])
+    }
+    return schools, complete_ids, required_dates
+
+
 @order_bp.get("/summary/schools")
 def school_menus():
     selected_date = _date(request.args.get("week"), default=date.today()) or date.today()
@@ -1258,6 +1290,7 @@ def school_menus():
             "headcount": assignment.headcount if assignment else (selected_school.default_headcount if selected_school else 0),
             "locked": bool(assignment and assignment.plan.status != "draft"),
         })
+    _all_schools, complete_school_ids, required_dates = _school_week_completion(week_start)
     return render_template(
         "kitchen/school_menus.html",
         schools=schools,
@@ -1267,6 +1300,8 @@ def school_menus():
         week_end=week_end,
         previous_week=week_start - timedelta(days=7),
         next_week=week_start + timedelta(days=7),
+        complete_school_ids=complete_school_ids,
+        required_dates=required_dates,
     )
 
 
@@ -2059,6 +2094,151 @@ def _generate_date_orders(service_date: date):
 
     db.session.commit()
     return count, False
+
+
+def _procurement_rows(service_date: date):
+    orders = (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date == service_date,
+            KitchenPurchaseOrder.status == "draft",
+        )
+        .options(
+            selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.ingredient)
+        )
+        .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.supplier_name_snapshot)
+        .all()
+    )
+    people_by_key = {}
+    for ingredient_rows in _requirements_for_date(service_date).values():
+        for data in ingredient_rows.values():
+            people_by_key[data["ingredient"].id] = data["total_people"]
+    rows = []
+    for order in orders:
+        for item in order.items:
+            rows.append({
+                "order": order,
+                "item": item,
+                "total_people": people_by_key.get(item.ingredient_id, 0),
+            })
+    rows.sort(key=lambda row: (row["order"].service_date, row["item"].ingredient_name_snapshot))
+    return rows
+
+
+@order_bp.get("/summary/procurement")
+def procurement():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    rows = _procurement_rows(service_date)
+    suppliers = KitchenSupplier.query.filter_by(active=True).order_by(KitchenSupplier.name).all()
+    pending_recipes = set()
+    plans = KitchenMenuPlan.query.filter_by(service_date=service_date).all()
+    for plan in plans:
+        if not plan.assignments:
+            continue
+        for menu_item in plan.items:
+            if any(component.quantity_status == "pending" or (component.grams_per_person or 0) <= 0
+                   for component in menu_item.recipe.ingredients):
+                pending_recipes.add(menu_item.recipe.name)
+    return render_template(
+        "kitchen/procurement.html",
+        rows=rows,
+        suppliers=suppliers,
+        pending_recipes=sorted(pending_recipes),
+        service_date=service_date,
+        previous_date=service_date - timedelta(days=1),
+        next_date=service_date + timedelta(days=1),
+        week_start=service_date - timedelta(days=service_date.weekday()),
+    )
+
+
+@order_bp.post("/summary/procurement/generate")
+def procurement_generate():
+    service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    created, blocked = _generate_date_orders(service_date)
+    if created:
+        flash(f"已重新計算 {service_date.strftime('%m/%d')} 需求，更新 {created} 張採購草稿。", "success")
+    if blocked:
+        flash("這一天已有已確認採購單，未重新計算。", "warning")
+    if not created and not blocked:
+        flash("目前沒有可計算的食材需求，請先確認各校菜單、人數與配方。", "warning")
+    return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+
+def _target_order_for_supplier(item: KitchenPurchaseOrderItem, supplier: KitchenSupplier | None):
+    service_date = item.order.service_date
+    supplier_key = f"supplier:{supplier.id}" if supplier else f"unassigned:{item.ingredient_id}"
+    target = KitchenPurchaseOrder.query.filter_by(
+        service_date=service_date,
+        supplier_key=supplier_key,
+        status="draft",
+    ).first()
+    if target is None:
+        target = KitchenPurchaseOrder(
+            service_date=service_date,
+            supplier_id=supplier.id if supplier else None,
+            supplier_key=supplier_key,
+            supplier_name_snapshot=supplier.name if supplier else "⚠ 未指定供應商",
+            supplier_overridden=True,
+            status="draft",
+        )
+        db.session.add(target)
+        db.session.flush()
+    return target
+
+
+@order_bp.post("/summary/procurement/save")
+def procurement_save():
+    service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    item_ids = {_int(raw, default=0) or 0 for raw in request.form.getlist("item_ids")}
+    updated = 0
+    source_order_ids = set()
+    for item_id in item_ids:
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        if not item or item.order.status != "draft" or item.order.service_date != service_date:
+            continue
+        actual = _decimal(request.form.get(f"actual_{item.id}"), default=None)
+        delivery_date = _date(request.form.get(f"delivery_date_{item.id}"), default=None)
+        delivery_slot = request.form.get(f"delivery_slot_{item.id}", "上午").strip()
+        supplier_name = request.form.get(f"supplier_{item.id}", "").strip()
+        supplier = KitchenSupplier.query.filter_by(name=supplier_name, active=True).one_or_none() if supplier_name else None
+        if actual is None or actual < 0 or not delivery_date or delivery_slot not in ("上午", "下午"):
+            db.session.rollback()
+            flash(f"「{item.ingredient_name_snapshot}」的採購量或交貨時間不正確。", "error")
+            return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+        if supplier_name and supplier is None:
+            db.session.rollback()
+            flash(f"找不到廠商「{supplier_name}」，請從搜尋結果選擇。", "error")
+            return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+        source_order_ids.add(item.order_id)
+        target = _target_order_for_supplier(item, supplier)
+        existing = KitchenPurchaseOrderItem.query.filter_by(
+            order_id=target.id,
+            ingredient_id=item.ingredient_id,
+        ).first()
+        if existing and existing.id != item.id:
+            existing.actual_order_qty = actual
+            existing.delivery_date = delivery_date
+            existing.delivery_slot = delivery_slot
+            existing.manual_override = True
+            db.session.delete(item)
+        else:
+            item.order_id = target.id
+            item.actual_order_qty = actual
+            item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
+            item.delivery_date = delivery_date
+            item.delivery_slot = delivery_slot
+            item.manual_override = True
+        if item.ingredient:
+            item.ingredient.supplier_id = supplier.id if supplier else None
+        updated += 1
+    db.session.flush()
+    for order_id in source_order_ids:
+        order = db.session.get(KitchenPurchaseOrder, order_id)
+        if order and order.status == "draft" and not KitchenPurchaseOrderItem.query.filter_by(order_id=order.id).first():
+            db.session.delete(order)
+    db.session.commit()
+    flash(f"已儲存 {updated} 筆採購資料。", "success")
+    return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
 
 
 @order_bp.get("/purchases")

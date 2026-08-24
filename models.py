@@ -310,6 +310,9 @@ class KitchenPurchaseOrderItem(db.Model):
     unit_price_snapshot = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     amount = db.Column(db.Numeric(18, 4), nullable=False, default=0)
     note = db.Column(db.String(255))
+    # 簡化採購工作表上的逐項交貨資訊。
+    delivery_date = db.Column(db.Date, nullable=True)
+    delivery_slot = db.Column(db.String(10), nullable=True)
     # 使用者手動改過數量/單價/備註後，重新產生需求時保留人工值。
     manual_override = db.Column(db.Boolean, nullable=False, default=False)
 

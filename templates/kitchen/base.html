@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{% block title %}團膳管理{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=11">
+  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=12">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -19,7 +19,7 @@
       <a href="{{ url_for('order_tool.ingredients') }}">食材</a>
       <a href="{{ url_for('order_tool.schools') }}">學校</a>
       <a href="{{ url_for('order_tool.suppliers') }}">廠商</a>
-      <a href="{{ url_for('order_tool.purchases') }}">採購叫貨</a>
+      <a href="{{ url_for('order_tool.procurement') }}">採購叫貨</a>
     </nav>
   </div>
 

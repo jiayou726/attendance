@@ -15,6 +15,7 @@
 </section>
 
 {% if schools %}
+<script id="missing-schools-data" type="application/json">{{ missing_schools_by_date|tojson }}</script>
 <section class="school-picker-card card">
   <form method="get" action="{{ url_for('order_tool.school_menus') }}" class="school-picker-form" data-school-picker>
     <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
@@ -42,25 +43,23 @@
     <h2>選一天進入採購明細</h2>
     <div class="muted">那一天所有學校的菜色與人數都確認後，再產生該日食材需求。</div>
   </div>
-  <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row">
+  <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row" data-procurement-generate>
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="field"><label>採購日期</label><input name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ week_start.isoformat() }}" required></div>
-    <button class="btn ok" type="submit">下一步：產生這一天需求 →</button>
+    <button class="btn ok" type="submit">產生採購單</button>
   </form>
 </section>
 
-<form method="post" action="{{ url_for('order_tool.school_menus_save') }}" class="school-week-form">
+<form class="school-week-form" data-school-menu-autosave data-save-url="{{ url_for('order_tool.school_menu_save_day') }}" data-school-id="{{ selected_school.id }}" data-school-name="{{ selected_school.name }}">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="school_id" value="{{ selected_school.id }}">
-  <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
   <div class="school-menu-title">
     <div><span class="pill ok">目前學校</span><h2>{{ selected_school.name }}</h2></div>
-    <button class="btn ok" type="submit">儲存本週菜單與人數</button>
+    <span class="school-auto-save-hint">勾選菜色或修改人數後會自動儲存</span>
   </div>
 
   <section class="school-week-grid" aria-label="{{ selected_school.name }} 週一到週日菜單">
     {% for day in days %}
-    <article class="school-menu-day{% if day.locked %} locked{% endif %}">
+    <article class="school-menu-day{% if day.locked %} locked{% endif %}" data-school-menu-day data-service-date="{{ day.date.isoformat() }}">
       <header class="school-day-head">
         <div><b>{{ day.weekday }}</b><span>{{ day.date.strftime('%m/%d') }}</span></div>
         {% if day.locked %}<em>已確認</em>{% endif %}
@@ -83,11 +82,10 @@
           <div class="day-empty small">總表這天還沒有菜色</div>
         {% endif %}
       </div>
-      <footer><b>{{ day.selected_ids|length }}</b> 道已勾選</footer>
+      <footer><span><b data-selected-count>{{ day.selected_ids|length }}</b> 道已勾選</span><span data-auto-save-state>{% if day.locked %}已確認{% else %}已儲存{% endif %}</span></footer>
     </article>
     {% endfor %}
   </section>
-  <div class="school-save-bar"><button class="btn ok" type="submit">儲存 {{ selected_school.name }} 本週菜單與人數</button></div>
 </form>
 {% else %}
 <section class="card empty">目前沒有啟用中的學校，請先到「學校」新增。</section>

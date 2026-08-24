@@ -18,7 +18,7 @@
   <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row main-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="field"><label>採購需求日期</label><input name="date" type="date" value="{{ service_date.isoformat() }}" required></div>
-    <button class="btn" type="submit">選這一天並重新計算</button>
+    <button class="btn" type="submit">計算</button>
   </form>
 </section>
 
@@ -27,6 +27,7 @@
 {% endif %}
 
 {% if rows %}
+<script id="supplier-conversion-data" type="application/json">{{ conversion_options|tojson }}</script>
 <form method="post" action="{{ url_for('order_tool.procurement_save') }}" class="procurement-form">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="date" value="{{ service_date.isoformat() }}">
@@ -35,20 +36,21 @@
   </datalist>
   <section class="card procurement-sheet">
     <div class="top">
-      <div><h2>{{ service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">廠商欄可點開選擇，也可以直接打字搜尋名稱。</div></div>
-      <button class="btn ok" type="submit">儲存採購明細</button>
+      <div><h2>{{ service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">廠商欄可搜尋；修改換算後儲存，會同步記到該廠商的食材資料，下次自動帶入。</div></div>
+      <a class="btn warn" href="{{ url_for('order_tool.procurement_export', date=service_date.isoformat()) }}">匯出 Excel</a>
     </div>
     <div class="table-scroll"><table class="procurement-table">
-      <thead><tr><th>食材名稱</th><th>總供餐人次</th><th>系統需求量</th><th>實際採購量</th><th>交貨日期／時段</th><th>供應廠商</th></tr></thead>
+      <thead><tr><th>已叫貨</th><th>食材名稱</th><th>總供餐人次</th><th>系統需求量</th><th>實際採購量／包裝換算</th><th>交貨日期／時段</th><th>供應廠商</th></tr></thead>
       <tbody>
       {% for row in rows %}{% set item = row.item %}{% set order = row.order %}
-      <tr>
+      <tr class="{{ 'is-ordered' if item.ordered else '' }}" data-procurement-item="{{ item.id }}">
+        <td><label class="order-check"><input class="order-confirm-toggle" data-auto-save-url="{{ url_for('order_tool.purchase_item_ordered', item_id=item.id) }}" data-csrf="{{ csrf_token() }}" name="ordered_{{ item.id }}" type="checkbox" value="1" {% if item.ordered %}checked{% endif %}><span>已叫</span></label></td>
         <td><input type="hidden" name="item_ids" value="{{ item.id }}"><b>{{ item.ingredient_name_snapshot }}</b></td>
         <td><b>{{ row.total_people }}</b> 人次</td>
         <td><b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small></td>
-        <td><div class="input-unit"><input name="actual_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.actual_order_qty) }}" required><span>{{ item.purchase_unit_snapshot }}</span></div></td>
+        <td><div class="actual-package-fields"><div class="input-unit"><input class="actual-qty-input" name="actual_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.actual_order_qty) }}" required><span>{{ item.purchase_unit_snapshot }}</span></div><div class="package-equation"><span>＝</span><input class="package-qty-input" name="package_qty_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.package_qty) if item.package_qty is not none else '' }}" placeholder="數量"><input class="package-unit-input" name="package_unit_{{ item.id }}" value="{{ item.package_unit or '' }}" maxlength="20" placeholder="箱"></div><small class="supplier-conversion-hint">{% if item.package_conversion_snapshot %}廠商換算：{{ item.package_conversion_snapshot }}{% else %}廠商未提供換算，可自行填寫{% endif %}</small></div></td>
         <td><div class="delivery-fields"><input name="delivery_date_{{ item.id }}" type="date" value="{{ (item.delivery_date or service_date).isoformat() }}" required><select name="delivery_slot_{{ item.id }}"><option{% if item.delivery_slot != '下午' %} selected{% endif %}>上午</option><option{% if item.delivery_slot == '下午' %} selected{% endif %}>下午</option></select></div></td>
-        <td><input class="supplier-search-input" name="supplier_{{ item.id }}" type="search" list="supplier-search-options" value="{{ order.supplier.name if order.supplier else '' }}" placeholder="搜尋或選擇廠商" autocomplete="off"></td>
+        <td><input class="supplier-search-input" name="supplier_{{ item.id }}" type="search" list="supplier-search-options" value="{{ item.supplier.name if item.supplier else (item.supplier_name_snapshot or '') }}" placeholder="搜尋或選擇廠商" autocomplete="off"></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -59,7 +61,7 @@
 {% else %}
 <section class="card empty procurement-empty">
   <h2>這一天還沒有採購明細</h2>
-  <p>確認各校這一天的菜色與人數後，按上方「選這一天並重新計算」。</p>
+  <p>確認各校這一天的菜色與人數後，按上方「計算」。</p>
 </section>
 {% endif %}
 {% endblock %}

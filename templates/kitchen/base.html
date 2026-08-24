@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{% block title %}團膳管理{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=12">
+  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=13">
   {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 <main class="wrap">
   <div class="top no-print">
     <h1>團膳管理</h1>
@@ -31,7 +31,7 @@
 
   {% block content %}{% endblock %}
 </main>
-<script src="{{ url_for('static', filename='kitchen_ui.js') }}?v=6" defer></script>
+<script src="{{ url_for('static', filename='kitchen_ui.js') }}?v=8" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

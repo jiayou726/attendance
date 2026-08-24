@@ -29,6 +29,7 @@ from flask import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from itsdangerous import BadSignature, URLSafeSerializer
 
 from extensions import db
@@ -175,6 +176,132 @@ def _trim_decimal(value) -> str:
     return text or "0"
 
 
+_WEIGHT_UNIT_KG = {
+    "kg": Decimal("1"),
+    "公斤": Decimal("1"),
+    "g": Decimal("0.001"),
+    "公克": Decimal("0.001"),
+    "克": Decimal("0.001"),
+    "斤": Decimal("0.6"),
+    "台斤": Decimal("0.6"),
+}
+
+
+def _clean_conversion_unit(raw: str) -> str:
+    unit = (raw or "").strip().lower().replace("臺", "台")
+    return {"公斤": "kg", "公克": "g", "克": "g", "台斤": "斤"}.get(unit, unit)
+
+
+def _convert_unit_amount(amount: Decimal, source_unit: str, target_unit: str) -> Decimal | None:
+    source = _clean_conversion_unit(source_unit)
+    target = _clean_conversion_unit(target_unit)
+    if source == target:
+        return amount
+    if source in _WEIGHT_UNIT_KG and target in _WEIGHT_UNIT_KG:
+        return amount * _WEIGHT_UNIT_KG[source] / _WEIGHT_UNIT_KG[target]
+    return None
+
+
+def _package_conversion_rule(raw: str | None, purchase_unit: str) -> dict | None:
+    """Turn e.g. 1箱＝12kg or 2箱＝24kg into purchase units per package."""
+    if not raw:
+        return None
+    parts = re.split(r"[=＝]", raw, maxsplit=1)
+    if len(parts) != 2:
+        return None
+
+    def parse_side(value):
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([^\d\s]+)\s*", value)
+        if not match:
+            return None
+        qty = _decimal(match.group(1), default=None)
+        return (qty, match.group(2).strip()) if qty and qty > 0 else None
+
+    left, right = parse_side(parts[0]), parse_side(parts[1])
+    if not left or not right:
+        return None
+    left_as_purchase = _convert_unit_amount(left[0], left[1], purchase_unit)
+    right_as_purchase = _convert_unit_amount(right[0], right[1], purchase_unit)
+    if right_as_purchase is not None:
+        return {
+            "package_unit": left[1],
+            "purchase_per_package": right_as_purchase / left[0],
+        }
+    if left_as_purchase is not None:
+        return {
+            "package_unit": right[1],
+            "purchase_per_package": left_as_purchase / right[0],
+        }
+    return None
+
+
+def _supplier_item_match(supplier_id: int | None, ingredient_id: int | None, ingredient_name: str):
+    if not supplier_id:
+        return None
+    rows = KitchenSupplierItem.query.filter_by(supplier_id=supplier_id, active=True).all()
+    if ingredient_id:
+        exact = next((row for row in rows if row.ingredient_id == ingredient_id), None)
+        if exact:
+            return exact
+    normalized = (ingredient_name or "").strip().casefold()
+    return next((row for row in rows if row.name.strip().casefold() == normalized), None)
+
+
+def _package_qty_from_rule(actual_qty, rule):
+    actual = _decimal(actual_qty, default=None)
+    factor = rule.get("purchase_per_package") if rule else None
+    if actual is None or not factor or factor <= 0:
+        return None
+    return actual / factor
+
+
+def _remember_supplier_conversion(
+    supplier: KitchenSupplier,
+    item: KitchenPurchaseOrderItem,
+    actual_qty: Decimal,
+    package_qty: Decimal,
+    package_unit: str,
+):
+    """Persist an edited procurement equation back to the supplier catalog."""
+    supplier_item = _supplier_item_match(
+        supplier.id,
+        item.ingredient_id,
+        item.ingredient_name_snapshot,
+    )
+    if supplier_item is None:
+        supplier_item = KitchenSupplierItem(
+            supplier_id=supplier.id,
+            ingredient_id=item.ingredient_id,
+            name=item.ingredient_name_snapshot[:120],
+            unit=item.purchase_unit_snapshot[:20],
+            last_unit_price=item.unit_price_snapshot or Decimal("0"),
+            manual_override=True,
+            active=True,
+        )
+        db.session.add(supplier_item)
+        db.session.flush()
+    elif supplier_item.ingredient_id is None:
+        supplier_item.ingredient_id = item.ingredient_id
+
+    purchase_per_package = actual_qty / package_qty
+    old_rule = _package_conversion_rule(supplier_item.package_conversion, item.purchase_unit_snapshot)
+    same_rule = bool(
+        old_rule
+        and _clean_conversion_unit(old_rule["package_unit"]) == _clean_conversion_unit(package_unit)
+        and abs(old_rule["purchase_per_package"] - purchase_per_package)
+        <= max(Decimal("0.0001"), old_rule["purchase_per_package"] * Decimal("0.0001"))
+    )
+    changed = not same_rule
+    if changed:
+        display_factor = purchase_per_package.quantize(Decimal("0.0001"))
+        supplier_item.package_conversion = (
+            f"1{package_unit}＝{_trim_decimal(display_factor)}{item.purchase_unit_snapshot}"
+        )[:120]
+    supplier_item.manual_override = True
+    supplier_item.active = True
+    return supplier_item, changed
+
+
 def _required_display(item: KitchenPurchaseOrderItem) -> str:
     amount = item.required_grams or Decimal("0")
     base = item.base_unit_snapshot or "g"
@@ -250,17 +377,11 @@ def _plan_has_assignment_conflict(plan: KitchenMenuPlan, service_date: date, mea
 
 @order_bp.get("/")
 def index():
-    today = date.today()
-    week_end = today + timedelta(days=6)
-    plans = KitchenMenuPlan.query.filter(KitchenMenuPlan.service_date.between(today, week_end)).order_by(
-        KitchenMenuPlan.service_date, KitchenMenuPlan.meal_type
-    ).all()
     recent_orders = KitchenPurchaseOrder.query.order_by(
         KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc()
     ).limit(10).all()
     return render_template(
         "kitchen/dashboard.html",
-        plans=plans,
         recent_orders=recent_orders,
         recipe_count=KitchenRecipe.query.filter_by(active=True).count(),
         ingredient_count=KitchenIngredient.query.filter_by(active=True).count(),
@@ -1224,6 +1345,22 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
     return schools, complete_ids, required_dates
 
 
+def _missing_school_names_for_date(service_date: date) -> list[str]:
+    schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
+    assignments = (
+        KitchenMenuAssignment.query.join(KitchenMenuPlan)
+        .filter(
+            KitchenMenuPlan.service_date == service_date,
+            KitchenMenuPlan.meal_type == "午餐",
+            KitchenMenuAssignment.school_id.in_([school.id for school in schools] or [-1]),
+        )
+        .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
+        .all()
+    )
+    completed_ids = {row.school_id for row in assignments if row.plan.items}
+    return [school.name for school in schools if school.id not in completed_ids]
+
+
 @order_bp.get("/summary/schools")
 def school_menus():
     selected_date = _date(request.args.get("week"), default=date.today()) or date.today()
@@ -1302,7 +1439,63 @@ def school_menus():
         next_week=week_start + timedelta(days=7),
         complete_school_ids=complete_school_ids,
         required_dates=required_dates,
+        missing_schools_by_date={
+            (week_start + timedelta(days=offset)).isoformat():
+                _missing_school_names_for_date(week_start + timedelta(days=offset))
+            for offset in range(7)
+        },
     )
+
+
+@order_bp.post("/summary/schools/save-day")
+def school_menu_save_day():
+    school_id = _int(request.form.get("school_id"), default=0) or 0
+    school = db.session.get(KitchenSchool, school_id)
+    service_date = _date(request.form.get("service_date"))
+    headcount = _int(request.form.get("headcount"), default=None)
+    if not school or not school.active or not service_date:
+        return {"message": "學校或日期不正確。"}, 400
+    if headcount is None or headcount < 0:
+        return {"message": "供餐人數不可為負數。"}, 400
+
+    assignment = _school_assignment_for_day(school.id, service_date)
+    if assignment and assignment.plan.status != "draft":
+        return {"message": "這一天已確認，無法修改。"}, 409
+
+    selected_recipe_ids = {
+        recipe_id for raw in request.form.getlist("recipe_ids")
+        if (recipe_id := _int(raw, default=0)) and db.session.get(KitchenRecipe, recipe_id)
+    }
+    if not selected_recipe_ids:
+        if assignment:
+            plan = assignment.plan
+            if plan.name == "中央菜單":
+                db.session.delete(assignment)
+            else:
+                db.session.delete(plan)
+        db.session.commit()
+        return "", 204
+
+    plan = _editable_school_plan(school, service_date)
+    if plan.status != "draft":
+        db.session.rollback()
+        return {"message": "這一天已確認，無法修改。"}, 409
+    for item in list(plan.items):
+        db.session.delete(item)
+    db.session.flush()
+    recipes = KitchenRecipe.query.filter(KitchenRecipe.id.in_(selected_recipe_ids)).order_by(
+        KitchenRecipe.category, KitchenRecipe.name
+    ).all()
+    for sort_order, recipe in enumerate(recipes):
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=plan.id,
+            recipe_id=recipe.id,
+            sort_order=sort_order,
+        ))
+    assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
+    assignment.headcount = headcount
+    db.session.commit()
+    return "", 204
 
 
 @order_bp.post("/summary/schools/save")
@@ -2009,91 +2202,112 @@ def _generate_date_orders(service_date: date):
         return 0, True
 
     requirements = _requirements_for_date(service_date)
-    active_keys = set(requirements.keys())
     existing_orders = KitchenPurchaseOrder.query.filter_by(service_date=service_date).all()
-    existing_by_key = {x.supplier_key: x for x in existing_orders if x.status != "cancelled"}
-    count = 0
+    order = next((row for row in existing_orders if row.supplier_key == "daily"), None)
+    if order is None and existing_orders:
+        order = existing_orders[0]
 
-    for supplier_key, ingredient_rows in requirements.items():
-        first = next(iter(ingredient_rows.values()))
-        order = existing_by_key.get(supplier_key)
-        if order is None:
-            order = KitchenPurchaseOrder(
-                service_date=service_date,
-                supplier_id=first["supplier_id"],
-                supplier_key=supplier_key,
-                supplier_name_snapshot=first["supplier_name"],
-                supplier_overridden=False,
-                status="draft",
+    ingredient_rows = {
+        data["ingredient"].id: data
+        for supplier_rows in requirements.values()
+        for data in supplier_rows.values()
+    }
+    if not ingredient_rows:
+        for old_order in existing_orders:
+            if old_order.status == "draft":
+                db.session.delete(old_order)
+        db.session.commit()
+        return 0, False
+
+    if order is None:
+        order = KitchenPurchaseOrder(
+            service_date=service_date,
+            supplier_key="daily",
+            supplier_name_snapshot="每日採購單",
+            supplier_overridden=False,
+            status="draft",
+        )
+        db.session.add(order)
+        db.session.flush()
+    else:
+        order.supplier_id = None
+        order.supplier_key = "daily"
+        order.supplier_name_snapshot = "每日採購單"
+        order.supplier_overridden = False
+        order.status = "draft"
+
+    existing_items = {item.ingredient_id: item for item in order.items}
+    seen_ingredient_ids = set()
+    for data in ingredient_rows.values():
+        ing = data["ingredient"]
+        units_per_purchase = ing.grams_per_purchase_unit or Decimal("0")
+        increment = ing.order_increment or Decimal("0")
+        if units_per_purchase <= 0 or increment <= 0:
+            continue
+        required_amount = data["required_amount"]
+        required_qty = required_amount / units_per_purchase
+        recommended = _round_up_increment(required_qty, increment)
+        supplier_item = _supplier_item_match(data["supplier_id"], ing.id, ing.name)
+        conversion_rule = _package_conversion_rule(
+            supplier_item.package_conversion if supplier_item else None,
+            ing.purchase_unit,
+        )
+        package_qty = _package_qty_from_rule(recommended, conversion_rule)
+        seen_ingredient_ids.add(ing.id)
+        item = existing_items.get(ing.id)
+        if item is None:
+            unit_price = ing.unit_price or Decimal("0")
+            item = KitchenPurchaseOrderItem(
+                order_id=order.id,
+                ingredient_id=ing.id,
+                supplier_id=data["supplier_id"],
+                supplier_item_id=supplier_item.id if supplier_item else None,
+                supplier_name_snapshot=data["supplier_name"],
+                ingredient_name_snapshot=ing.name,
+                base_unit_snapshot=ing.base_unit or "g",
+                required_grams=required_amount,
+                required_qty=required_qty,
+                purchase_unit_snapshot=ing.purchase_unit,
+                grams_per_purchase_unit_snapshot=units_per_purchase,
+                recommended_order_qty=recommended,
+                actual_order_qty=recommended,
+                package_qty=package_qty,
+                package_unit=conversion_rule["package_unit"] if conversion_rule else None,
+                package_conversion_snapshot=supplier_item.package_conversion if supplier_item else None,
+                unit_price_snapshot=unit_price,
+                amount=recommended * unit_price,
+                manual_override=False,
             )
-            db.session.add(order)
-            db.session.flush()
+            db.session.add(item)
         else:
-            order.status = "draft"
-            # 使用者沒有人工換過供應商時才跟 master data 同步。
-            if not order.supplier_overridden:
-                order.supplier_id = first["supplier_id"]
-                order.supplier_name_snapshot = first["supplier_name"]
+            item.supplier_id = data["supplier_id"]
+            item.supplier_item_id = supplier_item.id if supplier_item else None
+            item.supplier_name_snapshot = data["supplier_name"]
+            item.ingredient_name_snapshot = ing.name
+            item.base_unit_snapshot = ing.base_unit or "g"
+            item.required_grams = required_amount
+            item.required_qty = required_qty
+            item.purchase_unit_snapshot = ing.purchase_unit
+            item.grams_per_purchase_unit_snapshot = units_per_purchase
+            item.recommended_order_qty = recommended
+            if not item.manual_override:
+                item.actual_order_qty = recommended
+                item.package_qty = package_qty
+                item.package_unit = conversion_rule["package_unit"] if conversion_rule else None
+                item.package_conversion_snapshot = supplier_item.package_conversion if supplier_item else None
+                item.unit_price_snapshot = ing.unit_price or Decimal("0")
+                item.amount = item.actual_order_qty * item.unit_price_snapshot
 
-        existing_items = {x.ingredient_id: x for x in order.items}
-        seen_ingredient_ids = set()
+    for ingredient_id, item in existing_items.items():
+        if ingredient_id not in seen_ingredient_ids:
+            db.session.delete(item)
 
-        for data in ingredient_rows.values():
-            ing = data["ingredient"]
-            units_per_purchase = ing.grams_per_purchase_unit or Decimal("0")
-            increment = ing.order_increment or Decimal("0")
-            if units_per_purchase <= 0 or increment <= 0:
-                continue
-            required_amount = data["required_amount"]
-            required_qty = required_amount / units_per_purchase
-            recommended = _round_up_increment(required_qty, increment)
-            seen_ingredient_ids.add(ing.id)
-
-            item = existing_items.get(ing.id)
-            if item is None:
-                unit_price = ing.unit_price or Decimal("0")
-                item = KitchenPurchaseOrderItem(
-                    order_id=order.id,
-                    ingredient_id=ing.id,
-                    ingredient_name_snapshot=ing.name,
-                    base_unit_snapshot=ing.base_unit or "g",
-                    required_grams=required_amount,
-                    required_qty=required_qty,
-                    purchase_unit_snapshot=ing.purchase_unit,
-                    grams_per_purchase_unit_snapshot=units_per_purchase,
-                    recommended_order_qty=recommended,
-                    actual_order_qty=recommended,
-                    unit_price_snapshot=unit_price,
-                    amount=recommended * unit_price,
-                    manual_override=False,
-                )
-                db.session.add(item)
-            else:
-                # 永遠更新「需求」與「系統建議」，但人工實際量/價格/備註要保留。
-                item.ingredient_name_snapshot = ing.name
-                item.base_unit_snapshot = ing.base_unit or "g"
-                item.required_grams = required_amount
-                item.required_qty = required_qty
-                item.purchase_unit_snapshot = ing.purchase_unit
-                item.grams_per_purchase_unit_snapshot = units_per_purchase
-                item.recommended_order_qty = recommended
-                if not item.manual_override:
-                    item.actual_order_qty = recommended
-                    item.unit_price_snapshot = ing.unit_price or Decimal("0")
-                    item.amount = item.actual_order_qty * item.unit_price_snapshot
-
-        # 原本需求已不存在的 item 才刪除；仍有需求的人工修改保留。
-        for ingredient_id, item in existing_items.items():
-            if ingredient_id not in seen_ingredient_ids:
-                db.session.delete(item)
-        count += 1
-
-    for order in existing_orders:
-        if order.status == "draft" and order.supplier_key not in active_keys:
-            db.session.delete(order)
+    for old_order in existing_orders:
+        if old_order.id != order.id:
+            db.session.delete(old_order)
 
     db.session.commit()
-    return count, False
+    return 1, False
 
 
 def _procurement_rows(service_date: date):
@@ -2124,6 +2338,41 @@ def _procurement_rows(service_date: date):
     return rows
 
 
+def _procurement_conversion_options(rows):
+    """Return matching supplier catalog conversions for each procurement row."""
+    catalog = (
+        KitchenSupplierItem.query.filter(
+            KitchenSupplierItem.active.is_(True),
+            KitchenSupplierItem.package_conversion.isnot(None),
+        )
+        .options(selectinload(KitchenSupplierItem.supplier))
+        .all()
+    )
+    result = {}
+    for row in rows:
+        item = row["item"]
+        item_name = (item.ingredient_name_snapshot or "").strip().casefold()
+        matches = {}
+        for supplier_item in catalog:
+            exact_id = item.ingredient_id and supplier_item.ingredient_id == item.ingredient_id
+            exact_name = supplier_item.name.strip().casefold() == item_name
+            if not exact_id and not exact_name:
+                continue
+            supplier_name = supplier_item.supplier.name
+            current = matches.get(supplier_name)
+            if current and current[0]:
+                continue
+            rule = _package_conversion_rule(supplier_item.package_conversion, item.purchase_unit_snapshot)
+            matches[supplier_name] = (bool(exact_id), {
+                "supplierItemId": supplier_item.id,
+                "label": supplier_item.package_conversion,
+                "packageUnit": rule["package_unit"] if rule else None,
+                "purchasePerPackage": _trim_decimal(rule["purchase_per_package"]) if rule else None,
+            })
+        result[str(item.id)] = {name: value for name, (_, value) in matches.items()}
+    return result
+
+
 @order_bp.get("/summary/procurement")
 def procurement():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
@@ -2141,6 +2390,7 @@ def procurement():
     return render_template(
         "kitchen/procurement.html",
         rows=rows,
+        conversion_options=_procurement_conversion_options(rows),
         suppliers=suppliers,
         pending_recipes=sorted(pending_recipes),
         service_date=service_date,
@@ -2150,12 +2400,87 @@ def procurement():
     )
 
 
+@order_bp.get("/summary/procurement.xlsx")
+def procurement_export():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    rows = _procurement_rows(service_date)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "每日採購單"
+    sheet.merge_cells("A1:K1")
+    sheet["A1"] = f"{service_date.strftime('%Y/%m/%d')} 每日採購單"
+    sheet["A1"].font = Font(size=16, bold=True)
+    sheet["A1"].alignment = Alignment(horizontal="center")
+
+    headers = [
+        "叫貨狀態", "食材名稱", "總供餐人次", "系統需求量", "採購單位",
+        "實際採購量", "包裝數量", "包裝單位", "交貨日期／時段", "供應廠商", "備註",
+    ]
+    sheet.append([])
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    ordered_fill = PatternFill("solid", fgColor="FFF1A8")
+    for cell in sheet[3]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for row in rows:
+        item = row["item"]
+        sheet.append([
+            "已叫" if item.ordered else "未叫",
+            item.ingredient_name_snapshot,
+            row["total_people"],
+            float(item.required_qty or 0),
+            item.purchase_unit_snapshot,
+            float(item.actual_order_qty or 0),
+            float(item.package_qty) if item.package_qty is not None else None,
+            item.package_unit or "",
+            f"{(item.delivery_date or service_date).isoformat()} {item.delivery_slot or '上午'}",
+            item.supplier.name if item.supplier else (item.supplier_name_snapshot or ""),
+            item.note or "",
+        ])
+        if item.ordered:
+            for cell in sheet[sheet.max_row]:
+                cell.fill = ordered_fill
+
+    sheet.freeze_panes = "A4"
+    sheet.auto_filter.ref = f"A3:K{max(sheet.max_row, 3)}"
+    widths = (12, 22, 14, 14, 12, 14, 14, 12, 22, 20, 28)
+    for column, width in zip("ABCDEFGHIJK", widths):
+        sheet.column_dimensions[column].width = width
+    for row in sheet.iter_rows(min_row=4):
+        for cell in row:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"每日採購單-{service_date.isoformat()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @order_bp.post("/summary/procurement/generate")
 def procurement_generate():
     service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    missing_schools = _missing_school_names_for_date(service_date)
+    if missing_schools:
+        flash(
+            "尚有學校未完成菜單勾選：" + "、".join(missing_schools) + "。請先完成後再產生採購單。",
+            "warning",
+        )
+        return redirect(url_for(
+            "order_tool.school_menus",
+            week=(service_date - timedelta(days=service_date.weekday())).isoformat(),
+        ))
     created, blocked = _generate_date_orders(service_date)
     if created:
-        flash(f"已重新計算 {service_date.strftime('%m/%d')} 需求，更新 {created} 張採購草稿。", "success")
+        flash(f"已重新計算 {service_date.strftime('%m/%d')} 每日採購單。", "success")
     if blocked:
         flash("這一天已有已確認採購單，未重新計算。", "warning")
     if not created and not blocked:
@@ -2163,81 +2488,73 @@ def procurement_generate():
     return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
 
 
-def _target_order_for_supplier(item: KitchenPurchaseOrderItem, supplier: KitchenSupplier | None):
-    service_date = item.order.service_date
-    supplier_key = f"supplier:{supplier.id}" if supplier else f"unassigned:{item.ingredient_id}"
-    target = KitchenPurchaseOrder.query.filter_by(
-        service_date=service_date,
-        supplier_key=supplier_key,
-        status="draft",
-    ).first()
-    if target is None:
-        target = KitchenPurchaseOrder(
-            service_date=service_date,
-            supplier_id=supplier.id if supplier else None,
-            supplier_key=supplier_key,
-            supplier_name_snapshot=supplier.name if supplier else "⚠ 未指定供應商",
-            supplier_overridden=True,
-            status="draft",
-        )
-        db.session.add(target)
-        db.session.flush()
-    return target
-
-
 @order_bp.post("/summary/procurement/save")
 def procurement_save():
     service_date = _date(request.form.get("date"), default=date.today()) or date.today()
     item_ids = {_int(raw, default=0) or 0 for raw in request.form.getlist("item_ids")}
     updated = 0
-    source_order_ids = set()
+    conversion_updates = 0
     for item_id in item_ids:
         item = db.session.get(KitchenPurchaseOrderItem, item_id)
         if not item or item.order.status != "draft" or item.order.service_date != service_date:
             continue
         actual = _decimal(request.form.get(f"actual_{item.id}"), default=None)
+        package_qty = _decimal(request.form.get(f"package_qty_{item.id}"), default=None)
+        package_unit = request.form.get(f"package_unit_{item.id}", "").strip()[:20] or None
         delivery_date = _date(request.form.get(f"delivery_date_{item.id}"), default=None)
         delivery_slot = request.form.get(f"delivery_slot_{item.id}", "上午").strip()
         supplier_name = request.form.get(f"supplier_{item.id}", "").strip()
         supplier = KitchenSupplier.query.filter_by(name=supplier_name, active=True).one_or_none() if supplier_name else None
-        if actual is None or actual < 0 or not delivery_date or delivery_slot not in ("上午", "下午"):
-            db.session.rollback()
-            flash(f"「{item.ingredient_name_snapshot}」的採購量或交貨時間不正確。", "error")
-            return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
         if supplier_name and supplier is None:
             db.session.rollback()
             flash(f"找不到廠商「{supplier_name}」，請從搜尋結果選擇。", "error")
             return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
 
-        source_order_ids.add(item.order_id)
-        target = _target_order_for_supplier(item, supplier)
-        existing = KitchenPurchaseOrderItem.query.filter_by(
-            order_id=target.id,
-            ingredient_id=item.ingredient_id,
-        ).first()
-        if existing and existing.id != item.id:
-            existing.actual_order_qty = actual
-            existing.delivery_date = delivery_date
-            existing.delivery_slot = delivery_slot
-            existing.manual_override = True
-            db.session.delete(item)
-        else:
-            item.order_id = target.id
-            item.actual_order_qty = actual
-            item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
-            item.delivery_date = delivery_date
-            item.delivery_slot = delivery_slot
-            item.manual_override = True
+        supplier_item = _supplier_item_match(
+            supplier.id if supplier else None,
+            item.ingredient_id,
+            item.ingredient_name_snapshot,
+        )
+        conversion_rule = _package_conversion_rule(
+            supplier_item.package_conversion if supplier_item else None,
+            item.purchase_unit_snapshot,
+        )
+        if package_qty is None and conversion_rule:
+            package_qty = _package_qty_from_rule(actual, conversion_rule)
+            package_unit = conversion_rule["package_unit"]
+        if (actual is None or actual < 0 or (package_qty is not None and package_qty < 0)
+                or (package_qty is not None and not package_unit)
+                or not delivery_date or delivery_slot not in ("上午", "下午")):
+            db.session.rollback()
+            flash(f"「{item.ingredient_name_snapshot}」的採購量或交貨時間不正確。", "error")
+            return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+        if supplier and package_qty is not None and package_qty > 0 and package_unit and actual > 0:
+            supplier_item, conversion_changed = _remember_supplier_conversion(
+                supplier, item, actual, package_qty, package_unit
+            )
+            conversion_updates += int(conversion_changed)
+
+        item.supplier_id = supplier.id if supplier else None
+        item.supplier_item_id = supplier_item.id if supplier_item else None
+        item.supplier_name_snapshot = supplier.name if supplier else "⚠ 未指定供應商"
+        item.actual_order_qty = actual
+        item.package_qty = package_qty
+        item.package_unit = package_unit
+        item.package_conversion_snapshot = supplier_item.package_conversion if supplier_item else None
+        item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
+        item.delivery_date = delivery_date
+        item.delivery_slot = delivery_slot
+        item.ordered = request.form.get(f"ordered_{item.id}") == "1"
+        item.manual_override = True
         if item.ingredient:
             item.ingredient.supplier_id = supplier.id if supplier else None
         updated += 1
-    db.session.flush()
-    for order_id in source_order_ids:
-        order = db.session.get(KitchenPurchaseOrder, order_id)
-        if order and order.status == "draft" and not KitchenPurchaseOrderItem.query.filter_by(order_id=order.id).first():
-            db.session.delete(order)
     db.session.commit()
-    flash(f"已儲存 {updated} 筆採購資料。", "success")
+    message = f"已儲存 {updated} 筆採購資料。"
+    if conversion_updates:
+        message += f" 同步記住 {conversion_updates} 筆廠商換算。"
+    flash(message, "success")
     return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
 
 
@@ -2248,7 +2565,7 @@ def purchases():
     if end < start:
         start, end = end, start
     orders = KitchenPurchaseOrder.query.filter(KitchenPurchaseOrder.service_date.between(start, end)).order_by(
-        KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.supplier_name_snapshot
+        KitchenPurchaseOrder.service_date.desc()
     ).all()
     return render_template("kitchen/purchases.html", orders=orders, start=start, end=end)
 
@@ -2282,7 +2599,7 @@ def generate_purchases():
             blocked_dates.append(str(day))
         day += timedelta(days=1)
     if created:
-        flash(f"已建立 / 更新 {created} 張採購草稿；人工調整過的實際叫貨量與單價會保留。", "success")
+        flash(f"已建立 / 更新 {created} 天的採購草稿；每一天只會有一張。", "success")
     if blocked_dates:
         flash("以下日期已有已確認採購單，因此沒有自動重算：" + "、".join(blocked_dates), "warning")
     if not created and not blocked_dates:
@@ -2312,22 +2629,8 @@ def purchase_update(order_id: int):
     if order.status != "draft":
         flash("只有草稿採購單可以修改。", "error")
         return redirect(url_for("order_tool.purchase_detail", order_id=order_id))
-    supplier_id = _int(request.form.get("supplier_id"), default=None)
-    if supplier_id is not None:
-        supplier = db.session.get(KitchenSupplier, supplier_id)
-        if not supplier:
-            flash("找不到指定廠商。", "error")
-            return redirect(url_for("order_tool.purchase_detail", order_id=order_id))
-        new_name = supplier.name
-    else:
-        supplier = None
-        new_name = "⚠ 未指定供應商"
-    # supplier_key 不改：它代表系統原始分組，人工換廠商只是此張草稿 override。
-    order.supplier_id = supplier.id if supplier else None
-    order.supplier_name_snapshot = new_name
-    order.supplier_overridden = True
     order.note = request.form.get("note", "").strip() or None
-    return _commit("採購單廠商/備註已更新；重新計算需求時會保留這個人工廠商。", "order_tool.purchase_detail", order_id=order_id)
+    return _commit("採購單備註已更新。", "order_tool.purchase_detail", order_id=order_id)
 
 
 @order_bp.post("/purchase-items/<int:item_id>/update")
@@ -2353,6 +2656,32 @@ def purchase_item_update(item_id: int):
     return redirect(url_for("order_tool.purchase_detail", order_id=item.order_id))
 
 
+@order_bp.post("/purchase-items/<int:item_id>/ordered")
+def purchase_item_ordered(item_id: int):
+    item = db.session.get(KitchenPurchaseOrderItem, item_id)
+    if not item:
+        abort(404)
+    item.ordered = request.form.get("ordered") == "1"
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "procurement-tracking":
+        return "", 204
+    flash(f"「{item.ingredient_name_snapshot}」叫貨狀態已更新。", "success")
+    return redirect(request.referrer or url_for("order_tool.purchase_detail", order_id=item.order_id))
+
+
+@order_bp.post("/purchases/<int:order_id>/ordered")
+def purchase_order_ordered(order_id: int):
+    order = db.session.get(KitchenPurchaseOrder, order_id)
+    if not order:
+        abort(404)
+    ordered = request.form.get("ordered") == "1"
+    for item in order.items:
+        item.ordered = ordered
+    db.session.commit()
+    flash(f"{order.service_date} 全部品項已標記為{'已叫貨' if ordered else '未叫貨'}。", "success")
+    return redirect(request.referrer or url_for("order_tool.purchases", start=order.service_date, end=order.service_date))
+
+
 @order_bp.post("/purchases/<int:order_id>/confirm")
 def purchase_confirm(order_id: int):
     order = db.session.get(KitchenPurchaseOrder, order_id)
@@ -2364,8 +2693,8 @@ def purchase_confirm(order_id: int):
     if not order.items:
         flash("空白採購單不可確認。", "error")
         return redirect(url_for("order_tool.purchase_detail", order_id=order_id))
-    if not order.supplier_id:
-        flash("正式確認前必須指定供應商。", "error")
+    if any(not item.supplier_id for item in order.items):
+        flash("正式確認前，每個食材都必須指定供應商。", "error")
         return redirect(url_for("order_tool.purchase_detail", order_id=order_id))
     order.status = "confirmed"
     for plan in KitchenMenuPlan.query.filter_by(service_date=order.service_date).all():

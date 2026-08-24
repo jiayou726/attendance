@@ -151,4 +151,173 @@
     checkbox.addEventListener('change', refresh);
     refresh();
   });
+
+  const missingSchoolsNode = document.getElementById('missing-schools-data');
+  let missingSchools = {};
+  if (missingSchoolsNode) {
+    try {
+      missingSchools = JSON.parse(missingSchoolsNode.textContent || '{}');
+    } catch (_) {
+      missingSchools = {};
+    }
+  }
+
+  const pendingSchoolMenuSaves = new Set();
+  const schoolMenuForm = document.querySelector('[data-school-menu-autosave]');
+  if (schoolMenuForm) {
+    schoolMenuForm.addEventListener('submit', (event) => event.preventDefault());
+    const csrf = schoolMenuForm.querySelector('input[name="_csrf_token"]')?.value || '';
+    const schoolId = schoolMenuForm.dataset.schoolId || '';
+    const schoolName = schoolMenuForm.dataset.schoolName || '';
+    const saveUrl = schoolMenuForm.dataset.saveUrl || '';
+
+    schoolMenuForm.querySelectorAll('[data-school-menu-day]').forEach((day) => {
+      const headcount = day.querySelector('.headcount-box input');
+      const checkboxes = [...day.querySelectorAll('.school-dish-check input[type="checkbox"]')];
+      const count = day.querySelector('[data-selected-count]');
+      const state = day.querySelector('[data-auto-save-state]');
+      const serviceDate = day.dataset.serviceDate || '';
+      let saveChain = Promise.resolve();
+
+      const updateCount = () => {
+        if (count) count.textContent = String(checkboxes.filter((item) => item.checked).length);
+      };
+      const saveDay = () => {
+        if (!saveUrl || !serviceDate || !headcount || day.classList.contains('locked')) return;
+        updateCount();
+        const body = new URLSearchParams({
+          _csrf_token: csrf,
+          school_id: schoolId,
+          service_date: serviceDate,
+          headcount: headcount.value,
+        });
+        checkboxes.filter((item) => item.checked).forEach((item) => body.append('recipe_ids', item.value));
+        if (state) state.textContent = '儲存中…';
+
+        const operation = saveChain.then(async () => {
+          const response = await fetch(saveUrl, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'school-menu-autosave' },
+            body,
+          });
+          if (!response.ok) throw new Error('save failed');
+          const selectedCount = checkboxes.filter((item) => item.checked).length;
+          const names = new Set(missingSchools[serviceDate] || []);
+          if (selectedCount) names.delete(schoolName);
+          else names.add(schoolName);
+          missingSchools[serviceDate] = [...names];
+          if (state) state.textContent = '已儲存';
+        });
+        pendingSchoolMenuSaves.add(operation);
+        saveChain = operation.catch(() => {
+          if (state) state.textContent = '儲存失敗';
+          window.alert('菜單自動儲存失敗，請重新整理後再試。');
+        }).finally(() => pendingSchoolMenuSaves.delete(operation));
+      };
+
+      checkboxes.forEach((checkbox) => checkbox.addEventListener('change', saveDay));
+      headcount?.addEventListener('change', saveDay);
+      updateCount();
+    });
+  }
+
+  document.querySelectorAll('[data-procurement-generate]').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      if (form.dataset.ready === 'true') return;
+      event.preventDefault();
+      await Promise.allSettled([...pendingSchoolMenuSaves]);
+      const serviceDate = form.querySelector('input[name="date"]')?.value || '';
+      const names = missingSchools[serviceDate] || [];
+      if (names.length) {
+        window.alert(`尚有學校未完成菜單勾選：${names.join('、')}。請先完成後再產生採購單。`);
+        return;
+      }
+      form.dataset.ready = 'true';
+      form.requestSubmit();
+    });
+  });
+
+  const supplierConversionNode = document.getElementById('supplier-conversion-data');
+  let supplierConversions = {};
+  if (supplierConversionNode) {
+    try {
+      supplierConversions = JSON.parse(supplierConversionNode.textContent || '{}');
+    } catch (_) {
+      supplierConversions = {};
+    }
+  }
+
+  const tidyQuantity = (value) => {
+    if (!Number.isFinite(value)) return '';
+    return value.toFixed(4).replace(/\.?0+$/, '');
+  };
+
+  document.querySelectorAll('[data-procurement-item]').forEach((row) => {
+    const itemId = row.dataset.procurementItem;
+    const actualInput = row.querySelector('.actual-qty-input');
+    const packageInput = row.querySelector('.package-qty-input');
+    const packageUnitInput = row.querySelector('.package-unit-input');
+    const supplierInput = row.querySelector('.supplier-search-input');
+    const hint = row.querySelector('.supplier-conversion-hint');
+    if (!actualInput || !packageInput || !packageUnitInput || !supplierInput || !hint) return;
+
+    let activeRule = null;
+    const recalculatePackage = () => {
+      const actual = Number(actualInput.value);
+      const factor = Number(activeRule?.purchasePerPackage);
+      if (Number.isFinite(actual) && Number.isFinite(factor) && factor > 0) {
+        packageInput.value = tidyQuantity(actual / factor);
+      }
+    };
+    const selectSupplierRule = ({ overwrite = false } = {}) => {
+      activeRule = supplierConversions[itemId]?.[supplierInput.value.trim()] || null;
+      if (!activeRule) {
+        hint.textContent = '此廠商未提供這項食材的換算，可自行填寫';
+        return;
+      }
+      hint.textContent = `廠商換算：${activeRule.label}`;
+      if (activeRule.packageUnit) packageUnitInput.value = activeRule.packageUnit;
+      if (overwrite || !packageInput.value) recalculatePackage();
+    };
+
+    supplierInput.addEventListener('change', () => selectSupplierRule({ overwrite: true }));
+    supplierInput.addEventListener('input', () => selectSupplierRule({ overwrite: true }));
+    actualInput.addEventListener('input', recalculatePackage);
+    packageInput.addEventListener('input', () => {
+      const packages = Number(packageInput.value);
+      const factor = Number(activeRule?.purchasePerPackage);
+      if (Number.isFinite(packages) && Number.isFinite(factor) && factor > 0) {
+        actualInput.value = tidyQuantity(packages * factor);
+      }
+    });
+    selectSupplierRule();
+  });
+
+  document.querySelectorAll('.order-confirm-toggle').forEach((checkbox) => {
+    const refresh = () => checkbox.closest('tr')?.classList.toggle('is-ordered', checkbox.checked);
+    checkbox.addEventListener('change', async () => {
+      refresh();
+      if (checkbox.dataset.autoSubmit === 'true') checkbox.form?.requestSubmit();
+      if (checkbox.dataset.autoSaveUrl) {
+        checkbox.disabled = true;
+        const body = new URLSearchParams({ _csrf_token: checkbox.dataset.csrf || '' });
+        if (checkbox.checked) body.set('ordered', '1');
+        try {
+          const response = await fetch(checkbox.dataset.autoSaveUrl, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'procurement-tracking' },
+            body,
+          });
+          if (!response.ok) throw new Error('save failed');
+        } catch (_) {
+          checkbox.checked = !checkbox.checked;
+          refresh();
+          window.alert('叫貨狀態儲存失敗，請重新整理後再試。');
+        } finally {
+          checkbox.disabled = false;
+        }
+      }
+    });
+    refresh();
+  });
 })();

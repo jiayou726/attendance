@@ -264,8 +264,9 @@ class KitchenPurchaseOrder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     service_date = db.Column(db.Date, nullable=False, index=True)
+    # 以下單頭廠商欄位保留以相容舊資料；新資料固定為每日採購單，
+    # 實際供應廠商記在每一個採購品項上。
     supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
-    # supplier_key 保留「系統原始分組來源」，人工換廠商不改 key，避免重新計算時產生重複草稿。
     supplier_key = db.Column(db.String(100), nullable=False)
     supplier_name_snapshot = db.Column(db.String(120), nullable=False)
     supplier_overridden = db.Column(db.Boolean, nullable=False, default=False)
@@ -297,6 +298,9 @@ class KitchenPurchaseOrderItem(db.Model):
         nullable=False,
     )
     ingredient_id = db.Column(db.Integer, db.ForeignKey("kitchen_ingredient.id"), nullable=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id"), nullable=True)
+    supplier_item_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier_item.id"), nullable=True)
+    supplier_name_snapshot = db.Column(db.String(120), nullable=True)
 
     ingredient_name_snapshot = db.Column(db.String(120), nullable=False)
     base_unit_snapshot = db.Column(db.String(10), nullable=False, default="g")
@@ -307,17 +311,26 @@ class KitchenPurchaseOrderItem(db.Model):
     grams_per_purchase_unit_snapshot = db.Column(db.Numeric(16, 3), nullable=False)
     recommended_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     actual_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    # 可選包裝換算，例如 24 kg = 2 箱；兩邊數量都保留人工輸入。
+    package_qty = db.Column(db.Numeric(16, 4), nullable=True)
+    package_unit = db.Column(db.String(20), nullable=True)
+    # 記住當時採用的廠商品項換算，避免日後廠商資料修改影響歷史採購單。
+    package_conversion_snapshot = db.Column(db.String(120), nullable=True)
     unit_price_snapshot = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     amount = db.Column(db.Numeric(18, 4), nullable=False, default=0)
     note = db.Column(db.String(255))
     # 簡化採購工作表上的逐項交貨資訊。
     delivery_date = db.Column(db.Date, nullable=True)
     delivery_slot = db.Column(db.String(10), nullable=True)
+    # 防呆勾選：表示這個品項已實際完成叫貨。
+    ordered = db.Column(db.Boolean, nullable=False, default=False)
     # 使用者手動改過數量/單價/備註後，重新產生需求時保留人工值。
     manual_override = db.Column(db.Boolean, nullable=False, default=False)
 
     order = db.relationship("KitchenPurchaseOrder", back_populates="items")
     ingredient = db.relationship("KitchenIngredient")
+    supplier = db.relationship("KitchenSupplier")
+    supplier_item = db.relationship("KitchenSupplierItem")
 
     __table_args__ = (
         db.UniqueConstraint("order_id", "ingredient_id", name="uq_kitchen_purchase_order_item"),

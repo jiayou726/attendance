@@ -1,38 +1,48 @@
 {% extends 'kitchen/base.html' %}
-{% block title %}採購單 {{ order.service_date }} {{ order.supplier_name_snapshot }}{% endblock %}
+{% block title %}{{ order.service_date }} 每日採購單{% endblock %}
 {% block content %}
-<div class="print-title"><h1>{{ '每日訂購單' if order.status == 'confirmed' else '採購草稿－不可叫貨' }}</h1><div>{{ order.service_date }}｜{{ order.supplier_name_snapshot }}</div></div>
-<div class="top">
-  <div><h1>{{ order.service_date }}｜{{ order.supplier_name_snapshot }}</h1><div class="muted">採購單 #{{ order.id }}・{{ status_label(order.status) }}</div></div>
-  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.purchases', start=order.service_date, end=order.service_date) }}">← 採購歷史</a>{% if order.status == 'confirmed' %}<a class="btn" href="{{ url_for('order_tool.purchase_detail', order_id=order.id, print=1) }}" target="_blank">列印 / 另存 PDF</a>{% endif %}</div>
-</div>
+<div class="print-title"><h1>{{ '每日採購單' if order.status == 'confirmed' else '每日採購草稿－不可叫貨' }}</h1><div>{{ order.service_date }}</div></div>
+<section class="summary-week-head procurement-head">
+  <div>
+    <div class="eyebrow">每日一筆</div>
+    <h1>{{ order.service_date }} 採購單</h1>
+    <div class="muted">採購單 #{{ order.id }}・同一天所有廠商與食材合併在這一張。</div>
+  </div>
+  <div class="actions no-print">
+    <a class="btn secondary" href="{{ url_for('order_tool.purchases', start=order.service_date, end=order.service_date) }}">← 採購歷史</a>
+    {% if order.status == 'draft' %}<a class="btn" href="{{ url_for('order_tool.procurement', date=order.service_date.isoformat()) }}">修改採購明細</a>{% endif %}
+    {% if order.status == 'confirmed' %}<a class="btn" href="{{ url_for('order_tool.purchase_detail', order_id=order.id, print=1) }}" target="_blank">列印 / 另存 PDF</a>{% endif %}
+  </div>
+</section>
 
-{% if order.status == 'confirmed' %}<div class="flash success">此單已確認並保存 snapshot。之後修改食材價格或菜色配方，不會改變這張歷史採購單。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">此單已取消；重新產生該日期需求時可重新啟用為草稿。</div>{% else %}<div class="flash warning">目前是草稿，請先確認「實際叫貨量、單價、廠商」再按「確認叫貨單」。草稿不提供正式 PDF，避免誤拿去叫貨。</div>{% endif %}
+{% if order.status == 'confirmed' %}<div class="flash success">這一天的採購單已確認並保存。</div>{% elif order.status == 'cancelled' %}<div class="flash warning">這一天的採購單已取消；重新計算可恢復為草稿。</div>{% else %}<div class="flash warning">目前是草稿。請核對每項食材的採購量、交貨時間與供應廠商後再確認。</div>{% endif %}
 
 <div class="grid">
   <section class="card span-12 no-print">
     <div class="row between center-y">
-      <div><h2>採購單設定</h2><span class="pill {{ 'ok' if order.status == 'confirmed' else ('off' if order.status == 'cancelled' else 'warn') }}">{{ status_label(order.status) }}</span></div>
+      <div><h2>每日採購單設定</h2><span class="pill {{ 'ok' if order.status == 'confirmed' else ('off' if order.status == 'cancelled' else 'warn') }}">{{ status_label(order.status) }}</span></div>
       <div class="actions">
-        {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_confirm', order_id=order.id) }}" onsubmit="return confirm('你已核對廠商、實際叫貨量與單價嗎？確認後會鎖定為歷史叫貨單。')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn ok">確認叫貨單</button></form><form method="post" action="{{ url_for('order_tool.purchase_cancel', order_id=order.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">取消</button></form>{% else %}<form method="post" action="{{ url_for('order_tool.purchase_reopen', order_id=order.id) }}" onsubmit="return confirm('重開後可修改這張單，確定嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn warn">重開草稿</button></form>{% endif %}
+        {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_confirm', order_id=order.id) }}" onsubmit="return confirm('你已核對所有食材的實際叫貨量、交貨時間與供應廠商嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn ok">確認每日採購單</button></form><form method="post" action="{{ url_for('order_tool.purchase_cancel', order_id=order.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">取消</button></form>{% else %}<form method="post" action="{{ url_for('order_tool.purchase_reopen', order_id=order.id) }}" onsubmit="return confirm('重開後可修改這一天的採購單，確定嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn warn">重開草稿</button></form>{% endif %}
       </div>
     </div>
-    {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_update', order_id=order.id) }}" class="row main-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>廠商</label><select name="supplier_id"><option value="">未指定</option>{% for s in suppliers %}<option value="{{ s.id }}" {% if order.supplier_id == s.id %}selected{% endif %}>{{ s.name }}{{ '（停用）' if not s.active else '' }}</option>{% endfor %}</select></div><div class="field"><label>整張單備註</label><input name="note" value="{{ order.note or '' }}"></div><button class="btn">儲存單頭</button></form>{% else %}<div class="muted">備註：{{ order.note or '無' }}</div>{% endif %}
+    {% if order.status == 'draft' %}<form method="post" action="{{ url_for('order_tool.purchase_update', order_id=order.id) }}" class="row main-form"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>整張單備註</label><input name="note" value="{{ order.note or '' }}"></div><button class="btn">儲存備註</button></form>{% else %}<div class="muted">備註：{{ order.note or '無' }}</div>{% endif %}
   </section>
 
-  <section class="card span-12 purchase-group">
-    <div class="top"><div><h2>{{ order.supplier_name_snapshot }}</h2><div class="muted">進貨 / 供餐日期：{{ order.service_date }}</div></div><div class="purchase-total">總額 ${{ '%.2f'|format(total|float) }}</div></div>
-    {% if order.items %}<div class="table-scroll"><table>
-      <thead><tr><th>食材</th><th class="right">需求量</th><th class="right">需求換算</th><th class="right">建議叫貨</th><th>實際叫貨</th><th>單價</th><th class="right">金額</th><th>備註</th></tr></thead>
-      <tbody>{% for item in order.items %}<tr>
-        <td>{{ item.ingredient_name_snapshot }}</td>
-        <td class="right"><b>{{ required_display(item) }}</b></td>
-        <td class="right">{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</td>
-        <td class="right"><b>{{ trim_decimal(item.recommended_order_qty) }} {{ item.purchase_unit_snapshot }}</b></td>
-        {% if order.status == 'draft' %}<td colspan="4"><form method="post" action="{{ url_for('order_tool.purchase_item_update', item_id=item.id) }}" class="row center-y"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><div class="field"><label>實際數量</label><input name="actual_order_qty" type="number" min="0" step="0.0001" value="{{ item.actual_order_qty }}" required></div><div class="field"><label>單價 / {{ item.purchase_unit_snapshot }}</label><input name="unit_price" type="number" min="0" step="0.0001" value="{{ item.unit_price_snapshot }}" required></div><div class="field"><label>備註</label><input name="note" value="{{ item.note or '' }}"></div><button class="btn secondary">更新這項</button></form><div class="right"><b>目前金額 ${{ '%.2f'|format(item.amount|float) }}</b>{% if item.manual_override %}<br><span class="pill warn">人工調整，重新計算會保留</span>{% endif %}</div></td>
-        {% else %}<td>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</td><td>${{ '%.4f'|format(item.unit_price_snapshot|float) }}/{{ item.purchase_unit_snapshot }}</td><td class="right">${{ '%.2f'|format(item.amount|float) }}</td><td>{{ item.note or '-' }}</td>{% endif %}
+  <section class="card span-12 procurement-sheet purchase-group">
+    <div class="top"><div><h2>{{ order.service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">一天一張單；廠商列在各食材品項中。</div></div><div class="purchase-total">總額 ${{ '%.2f'|format(total|float) }}</div></div>
+    {% if order.items %}<div class="table-scroll"><table class="procurement-table">
+      <thead><tr><th>已叫貨</th><th>食材名稱</th><th>系統需求量</th><th>實際採購量／包裝換算</th><th>交貨日期／時段</th><th>供應廠商</th><th>單價</th><th class="right">金額</th></tr></thead>
+      <tbody>{% for item in order.items %}<tr class="{{ 'is-ordered' if item.ordered else '' }}">
+        <td><form method="post" action="{{ url_for('order_tool.purchase_item_ordered', item_id=item.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><label class="order-check"><input class="order-confirm-toggle" data-auto-submit="true" name="ordered" type="checkbox" value="1" {% if item.ordered %}checked{% endif %}><span>{{ '已叫' if item.ordered else '未叫' }}</span></label></form></td>
+        <td><b>{{ item.ingredient_name_snapshot }}</b></td>
+        <td><b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small></td>
+        <td><b>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</b>{% if item.package_qty is not none and item.package_unit %}<br>＝ <b>{{ trim_decimal(item.package_qty) }} {{ item.package_unit }}</b>{% endif %}{% if item.package_conversion_snapshot %}<small>廠商換算：{{ item.package_conversion_snapshot }}</small>{% endif %}</td>
+        <td>{{ item.delivery_date or order.service_date }}／{{ item.delivery_slot or '上午' }}</td>
+        <td>{{ item.supplier_name_snapshot or '⚠ 未指定供應商' }}</td>
+        <td>${{ '%.4f'|format(item.unit_price_snapshot|float) }}/{{ item.purchase_unit_snapshot }}</td>
+        <td class="right"><b>${{ '%.2f'|format(item.amount|float) }}</b></td>
       </tr>{% endfor %}</tbody>
-    </table></div>{% else %}<div class="empty">此採購單沒有項目。</div>{% endif %}
+    </table></div>{% else %}<div class="empty">這一天沒有採購項目。</div>{% endif %}
   </section>
 </div>
 {% if do_print and order.status == 'confirmed' %}<script>window.addEventListener('load',()=>window.print());</script>{% endif %}

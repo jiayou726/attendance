@@ -3,7 +3,7 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app import create_app
 from extensions import db
@@ -20,6 +20,7 @@ from models import (
     KitchenRecipeIngredient,
     KitchenSchool,
     KitchenSupplier,
+    KitchenSupplierItem,
 )
 
 TEST_DAY = date(2026, 8, 13)
@@ -128,6 +129,10 @@ def _create_plan(app, client, ids, service_date="2026-08-13", headcount=801):
 def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     response = client.get("/admin/order-tool/", follow_redirects=False)
     assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "開啟菜單" in page
+    assert all(label in page for label in ("總表", "菜色配方", "食材", "學校", "廠商", "採購叫貨"))
+    assert "未來 7 天菜單" not in page
 
     protected = client.get("/admin/not-a-kitchen-page", follow_redirects=False)
     assert protected.status_code == 302
@@ -219,6 +224,9 @@ def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_cl
     assert "各家學校菜單" in page
     assert "南洋綠咖哩雞" in page
     assert "供餐人數" in page
+    assert "產生採購單" in page
+    assert "儲存本週菜單與人數" not in page
+    assert "data-school-menu-autosave" in page
 
     payload = {"school_id": str(ids["school"]), "week": "2026-08-10"}
     for offset in range(7):
@@ -240,6 +248,42 @@ def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_cl
     plans_page = authed_client.get("/admin/order-tool/plans", follow_redirects=False)
     assert plans_page.status_code == 302
     assert "/summary" in plans_page.headers["Location"]
+
+
+def test_school_menu_auto_saves_one_day_and_blocks_incomplete_procurement(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    response = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "586",
+        "recipe_ids": str(ids["recipe"]),
+    })
+    assert response.status_code == 204
+    with app.app_context():
+        assignment = KitchenMenuAssignment.query.join(KitchenMenuPlan).filter(
+            KitchenMenuAssignment.school_id == ids["school"],
+            KitchenMenuPlan.service_date == TEST_DAY,
+        ).one()
+        assert assignment.headcount == 586
+        assert [item.recipe_id for item in assignment.plan.items] == [ids["recipe"]]
+
+    assert authed_client.post("/admin/order-tool/schools", data={
+        "name": "尚未勾選國小",
+        "code": "2-08",
+    }).status_code == 302
+    blocked = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+        follow_redirects=True,
+    )
+    assert "尚有學校未完成菜單勾選：尚未勾選國小" in blocked.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenPurchaseOrder.query.count() == 0
 
 
 def test_school_menu_can_import_school_excel_directly(app, authed_client):
@@ -266,6 +310,12 @@ def test_school_menu_can_import_school_excel_directly(app, authed_client):
 
 def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
+    assert authed_client.post(f"/admin/order-tool/suppliers/{ids['supplier']}/items", data={
+        "name": "骨腿丁",
+        "unit": "kg",
+        "package_conversion": "1箱＝10kg",
+        "last_unit_price": "82",
+    }).status_code == 302
     authed_client.post("/admin/order-tool/summary/dishes", data={
         "service_date": "2026-08-13",
         "week": "2026-08-10",
@@ -286,18 +336,26 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
     )
     page = response.get_data(as_text=True)
     assert all(label in page for label in (
-        "食材名稱", "總供餐人次", "系統需求量", "實際採購量", "交貨日期／時段", "供應廠商"
+        "已叫貨", "食材名稱", "總供餐人次", "系統需求量", "實際採購量／包裝換算", "交貨日期／時段", "供應廠商"
     ))
     assert 'list="supplier-search-options"' in page
     assert ">801</b> 人次" in page
+    assert "1箱＝10kg" in page
 
     with app.app_context():
         item = KitchenPurchaseOrderItem.query.one()
-        item_id = item.id
+        item_id, order_id = item.id, item.order_id
+        supplier_item = KitchenSupplierItem.query.filter_by(name="骨腿丁").one()
+        assert item.supplier_item_id == supplier_item.id
+        assert item.package_conversion_snapshot == "1箱＝10kg"
+        assert item.package_qty == Decimal("7.0488")
     saved = authed_client.post("/admin/order-tool/summary/procurement/save", data={
         "date": "2026-08-13",
         "item_ids": str(item_id),
+        f"ordered_{item_id}": "1",
         f"actual_{item_id}": "71",
+        f"package_qty_{item_id}": "3",
+        f"package_unit_{item_id}": "箱",
         f"delivery_date_{item_id}": "2026-08-12",
         f"delivery_slot_{item_id}": "下午",
         f"supplier_{item_id}": "測試肉品",
@@ -305,10 +363,55 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
     assert saved.status_code == 302
     with app.app_context():
         item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.ordered is True
         assert item.actual_order_qty == Decimal("71")
+        assert item.package_qty == Decimal("3")
+        assert item.package_unit == "箱"
+        assert item.package_conversion_snapshot == "1箱＝23.6667kg"
+        assert item.supplier_item.name == "骨腿丁"
+        assert item.supplier_item.package_conversion == "1箱＝23.6667kg"
         assert item.delivery_date == date(2026, 8, 12)
         assert item.delivery_slot == "下午"
-        assert item.order.supplier.name == "測試肉品"
+        assert item.supplier.name == "測試肉品"
+        assert KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).count() == 1
+
+    history = authed_client.get("/admin/order-tool/purchases?start=2026-08-13&end=2026-08-13").get_data(as_text=True)
+    assert "全部已叫" in history and "1 / 1" in history
+    detail = authed_client.get(f"/admin/order-tool/purchases/{order_id}").get_data(as_text=True)
+    assert "＝ <b>3 箱</b>" in detail
+    assert "廠商換算：1箱＝23.6667kg" in detail
+
+    procurement_page = authed_client.get(
+        "/admin/order-tool/summary/procurement?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert "匯出 Excel" in procurement_page
+    assert "儲存採購明細" not in procurement_page
+    exported = authed_client.get(
+        "/admin/order-tool/summary/procurement.xlsx?date=2026-08-13"
+    )
+    assert exported.status_code == 200
+    assert exported.headers["Content-Disposition"].endswith(".xlsx")
+    workbook = load_workbook(BytesIO(exported.data))
+    sheet = workbook["每日採購單"]
+    assert sheet["A4"].value == "已叫"
+    assert sheet["B4"].value == "骨腿丁"
+    assert sheet["F4"].value == 71
+    assert sheet["G4"].value == 3
+    assert sheet["H4"].value == "箱"
+    assert sheet["J4"].value == "測試肉品"
+    assert sheet["A4"].fill.fgColor.rgb == "00FFF1A8"
+
+    assert authed_client.post(f"/admin/order-tool/purchase-items/{item_id}/ordered", data={}).status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).ordered is False
+    assert authed_client.post(
+        f"/admin/order-tool/purchase-items/{item_id}/ordered",
+        data={"ordered": "1"},
+        headers={"X-Requested-With": "procurement-tracking"},
+    ).status_code == 204
+    assert authed_client.post(f"/admin/order-tool/purchases/{order_id}/ordered", data={"ordered": "1"}).status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).ordered is True
 
 
 def _menu_upload_file():
@@ -433,6 +536,30 @@ def test_full_801_person_purchase_calculation_and_snapshot(app, authed_client):
         assert item.unit_price_snapshot == Decimal("82.0000")
 
 
+def test_cancelled_purchase_is_reused_when_regenerated(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=801)
+    authed_client.post("/admin/order-tool/purchases/generate", data={
+        "start": "2026-08-13", "end": "2026-08-13",
+    })
+
+    with app.app_context():
+        order = KitchenPurchaseOrder.query.one()
+        order_id = order.id
+
+    authed_client.post(f"/admin/order-tool/purchases/{order_id}/cancel")
+    response = authed_client.post("/admin/order-tool/purchases/generate", data={
+        "start": "2026-08-13", "end": "2026-08-13",
+    })
+    assert response.status_code == 302
+
+    with app.app_context():
+        orders = KitchenPurchaseOrder.query.all()
+        assert len(orders) == 1
+        assert orders[0].id == order_id
+        assert orders[0].status == "draft"
+
+
 def test_cross_school_aggregation(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     plan_id = _create_plan(app, authed_client, ids, headcount=801)
@@ -478,10 +605,11 @@ def test_supplier_grouping(app, authed_client):
 
     with app.app_context():
         orders = KitchenPurchaseOrder.query.filter_by(service_date=TEST_DAY).all()
-        assert len(orders) == 2
-        assert {o.supplier_name_snapshot for o in orders} == {"測試肉品", "測試蔬菜"}
-        potato_order = next(o for o in orders if o.supplier_name_snapshot == "測試蔬菜")
-        assert potato_order.items[0].required_grams == Decimal("6408.000")
+        assert len(orders) == 1
+        assert orders[0].supplier_name_snapshot == "每日採購單"
+        assert {item.supplier_name_snapshot for item in orders[0].items} == {"測試肉品", "測試蔬菜"}
+        potato_item = next(item for item in orders[0].items if item.ingredient_name_snapshot == "洋芋")
+        assert potato_item.required_grams == Decimal("6408.000")
 
 
 def test_actual_purchase_qty_and_price_are_persisted(app, authed_client):

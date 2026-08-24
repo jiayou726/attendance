@@ -14,6 +14,7 @@ venv/
 
 # Local databases / office exports
 attendance.db
+attendance.db.backup-*
 *.db-journal
 *.sqlite
 *.sqlite3

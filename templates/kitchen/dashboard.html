@@ -1,32 +1,34 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}廚房首頁{% endblock %}
+{% block body_class %}dashboard-page{% endblock %}
 {% block content %}
 <section class="home-welcome">
-  <div><span class="eyebrow">今天要做什麼？</span><h1>從學校開始，最後拿到材料總表</h1><p>學校人數會記住；選好菜單後，系統依每人用量自動換算材料。</p></div>
-  <a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開始總菜單</a>
+  <div><span class="eyebrow">今天要排菜嗎？</span><h1>開啟菜單</h1></div>
+  <a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開啟總表</a>
 </section>
-
-<div class="home-actions">
-  <a class="home-action school" href="{{ url_for('order_tool.schools') }}"><span class="home-icon">校</span><span><b>學校名單</b><small>{{ school_count }} 間・修改平常人數</small></span><i>›</i></a>
-  <a class="home-action supplier" href="{{ url_for('order_tool.suppliers') }}"><span class="home-icon">廠</span><span><b>廠商資料</b><small>{{ supplier_count }} 家・查看電話與供應品項</small></span><i>›</i></a>
-  <a class="home-action recipe" href="{{ url_for('order_tool.recipes') }}"><span class="home-icon">菜</span><span><b>每道菜材料</b><small>{{ recipe_count }} 道・材料與每人克數</small></span><i>›</i></a>
-  <a class="home-action summary" href="{{ url_for('order_tool.summary') }}"><span class="home-icon">表</span><span><b>總表</b><small>每校菜單、人數、材料需求</small></span><i>›</i></a>
-</div>
 
 {% if pending_component_count %}<div class="notice warning-home"><b>{{ pending_component_count }} 筆材料克數待確認</b>　材料名稱已匯入；確認克數後才會加入總量，避免叫錯貨。<a href="{{ url_for('order_tool.recipes') }}">去查看</a></div>{% endif %}
 
-<div class="grid">
-  <section class="card span-12">
-    <div class="top"><div><h2>未來 7 天菜單</h2><div class="muted">先編總表，再到下一步勾選各校菜色與修改人數。</div></div><a class="btn" href="{{ url_for('order_tool.summary') }}">開始排菜</a></div>
-    {% if plans %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>餐別</th><th>菜單</th><th>學校 / 人數</th><th>狀態</th><th></th></tr></thead><tbody>
-      {% for p in plans %}<tr><td>{{ p.service_date }}</td><td>{{ p.meal_type }}</td><td>{{ p.name }}</td><td>{{ p.assignments|length }} 校 / {{ p.assignments|sum(attribute='headcount') }} 人</td><td><span class="pill {{ 'ok' if p.status == 'confirmed' else 'warn' }}">{{ '已確認' if p.status == 'confirmed' else '草稿' }}</span></td><td><a href="{{ url_for('order_tool.plan_detail', plan_id=p.id) }}">開啟</a></td></tr>{% endfor %}
-    </tbody></table></div>{% else %}<div class="empty">這 7 天還沒有菜單。</div>{% endif %}
-  </section>
+<section class="home-section" aria-labelledby="home-functions-title">
+  <div class="home-section-heading">
+    <span class="eyebrow">功能選單</span>
+    <h2 id="home-functions-title">你要處理哪一項？</h2>
+  </div>
+  <div class="home-actions">
+    <a class="home-action summary" href="{{ url_for('order_tool.summary') }}"><span class="home-icon">表</span><span><b>總表</b><small>安排每週菜單，再分配各校菜色與供餐人數。</small></span><i>›</i></a>
+    <a class="home-action recipe" href="{{ url_for('order_tool.recipes') }}"><span class="home-icon">菜</span><span><b>菜色配方</b><small>管理 {{ recipe_count }} 道菜的食材與每人用量。</small></span><i>›</i></a>
+    <a class="home-action ingredient" href="{{ url_for('order_tool.ingredients') }}"><span class="home-icon">材</span><span><b>食材</b><small>整理 {{ ingredient_count }} 項食材、單位與採購資料。</small></span><i>›</i></a>
+    <a class="home-action school" href="{{ url_for('order_tool.schools') }}"><span class="home-icon">校</span><span><b>學校</b><small>管理 {{ school_count }} 間學校與平常供餐人數。</small></span><i>›</i></a>
+    <a class="home-action supplier" href="{{ url_for('order_tool.suppliers') }}"><span class="home-icon">廠</span><span><b>廠商</b><small>查看 {{ supplier_count }} 家廠商的電話與供應品項。</small></span><i>›</i></a>
+    <a class="home-action procurement" href="{{ url_for('order_tool.procurement') }}"><span class="home-icon">購</span><span><b>採購叫貨</b><small>依日期彙整材料需求，填寫廠商、數量與送達時間。</small></span><i>›</i></a>
+  </div>
+</section>
 
+<div class="grid home-secondary">
   <section class="card span-12">
     <div class="top"><div><h2>最近採購單</h2><div class="muted">已確認資料會保存，不會被新價格或新配方改掉。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>
-    {% if recent_orders %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>廠商</th><th>狀態</th><th class="right">金額</th><th></th></tr></thead><tbody>
-      {% for o in recent_orders %}<tr><td>{{ o.service_date }}</td><td>{{ o.supplier_name_snapshot }}</td><td><span class="pill {{ 'ok' if o.status == 'confirmed' else ('off' if o.status == 'cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td><a href="{{ url_for('order_tool.purchase_detail', order_id=o.id) }}">開啟</a></td></tr>{% endfor %}
+    {% if recent_orders %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>狀態</th><th>叫貨進度</th><th>食材項目</th><th class="right">總金額</th><th></th></tr></thead><tbody>
+      {% for o in recent_orders %}{% set ordered_count = o.items|selectattr('ordered')|list|length %}<tr><td>{{ o.service_date }}</td><td><span class="pill {{ 'ok' if o.status == 'confirmed' else ('off' if o.status == 'cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td>{{ ordered_count }} / {{ o.items|length }}</td><td>{{ o.items|length }} 項</td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td><a href="{{ url_for('order_tool.purchase_detail', order_id=o.id) }}">開啟</a></td></tr>{% endfor %}
     </tbody></table></div>{% else %}<div class="empty">尚未建立採購單。</div>{% endif %}
   </section>
 </div>

@@ -38,6 +38,8 @@ class KitchenSchool(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     code = db.Column(db.String(50), unique=True)
+    # 平常供餐人數；排菜時自動帶入，當天仍可另外修改。
+    default_headcount = db.Column(db.Integer, nullable=False, default=0)
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -49,10 +51,31 @@ class KitchenSupplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     phone = db.Column(db.String(50))
+    mobile = db.Column(db.String(50))
+    fax = db.Column(db.String(50))
+    contact = db.Column(db.String(100))
+    address = db.Column(db.String(255))
+    source_file = db.Column(db.String(255))
     note = db.Column(db.String(255))
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = db.relationship(
+        "KitchenSupplierItem",
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        order_by="KitchenSupplierItem.name",
+    )
+
+    @property
+    def historical_order_count(self):
+        return sum(item.order_count or 0 for item in self.items if item.active)
+
+    @property
+    def last_purchase_date(self):
+        dates = [item.last_purchase_date for item in self.items if item.active and item.last_purchase_date]
+        return max(dates) if dates else None
 
 
 class KitchenIngredient(db.Model):
@@ -77,6 +100,36 @@ class KitchenIngredient(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     supplier = db.relationship("KitchenSupplier")
+
+
+class KitchenSupplierItem(db.Model):
+    """Historical product catalog extracted from each supplier workbook."""
+
+    __tablename__ = "kitchen_supplier_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey("kitchen_supplier.id", ondelete="CASCADE"), nullable=False)
+    ingredient_id = db.Column(db.Integer, db.ForeignKey("kitchen_ingredient.id"), nullable=True)
+    source_key = db.Column(db.String(160), nullable=True)
+    name = db.Column(db.String(120), nullable=False)
+    unit = db.Column(db.String(20), nullable=False)
+    package_conversion = db.Column(db.String(120), nullable=True)
+    last_quantity = db.Column(db.Numeric(16, 3), nullable=True)
+    last_unit_price = db.Column(db.Numeric(16, 4), nullable=True)
+    last_purchase_date = db.Column(db.Date, nullable=True)
+    order_count = db.Column(db.Integer, nullable=False, default=0)
+    source_file = db.Column(db.String(255))
+    manual_override = db.Column(db.Boolean, nullable=False, default=False)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship("KitchenSupplier", back_populates="items")
+    ingredient = db.relationship("KitchenIngredient")
+
+    __table_args__ = (
+        db.UniqueConstraint("supplier_id", "name", name="uq_kitchen_supplier_item"),
+    )
 
 
 class KitchenRecipe(db.Model):
@@ -117,6 +170,9 @@ class KitchenRecipeIngredient(db.Model):
     # 欄位名稱沿用舊 schema；實際語意為「每人 AP 數量」，單位由 ingredient.base_unit 決定。
     # 例：骨腿丁 88 g/人；棒棒腿 1 個/人。
     grams_per_person = db.Column(db.Numeric(12, 3), nullable=False)
+    # manual：人工確認；estimated：由製造表反推；pending：已知材料但克數待確認。
+    quantity_status = db.Column(db.String(20), nullable=False, default="manual")
+    source_note = db.Column(db.String(255))
 
     recipe = db.relationship("KitchenRecipe", back_populates="ingredients")
     ingredient = db.relationship("KitchenIngredient")

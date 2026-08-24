@@ -48,8 +48,10 @@ def create_app(config_overrides=None) -> Flask:
 
     @app.before_request
     def protect_admin_pages():
-        # /punch 不在 /admin 下，因此既有打卡流程不受影響。
-        if request.path.startswith("/admin") and request.path not in {"/admin/login", "/admin/logout"}:
+        # 團膳菜單是內部作業工具，依需求可直接使用；其餘管理後台仍需登入。
+        kitchen_public = request.path == "/admin/order-tool" or request.path.startswith("/admin/order-tool/")
+        if (request.path.startswith("/admin") and not kitchen_public
+                and request.path not in {"/admin/login", "/admin/logout"}):
             if not session.get("role"):
                 return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
         return None

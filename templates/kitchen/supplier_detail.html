@@ -1,0 +1,47 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}{{ supplier.name }}{% endblock %}
+{% block content %}
+<div class="top">
+  <div><h1>{{ supplier.name }}</h1><div class="muted">廠商聯絡資料與供應食材</div></div>
+  <div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.suppliers') }}">← 廠商清單</a><a class="btn" href="{{ url_for('order_tool.suppliers', edit=supplier.id) }}">編輯資料</a></div>
+</div>
+<div class="grid">
+  <section class="card span-12 summary-hero supplier-kpis">
+    <div><div class="muted">歷史叫貨次數</div><div class="stat">{{ supplier.historical_order_count }}</div></div>
+    <div><div class="muted">最後叫貨日期</div><div class="stat small">{{ supplier.last_purchase_date or '-' }}</div></div>
+    <div><div class="muted">供應品項</div><div class="stat">{{ supplier_items|length }}</div></div>
+  </section>
+  <section class="card span-6">
+    <h2>聯絡資料</h2>
+    <dl class="detail-list">
+      <div><dt>電話</dt><dd>{{ supplier.phone or '-' }}</dd></div>
+      <div><dt>手機</dt><dd>{{ supplier.mobile or '-' }}</dd></div>
+      <div><dt>聯絡人</dt><dd>{{ supplier.contact or '-' }}</dd></div>
+      <div><dt>傳真</dt><dd>{{ supplier.fax or '-' }}</dd></div>
+      <div><dt>地址</dt><dd>{{ supplier.address or '-' }}</dd></div>
+      <div><dt>備註</dt><dd>{{ supplier.note or '-' }}</dd></div>
+      {% if supplier.source_file %}<div><dt>資料來源</dt><dd>{{ supplier.source_file }}</dd></div>{% endif %}
+    </dl>
+  </section>
+  <section class="card span-6">
+    <div class="top"><div><h2>歷史叫貨食材</h2><div class="muted">從這家廠商的全部 Excel 整理。</div></div><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋食材"><button class="btn secondary">搜尋</button></form></div>
+    <form method="post" action="{{ url_for('order_tool.supplier_item_create', supplier_id=supplier.id) }}" class="supplier-item-add">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input name="name" placeholder="食材" aria-label="食材" required>
+      <input name="unit" placeholder="單位" aria-label="單位" required>
+      <input name="package_conversion" placeholder="包裝換算，例如1箱＝15kg" aria-label="包裝換算">
+      <input name="last_unit_price" type="number" min="0" step="0.0001" placeholder="最近單價" aria-label="最近單價" required>
+      <button class="btn">新增品項</button>
+    </form>
+    {% if supplier_items %}<div class="table-scroll"><table class="supplier-items-table"><thead><tr><th>食材</th><th>單位</th><th>包裝換算</th><th>最近單價</th><th>操作</th></tr></thead><tbody>
+      {% for item in supplier_items %}<tr>
+        <td><form id="supplier-item-{{ item.id }}" method="post" action="{{ url_for('order_tool.supplier_item_update', item_id=item.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"></form><input form="supplier-item-{{ item.id }}" name="name" value="{{ item.name }}" required></td>
+        <td><input form="supplier-item-{{ item.id }}" name="unit" value="{{ item.unit }}" required></td>
+        <td><input form="supplier-item-{{ item.id }}" name="package_conversion" value="{{ item.package_conversion or '' }}" placeholder="尚無資料"></td>
+        <td><input form="supplier-item-{{ item.id }}" name="last_unit_price" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.last_unit_price) if item.last_unit_price is not none else 0 }}" required></td>
+        <td><div class="actions"><button class="btn secondary" form="supplier-item-{{ item.id }}">儲存</button><form method="post" action="{{ url_for('order_tool.supplier_item_delete', item_id=item.id) }}" onsubmit="return confirm('確定移除此品項？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form></div></td>
+      </tr>{% endfor %}
+    </tbody></table></div>{% else %}<div class="empty">這份 Excel 沒有讀到可辨識的食品叫貨列。</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

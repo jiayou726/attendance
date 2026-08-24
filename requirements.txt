@@ -5,6 +5,7 @@ psycopg2-binary>=2.9       # PostgreSQL 連線套件
 
 pandas>=2.2                # 資料處理
 openpyxl>=3.1              # 讀寫 Excel
+xlrd>=2.0                  # 讀取歷史 .xls 廠商叫貨檔
 xlsxwriter>=3.1            # 輸出 Excel
 qrcode[pil]
 gunicorn>=21.2             # 生產用 WSGI Server

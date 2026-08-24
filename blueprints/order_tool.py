@@ -8,9 +8,11 @@ Recipe BOM（每人 AP 數量，可用 g 或 個）→ 中央菜單 → 學校�
 from __future__ import annotations
 
 import secrets
+import re
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from io import BytesIO
 
 from flask import (
     Blueprint,
@@ -20,10 +22,14 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
+from openpyxl import Workbook, load_workbook
+from itsdangerous import BadSignature, URLSafeSerializer
 
 from extensions import db
 from models import (
@@ -37,6 +43,7 @@ from models import (
     KitchenRecipeIngredient,
     KitchenSchool,
     KitchenSupplier,
+    KitchenSupplierItem,
 )
 
 order_bp = Blueprint("order_tool", __name__)
@@ -46,6 +53,17 @@ MEAL_TYPES = ("早餐", "午餐", "晚餐", "點心")
 PURCHASE_UNITS = ("kg", "箱", "包", "斤", "瓶", "個", "袋", "桶")
 BASE_UNITS = ("g", "個")
 WEEKDAY_LABELS = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
+MENU_HEADER_CATEGORIES = {
+    "主食": "主食",
+    "主菜": "主菜",
+    "副菜": "副菜",
+    "配菜": "副菜",
+    "蔬菜": "青菜",
+    "青菜": "青菜",
+    "湯品": "湯品",
+    "湯": "湯品",
+    "點心": "點心",
+}
 
 
 # ─────────────────────────────────────────────
@@ -63,8 +81,6 @@ def _csrf_token() -> str:
 
 @order_bp.before_request
 def _protect_kitchen():
-    if not session.get("role"):
-        return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
     if request.method == "POST" and current_app.config.get("KITCHEN_CSRF_ENABLED", True):
         expected = session.get("_kitchen_csrf", "")
         received = request.form.get("_csrf_token", "")
@@ -249,6 +265,10 @@ def index():
         recipe_count=KitchenRecipe.query.filter_by(active=True).count(),
         ingredient_count=KitchenIngredient.query.filter_by(active=True).count(),
         school_count=KitchenSchool.query.filter_by(active=True).count(),
+        supplier_count=KitchenSupplier.query.filter_by(active=True).count(),
+        pending_component_count=KitchenRecipeIngredient.query.filter(
+            KitchenRecipeIngredient.quantity_status == "pending"
+        ).count(),
     )
 
 
@@ -264,11 +284,23 @@ def schools():
         if not name:
             flash("學校名稱不可空白。", "error")
             return redirect(url_for("order_tool.schools"))
-        db.session.add(KitchenSchool(name=name, code=request.form.get("code", "").strip() or None))
+        default_headcount = _int(request.form.get("default_headcount"), default=0)
+        if default_headcount is None or default_headcount < 0:
+            flash("平常人數不可為負數。", "error")
+            return redirect(url_for("order_tool.schools"))
+        db.session.add(KitchenSchool(
+            name=name,
+            code=request.form.get("code", "").strip() or None,
+            default_headcount=default_headcount,
+        ))
         return _commit("學校已新增。", "order_tool.schools")
-    rows = KitchenSchool.query.order_by(KitchenSchool.active.desc(), KitchenSchool.name).all()
+    q = request.args.get("q", "").strip()
+    query = KitchenSchool.query
+    if q:
+        query = query.filter(KitchenSchool.name.ilike(f"%{q}%"))
+    rows = query.order_by(KitchenSchool.active.desc(), KitchenSchool.name).all()
     edit_row = db.session.get(KitchenSchool, _int(request.args.get("edit"), default=0)) if request.args.get("edit") else None
-    return render_template("kitchen/schools.html", rows=rows, edit_row=edit_row)
+    return render_template("kitchen/schools.html", rows=rows, edit_row=edit_row, q=q)
 
 
 @order_bp.post("/schools/<int:school_id>/update")
@@ -282,6 +314,11 @@ def school_update(school_id: int):
         return redirect(url_for("order_tool.schools", edit=school_id))
     row.name = name
     row.code = request.form.get("code", "").strip() or None
+    default_headcount = _int(request.form.get("default_headcount"), default=0)
+    if default_headcount is None or default_headcount < 0:
+        flash("平常人數不可為負數。", "error")
+        return redirect(url_for("order_tool.schools", edit=school_id))
+    row.default_headcount = default_headcount
     return _commit("學校資料已更新。", "order_tool.schools")
 
 
@@ -304,12 +341,22 @@ def suppliers():
         db.session.add(KitchenSupplier(
             name=name,
             phone=request.form.get("phone", "").strip() or None,
+            mobile=request.form.get("mobile", "").strip() or None,
+            fax=request.form.get("fax", "").strip() or None,
+            contact=request.form.get("contact", "").strip() or None,
+            address=request.form.get("address", "").strip() or None,
             note=request.form.get("note", "").strip() or None,
         ))
         return _commit("廠商已新增。", "order_tool.suppliers")
-    rows = KitchenSupplier.query.order_by(KitchenSupplier.active.desc(), KitchenSupplier.name).all()
+    q = request.args.get("q", "").strip()
+    query = KitchenSupplier.query
+    if q:
+        query = query.filter(KitchenSupplier.name.ilike(f"%{q}%"))
+    rows = query.options(selectinload(KitchenSupplier.items)).order_by(
+        KitchenSupplier.active.desc(), KitchenSupplier.name
+    ).all()
     edit_row = db.session.get(KitchenSupplier, _int(request.args.get("edit"), default=0)) if request.args.get("edit") else None
-    return render_template("kitchen/suppliers.html", rows=rows, edit_row=edit_row)
+    return render_template("kitchen/suppliers.html", rows=rows, edit_row=edit_row, q=q)
 
 
 @order_bp.post("/suppliers/<int:supplier_id>/update")
@@ -323,6 +370,10 @@ def supplier_update(supplier_id: int):
         return redirect(url_for("order_tool.suppliers", edit=supplier_id))
     row.name = name
     row.phone = request.form.get("phone", "").strip() or None
+    row.mobile = request.form.get("mobile", "").strip() or None
+    row.fax = request.form.get("fax", "").strip() or None
+    row.contact = request.form.get("contact", "").strip() or None
+    row.address = request.form.get("address", "").strip() or None
     row.note = request.form.get("note", "").strip() or None
     return _commit("廠商資料已更新。", "order_tool.suppliers")
 
@@ -334,6 +385,84 @@ def supplier_toggle(supplier_id: int):
         abort(404)
     row.active = not row.active
     return _commit("廠商狀態已更新。", "order_tool.suppliers")
+
+
+@order_bp.get("/suppliers/<int:supplier_id>")
+def supplier_detail(supplier_id: int):
+    row = db.session.get(KitchenSupplier, supplier_id)
+    if not row:
+        abort(404)
+    q = request.args.get("q", "").strip()
+    item_query = KitchenSupplierItem.query.filter_by(supplier_id=supplier_id, active=True)
+    if q:
+        item_query = item_query.filter(KitchenSupplierItem.name.ilike(f"%{q}%"))
+    supplier_items = item_query.order_by(
+        KitchenSupplierItem.last_purchase_date.desc(), KitchenSupplierItem.name
+    ).all()
+    return render_template(
+        "kitchen/supplier_detail.html",
+        supplier=row,
+        supplier_items=supplier_items,
+        q=q,
+    )
+
+
+@order_bp.post("/suppliers/<int:supplier_id>/items")
+def supplier_item_create(supplier_id: int):
+    supplier = db.session.get(KitchenSupplier, supplier_id)
+    if not supplier:
+        abort(404)
+    name = request.form.get("name", "").strip()
+    unit = request.form.get("unit", "").strip()
+    package_conversion = request.form.get("package_conversion", "").strip()
+    price = _decimal(request.form.get("last_unit_price"), default=None)
+    if not name or not unit or price is None or price < 0:
+        flash("食材、單位或最近單價不正確。", "error")
+        return redirect(url_for("order_tool.supplier_detail", supplier_id=supplier_id))
+
+    row = KitchenSupplierItem.query.filter_by(supplier_id=supplier_id, name=name[:120]).one_or_none()
+    if row is None:
+        row = KitchenSupplierItem(supplier_id=supplier_id, name=name[:120], unit=unit[:20])
+        db.session.add(row)
+    row.unit = unit[:20]
+    row.package_conversion = package_conversion[:120] or None
+    row.last_unit_price = price
+    row.manual_override = True
+    row.active = True
+    return _commit("廠商品項已新增。", "order_tool.supplier_detail", supplier_id=supplier_id)
+
+
+@order_bp.post("/supplier-items/<int:item_id>/update")
+def supplier_item_update(item_id: int):
+    row = db.session.get(KitchenSupplierItem, item_id)
+    if not row:
+        abort(404)
+    name = request.form.get("name", "").strip()
+    unit = request.form.get("unit", "").strip()
+    package_conversion = request.form.get("package_conversion", "").strip()
+    price = _decimal(request.form.get("last_unit_price"), default=None)
+    if not name or not unit or price is None or price < 0:
+        flash("食材、單位或最近單價不正確。", "error")
+        return redirect(url_for("order_tool.supplier_detail", supplier_id=row.supplier_id))
+    row.name = name[:120]
+    row.unit = unit[:20]
+    row.package_conversion = package_conversion[:120] or None
+    row.last_unit_price = price
+    row.manual_override = True
+    return _commit("廠商品項已更新。", "order_tool.supplier_detail", supplier_id=row.supplier_id)
+
+
+@order_bp.post("/supplier-items/<int:item_id>/delete")
+def supplier_item_delete(item_id: int):
+    row = db.session.get(KitchenSupplierItem, item_id)
+    if not row:
+        abort(404)
+    supplier_id = row.supplier_id
+    row.active = False
+    row.manual_override = True
+    db.session.commit()
+    flash("品項已從這家廠商移除；食材主檔不受影響。", "success")
+    return redirect(url_for("order_tool.supplier_detail", supplier_id=supplier_id))
 
 
 # ─────────────────────────────────────────────
@@ -386,7 +515,11 @@ def ingredients():
             return redirect(url_for("order_tool.ingredients"))
         db.session.add(KitchenIngredient(**values))
         return _commit("食材已新增。", "order_tool.ingredients")
-    rows = KitchenIngredient.query.order_by(KitchenIngredient.active.desc(), KitchenIngredient.name).all()
+    q = request.args.get("q", "").strip()
+    query = KitchenIngredient.query
+    if q:
+        query = query.filter(KitchenIngredient.name.ilike(f"%{q}%"))
+    rows = query.order_by(KitchenIngredient.active.desc(), KitchenIngredient.name).all()
     suppliers_all = KitchenSupplier.query.order_by(KitchenSupplier.active.desc(), KitchenSupplier.name).all()
     edit_row = db.session.get(KitchenIngredient, _int(request.args.get("edit"), default=0)) if request.args.get("edit") else None
     return render_template(
@@ -396,6 +529,7 @@ def ingredients():
         edit_row=edit_row,
         units=PURCHASE_UNITS,
         base_units=BASE_UNITS,
+        q=q,
     )
 
 
@@ -463,9 +597,13 @@ def recipes():
             db.session.rollback()
             flash("菜色名稱已存在。", "error")
             return redirect(url_for("order_tool.recipes"))
-    rows = KitchenRecipe.query.order_by(KitchenRecipe.active.desc(), KitchenRecipe.category, KitchenRecipe.name).all()
+    q = request.args.get("q", "").strip()
+    query = KitchenRecipe.query
+    if q:
+        query = query.filter(KitchenRecipe.name.ilike(f"%{q}%"))
+    rows = query.order_by(KitchenRecipe.active.desc(), KitchenRecipe.category, KitchenRecipe.name).all()
     edit_row = db.session.get(KitchenRecipe, _int(request.args.get("edit"), default=0)) if request.args.get("edit") else None
-    return render_template("kitchen/recipes.html", rows=rows, edit_row=edit_row, categories=CATEGORIES)
+    return render_template("kitchen/recipes.html", rows=rows, edit_row=edit_row, categories=CATEGORIES, q=q)
 
 
 @order_bp.post("/recipes/<int:recipe_id>/update")
@@ -545,9 +683,17 @@ def recipe_ingredient_add(recipe_id: int):
     existing = KitchenRecipeIngredient.query.filter_by(recipe_id=recipe_id, ingredient_id=ingredient_id).first()
     if existing:
         existing.grams_per_person = amount
+        existing.quantity_status = "manual"
+        existing.source_note = "人工確認"
         message = "配方用量已更新。"
     else:
-        db.session.add(KitchenRecipeIngredient(recipe_id=recipe_id, ingredient_id=ingredient_id, grams_per_person=amount))
+        db.session.add(KitchenRecipeIngredient(
+            recipe_id=recipe_id,
+            ingredient_id=ingredient_id,
+            grams_per_person=amount,
+            quantity_status="manual",
+            source_note="人工確認",
+        ))
         message = "食材已加入配方。"
     db.session.commit()
     flash(message, "success")
@@ -564,6 +710,8 @@ def recipe_ingredient_update(row_id: int):
         flash("每人用量必須大於 0。", "error")
         return redirect(url_for("order_tool.recipe_detail", recipe_id=row.recipe_id))
     row.grams_per_person = amount
+    row.quantity_status = "manual"
+    row.source_note = "人工確認"
     db.session.commit()
     flash("每人用量已更新。", "success")
     return redirect(url_for("order_tool.recipe_detail", recipe_id=row.recipe_id))
@@ -884,6 +1032,8 @@ def _requirements_for_date(service_date: date):
         for menu_item in plan.items:
             for component in menu_item.recipe.ingredients:
                 ing = component.ingredient
+                if (component.grams_per_person or Decimal("0")) <= 0:
+                    continue
                 supplier_key, supplier_id, supplier_name = _supplier_identity(ing)
                 base_amount = (component.grams_per_person or Decimal("0")) * people
                 current = grouped[supplier_key].get(ing.id)
@@ -897,6 +1047,651 @@ def _requirements_for_date(service_date: date):
                     grouped[supplier_key][ing.id] = current
                 current["required_amount"] += base_amount
     return grouped
+
+
+def _summary_data(service_date: date):
+    plans = KitchenMenuPlan.query.filter_by(service_date=service_date).order_by(
+        KitchenMenuPlan.meal_type, KitchenMenuPlan.name
+    ).all()
+    school_rows = []
+    pending_rows = []
+    seen_pending = set()
+    for plan in plans:
+        dishes = "、".join(item.recipe.name for item in plan.items)
+        for assignment in plan.assignments:
+            school_rows.append({
+                "plan": plan,
+                "school": assignment.school,
+                "headcount": assignment.headcount,
+                "dishes": dishes,
+            })
+        for item in plan.items:
+            for component in item.recipe.ingredients:
+                if (component.grams_per_person or Decimal("0")) > 0:
+                    continue
+                key = (item.recipe_id, component.ingredient_id)
+                if key in seen_pending:
+                    continue
+                seen_pending.add(key)
+                pending_rows.append({"recipe": item.recipe, "component": component})
+
+    material_rows = []
+    for ingredient_rows in _requirements_for_date(service_date).values():
+        for data in ingredient_rows.values():
+            ingredient = data["ingredient"]
+            amount = data["required_amount"]
+            divisor = ingredient.grams_per_purchase_unit or Decimal("0")
+            material_rows.append({
+                "supplier_name": data["supplier_name"],
+                "ingredient": ingredient,
+                "required_amount": amount,
+                "required_qty": amount / divisor if divisor > 0 else Decimal("0"),
+            })
+    material_rows.sort(key=lambda row: (row["supplier_name"], row["ingredient"].name))
+    return {
+        "plans": plans,
+        "school_rows": school_rows,
+        "material_rows": material_rows,
+        "pending_rows": pending_rows,
+        "total_people": sum(max(row["headcount"], 0) for row in school_rows),
+    }
+
+
+@order_bp.get("/summary")
+def summary():
+    selected_date = _date(request.args.get("week") or request.args.get("date"), default=date.today()) or date.today()
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    plans = (
+        KitchenMenuPlan.query.filter(KitchenMenuPlan.service_date.between(week_start, week_end))
+        .options(selectinload(KitchenMenuPlan.items).selectinload(KitchenMenuPlanItem.recipe))
+        .order_by(KitchenMenuPlan.service_date, KitchenMenuPlan.meal_type, KitchenMenuPlan.name)
+        .all()
+    )
+    days = []
+    for offset, weekday in enumerate(WEEKDAY_LABELS):
+        day_date = week_start + timedelta(days=offset)
+        day_plans = [plan for plan in plans if plan.service_date == day_date]
+        days.append({
+            "date": day_date,
+            "weekday": weekday,
+            "plans": day_plans,
+            "draft_plans": [plan for plan in day_plans if plan.status == "draft"],
+        })
+    recipes = KitchenRecipe.query.filter_by(active=True).order_by(
+        KitchenRecipe.category, KitchenRecipe.name
+    ).all()
+    return render_template(
+        "kitchen/summary.html",
+        days=days,
+        recipes=recipes,
+        recipe_options=[
+            {"id": recipe.id, "name": recipe.name, "category": recipe.category or "其他"}
+            for recipe in recipes
+        ],
+        categories=CATEGORIES,
+        week_start=week_start,
+        week_end=week_end,
+        previous_week=week_start - timedelta(days=7),
+        next_week=week_start + timedelta(days=7),
+        today=date.today(),
+    )
+
+
+@order_bp.post("/summary/dishes")
+def summary_dish_add():
+    service_date = _date(request.form.get("service_date"))
+    recipe_id = _int(request.form.get("recipe_id"), default=0) or 0
+    dish_name = request.form.get("dish_name", "").strip()[:120]
+    category = request.form.get("category", "其他").strip()
+    plan_id = _int(request.form.get("plan_id"), default=0) or 0
+    week_start = _date(request.form.get("week"), default=service_date or date.today()) or date.today()
+    redirect_to = url_for("order_tool.summary", week=week_start.isoformat())
+    if not service_date or (not recipe_id and not dish_name):
+        flash("請搜尋或輸入一道菜色。", "error")
+        return redirect(redirect_to)
+
+    recipe = db.session.get(KitchenRecipe, recipe_id) if recipe_id else None
+    if recipe is not None and not recipe.active:
+        recipe = None
+    if recipe is None and dish_name:
+        recipe = KitchenRecipe.query.filter(
+            db.func.lower(KitchenRecipe.name) == dish_name.lower()
+        ).first()
+        if recipe is not None and not recipe.active:
+            flash(f"「{recipe.name}」目前已停用，請先到菜色配方重新啟用。", "error")
+            return redirect(redirect_to)
+    if recipe is None:
+        if category not in CATEGORIES:
+            category = "其他"
+        recipe = KitchenRecipe(name=dish_name, category=category, active=True)
+        db.session.add(recipe)
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            recipe = KitchenRecipe.query.filter(
+                db.func.lower(KitchenRecipe.name) == dish_name.lower()
+            ).first()
+            if recipe is None or not recipe.active:
+                flash("菜色建立失敗，請重新整理後再試一次。", "error")
+                return redirect(redirect_to)
+
+    plan = db.session.get(KitchenMenuPlan, plan_id) if plan_id else None
+    if plan and plan.service_date != service_date:
+        flash("菜單日期不相符，請重新選擇。", "error")
+        return redirect(redirect_to)
+    if plan is None:
+        plan = KitchenMenuPlan.query.filter_by(
+            service_date=service_date, meal_type="午餐", status="draft"
+        ).order_by(KitchenMenuPlan.id).first()
+    if plan is None:
+        existing_central = KitchenMenuPlan.query.filter_by(
+            service_date=service_date, meal_type="午餐", name="中央菜單"
+        ).first()
+        if existing_central:
+            flash("當天的中央菜單已確認，不能再新增菜色。", "error")
+            return redirect(redirect_to)
+        plan = KitchenMenuPlan(
+            service_date=service_date,
+            meal_type="午餐",
+            name="中央菜單",
+            status="draft",
+        )
+        db.session.add(plan)
+        db.session.flush()
+    if plan.status != "draft":
+        flash("已確認的菜單不能再新增菜色。", "error")
+        return redirect(redirect_to)
+    if KitchenMenuPlanItem.query.filter_by(plan_id=plan.id, recipe_id=recipe.id).first():
+        flash(f"「{recipe.name}」已經在這張菜單中。", "warning")
+        return redirect(redirect_to)
+
+    max_order = max((item.sort_order for item in plan.items), default=-1)
+    db.session.add(KitchenMenuPlanItem(plan_id=plan.id, recipe_id=recipe.id, sort_order=max_order + 1))
+    db.session.commit()
+    flash(f"已把「{recipe.name}」加入 {service_date.strftime('%m/%d')} 菜單。", "success")
+    return redirect(redirect_to)
+
+
+def _menu_text(value) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _menu_name_key(value: str) -> str:
+    return re.sub(r"[\s　]+", "", value).lower()
+
+
+def _menu_category(header: str) -> str | None:
+    raw = _menu_text(header)
+    if "份" in raw or any(marker in raw for marker in ("全穀", "豆魚", "油脂", "水果", "乳品", "熱量", "三章")):
+        return None
+    normalized = raw.replace("類", "")
+    for marker, category in MENU_HEADER_CATEGORIES.items():
+        if marker in normalized:
+            return category
+    return None
+
+
+def _infer_menu_year(sheet, filename: str) -> int:
+    texts = [filename]
+    for row in sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 6), values_only=True):
+        texts.extend(_menu_text(value) for value in row if value is not None)
+    joined = " ".join(texts)
+    match = re.search(r"(?<!\d)(20\d{2})\s*年", joined)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"(?<!\d)(1\d{2})\s*年", joined)
+    if match:
+        return int(match.group(1)) + 1911
+    for row in sheet.iter_rows(values_only=True):
+        for value in row:
+            if isinstance(value, (date, datetime)):
+                return value.year
+    return date.today().year
+
+
+def _infer_menu_month(sheet, filename: str) -> int | None:
+    texts = [filename]
+    for row in sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 6), values_only=True):
+        texts.extend(_menu_text(value) for value in row if value is not None)
+    match = re.search(r"(?<!\d)(1[0-2]|[1-9])\s*月", " ".join(texts))
+    return int(match.group(1)) if match else None
+
+
+def _parse_menu_date(value, inferred_year: int, inferred_month: int | None) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)) and inferred_month and 1 <= int(value) <= 31:
+        try:
+            return date(inferred_year, inferred_month, int(value))
+        except ValueError:
+            return None
+    text = _menu_text(value)
+    if not text:
+        return None
+    numbers = [int(part) for part in re.findall(r"\d+", text)]
+    try:
+        if len(numbers) >= 3:
+            year, month, day = numbers[:3]
+            if 100 <= year < 1911:
+                year += 1911
+            return date(year, month, day)
+        if len(numbers) == 2:
+            return date(inferred_year, numbers[0], numbers[1])
+        if len(numbers) == 1 and inferred_month:
+            return date(inferred_year, inferred_month, numbers[0])
+    except ValueError:
+        return None
+    return None
+
+
+def _find_menu_header(sheet):
+    best = None
+    for row_number in range(1, min(sheet.max_row, 30) + 1):
+        headers = [_menu_text(sheet.cell(row_number, column).value) for column in range(1, sheet.max_column + 1)]
+        date_columns = [index + 1 for index, value in enumerate(headers) if "日期" in value]
+        weekday_columns = [index + 1 for index, value in enumerate(headers) if "星期" in value or "週次" in value]
+        dish_columns = [index + 1 for index, value in enumerate(headers) if _menu_category(value)]
+        score = (4 if date_columns else 0) + (2 if weekday_columns else 0) + len(dish_columns)
+        if date_columns and dish_columns and (best is None or score > best[0]):
+            best = (score, row_number, date_columns[0], weekday_columns[0] if weekday_columns else None, headers, dish_columns)
+    return best
+
+
+def parse_menu_workbook(raw: bytes, filename: str) -> dict:
+    """從可見工作表自動定位日期與菜名欄，回傳依日期去重的菜色。"""
+
+    if not raw:
+        raise ValueError("檔案是空的。")
+    if len(raw) > 10 * 1024 * 1024:
+        raise ValueError("檔案超過 10MB，請拆成較小的菜單再匯入。")
+    if not filename.lower().endswith((".xlsx", ".xlsm")):
+        raise ValueError("目前請上傳 .xlsx 或 .xlsm 菜單。")
+    try:
+        workbook = load_workbook(BytesIO(raw), read_only=False, data_only=True)
+    except Exception as exc:
+        raise ValueError("Excel 無法讀取，請確認檔案沒有損壞或加密。") from exc
+
+    by_date: dict[date, dict[str, dict]] = defaultdict(dict)
+    visible_sheets = 0
+    parsed_sheets = 0
+    duplicate_count = 0
+    raw_dish_count = 0
+    for sheet in workbook.worksheets:
+        if sheet.sheet_state != "visible":
+            continue
+        visible_sheets += 1
+        header = _find_menu_header(sheet)
+        if not header:
+            continue
+        parsed_sheets += 1
+        _, header_row, date_column, _weekday_column, headers, dish_columns = header
+        first_dish = min(dish_columns)
+        last_dish = max(dish_columns)
+        inferred_year = _infer_menu_year(sheet, filename)
+        inferred_month = _infer_menu_month(sheet, filename)
+        column_categories = {}
+        current_category = "其他"
+        for column in range(first_dish, last_dish + 1):
+            detected = _menu_category(headers[column - 1])
+            if detected:
+                current_category = detected
+            column_categories[column] = current_category
+
+        for row_number in range(header_row + 1, sheet.max_row + 1):
+            service_date = _parse_menu_date(
+                sheet.cell(row_number, date_column).value,
+                inferred_year,
+                inferred_month,
+            )
+            if not service_date:
+                continue
+            row_dishes = []
+            for column in range(first_dish, last_dish + 1):
+                name = _menu_text(sheet.cell(row_number, column).value)
+                if not name or name.startswith("="):
+                    continue
+                row_dishes.append({"name": name[:120], "category": column_categories[column]})
+            if len(row_dishes) == 1 and re.search(r"節|放假|停餐|補假|快樂", row_dishes[0]["name"]):
+                continue
+            for dish in row_dishes:
+                raw_dish_count += 1
+                key = _menu_name_key(dish["name"])
+                if key in by_date[service_date]:
+                    duplicate_count += 1
+                    continue
+                by_date[service_date][key] = dish
+
+    if not by_date:
+        if not visible_sheets:
+            raise ValueError("Excel 沒有可見的工作表。")
+        if not parsed_sheets:
+            raise ValueError("找不到「日期」與菜名欄位。請提供這種格式作為新模板。")
+        raise ValueError("有找到欄位，但沒有辨識到可匯入的日期與菜名。")
+    return {
+        "days": [
+            {"date": service_date, "dishes": list(dishes.values())}
+            for service_date, dishes in sorted(by_date.items())
+        ],
+        "parsed_sheets": parsed_sheets,
+        "raw_dish_count": raw_dish_count,
+        "duplicate_count": duplicate_count,
+    }
+
+
+@order_bp.post("/summary/import")
+def summary_import():
+    upload = request.files.get("menu_file")
+    if not upload or not upload.filename:
+        flash("請先選擇要匯入的 Excel 菜單。", "error")
+        return redirect(url_for("order_tool.summary"))
+    try:
+        parsed = parse_menu_workbook(upload.read(), upload.filename)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("order_tool.summary"))
+
+    recipes_by_name = {
+        _menu_name_key(recipe.name): recipe
+        for recipe in KitchenRecipe.query.order_by(KitchenRecipe.id).all()
+    }
+    added_items = 0
+    existing_items = parsed["duplicate_count"]
+    created_recipes = 0
+    locked_days = 0
+    imported_days = 0
+    for day in parsed["days"]:
+        service_date = day["date"]
+        plan = KitchenMenuPlan.query.filter_by(
+            service_date=service_date, meal_type="午餐", status="draft"
+        ).order_by(KitchenMenuPlan.id).first()
+        if plan is None:
+            locked_plan = KitchenMenuPlan.query.filter_by(
+                service_date=service_date, meal_type="午餐"
+            ).first()
+            if locked_plan:
+                locked_days += 1
+                continue
+            plan = KitchenMenuPlan(
+                service_date=service_date,
+                meal_type="午餐",
+                name="中央菜單",
+                status="draft",
+            )
+            db.session.add(plan)
+            db.session.flush()
+        existing_recipe_ids = {item.recipe_id for item in plan.items}
+        day_added = 0
+        for dish in day["dishes"]:
+            key = _menu_name_key(dish["name"])
+            recipe = recipes_by_name.get(key)
+            if recipe is None:
+                recipe = KitchenRecipe(
+                    name=dish["name"],
+                    category=dish["category"] if dish["category"] in CATEGORIES else "其他",
+                    active=True,
+                )
+                db.session.add(recipe)
+                db.session.flush()
+                recipes_by_name[key] = recipe
+                created_recipes += 1
+            elif not recipe.active:
+                recipe.active = True
+            if recipe.id in existing_recipe_ids:
+                existing_items += 1
+                continue
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=recipe.id,
+                sort_order=len(existing_recipe_ids),
+            ))
+            existing_recipe_ids.add(recipe.id)
+            added_items += 1
+            day_added += 1
+        if day_added:
+            imported_days += 1
+    db.session.commit()
+
+    first_day = parsed["days"][0]["date"]
+    message = f"匯入完成：{imported_days} 天新增 {added_items} 道菜，略過 {existing_items} 筆重複；建立 {created_recipes} 個新菜色。"
+    if locked_days:
+        message += f" 另有 {locked_days} 天已確認，未修改。"
+    flash(message, "success")
+    week_start = first_day - timedelta(days=first_day.weekday())
+    return redirect(url_for("order_tool.summary", week=week_start.isoformat()))
+
+
+@order_bp.get("/summary.xlsx")
+def summary_export():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    data = _summary_data(service_date)
+    workbook = Workbook()
+    materials = workbook.active
+    materials.title = "材料總表"
+    materials.append(["供餐日期", "餐數（用餐人）", "廠商", "食材", "基本需求量", "基本單位", "換算需求", "採購單位"])
+    for row in data["material_rows"]:
+        ingredient = row["ingredient"]
+        materials.append([
+            service_date.isoformat(),
+            data["total_people"],
+            row["supplier_name"],
+            ingredient.name,
+            float(row["required_amount"]),
+            ingredient.base_unit,
+            float(row["required_qty"]),
+            ingredient.purchase_unit,
+        ])
+    schools = workbook.create_sheet("學校菜單")
+    schools.append(["日期", "餐別", "學校", "人數", "菜單", "狀態"])
+    for row in data["school_rows"]:
+        schools.append([
+            service_date.isoformat(),
+            row["plan"].meal_type,
+            row["school"].name,
+            row["headcount"],
+            row["dishes"],
+            _status_label(row["plan"].status),
+        ])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"材料總表-{service_date.isoformat()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+CATALOG_IMPORT_COLUMNS = (
+    "菜色名稱", "分類", "材料名稱", "每人用量", "基本單位",
+    "採購單位", "1採購單位換算", "單價", "廠商", "備註",
+)
+
+
+def _catalog_serializer():
+    return URLSafeSerializer(current_app.secret_key, salt="kitchen-catalog-import-v1")
+
+
+def _catalog_rows_from_xlsx(raw: bytes):
+    if not raw:
+        return [], ["檔案是空的。"]
+    if len(raw) > 5 * 1024 * 1024:
+        return [], ["檔案超過 5MB，請拆成多份匯入。"]
+    try:
+        workbook = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    except Exception:
+        return [], ["無法讀取 Excel，請使用系統下載的 .xlsx 範本。"]
+    sheet = workbook["匯入資料"] if "匯入資料" in workbook.sheetnames else workbook.active
+    values = list(sheet.iter_rows(values_only=True))
+    if not values:
+        return [], ["Excel 沒有資料。"]
+    headers = {str(value).strip(): index for index, value in enumerate(values[0]) if value is not None}
+    missing = [column for column in ("菜色名稱", "材料名稱") if column not in headers]
+    if missing:
+        return [], [f"缺少欄位：{'、'.join(missing)}。請重新下載範本。"]
+
+    rows = []
+    errors = []
+    for row_number, values_row in enumerate(values[1:5001], start=2):
+        def value(column):
+            index = headers.get(column)
+            return values_row[index] if index is not None and index < len(values_row) else None
+
+        recipe_name = str(value("菜色名稱") or "").strip()
+        ingredient_name = str(value("材料名稱") or "").strip()
+        if not recipe_name and not ingredient_name:
+            continue
+        if not recipe_name:
+            errors.append(f"第 {row_number} 列缺少菜色名稱。")
+            continue
+        if not ingredient_name:
+            errors.append(f"第 {row_number} 列缺少材料名稱。")
+            continue
+        category = str(value("分類") or "主菜").strip()
+        if category not in CATEGORIES:
+            errors.append(f"第 {row_number} 列分類「{category}」不正確。")
+            continue
+        base_unit = str(value("基本單位") or "g").strip()
+        purchase_unit = str(value("採購單位") or ("kg" if base_unit == "g" else "個")).strip()
+        if base_unit not in BASE_UNITS or purchase_unit not in PURCHASE_UNITS:
+            errors.append(f"第 {row_number} 列單位不正確。")
+            continue
+        amount = _decimal(value("每人用量"), default=Decimal("0")) or Decimal("0")
+        conversion = _decimal(value("1採購單位換算"), default=Decimal("1000") if base_unit == "g" and purchase_unit == "kg" else Decimal("1"))
+        unit_price = _decimal(value("單價"), default=Decimal("0")) or Decimal("0")
+        if amount < 0 or conversion is None or conversion <= 0 or unit_price < 0:
+            errors.append(f"第 {row_number} 列數量、換算或單價不正確。")
+            continue
+        rows.append({
+            "recipe_name": recipe_name[:120],
+            "category": category,
+            "ingredient_name": ingredient_name[:100],
+            "amount": str(amount),
+            "base_unit": base_unit,
+            "purchase_unit": purchase_unit,
+            "conversion": str(conversion),
+            "unit_price": str(unit_price),
+            "supplier_name": str(value("廠商") or "").strip()[:100],
+            "note": str(value("備註") or "").strip()[:255],
+        })
+    return rows, errors
+
+
+@order_bp.get("/catalog-template.xlsx")
+def catalog_template():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "匯入資料"
+    sheet.append(CATALOG_IMPORT_COLUMNS)
+    sheet.freeze_panes = "A2"
+    widths = (22, 12, 22, 14, 12, 12, 18, 12, 22, 28)
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[chr(64 + index)].width = width
+    example = workbook.create_sheet("填寫範例")
+    example.append(CATALOG_IMPORT_COLUMNS)
+    example.append(["茄汁豬柳", "主菜", "肉絲", 45, "g", "kg", 1000, 0, "肉品廠商", "同一道菜有多種材料就分多列"])
+    example.append(["茄汁豬柳", "主菜", "洋蔥", 12, "g", "kg", 1000, 0, "蔬菜廠商", "菜色名稱重複列沒關係，系統會合併材料"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="菜色材料總表匯入範本.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@order_bp.route("/catalog-import", methods=["GET", "POST"])
+def catalog_import():
+    if request.method == "GET":
+        return render_template("kitchen/catalog_import.html")
+    upload = request.files.get("file")
+    if not upload or not upload.filename.lower().endswith(".xlsx"):
+        flash("請選擇 .xlsx Excel 檔。", "error")
+        return redirect(url_for("order_tool.catalog_import"))
+    rows, errors = _catalog_rows_from_xlsx(upload.read())
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["recipe_name"]].append(row)
+    existing_names = {
+        name for (name,) in db.session.query(KitchenRecipe.name).filter(KitchenRecipe.name.in_(list(grouped))).all()
+    } if grouped else set()
+    new_names = [name for name in grouped if name not in existing_names]
+    new_rows = [row for name in new_names for row in grouped[name]]
+    token = _catalog_serializer().dumps(new_rows) if new_rows and not errors else None
+    return render_template(
+        "kitchen/catalog_import.html",
+        preview=True,
+        errors=errors,
+        new_names=new_names,
+        duplicate_names=sorted(existing_names),
+        new_material_count=len({row["ingredient_name"] for row in new_rows}),
+        token=token,
+    )
+
+
+@order_bp.post("/catalog-import/apply")
+def catalog_import_apply():
+    try:
+        rows = _catalog_serializer().loads(request.form.get("token", ""))
+    except BadSignature:
+        flash("匯入預覽已失效，請重新上傳 Excel。", "error")
+        return redirect(url_for("order_tool.catalog_import"))
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["recipe_name"]].append(row)
+    created_recipes = created_components = skipped = 0
+    for recipe_name, recipe_rows in grouped.items():
+        if KitchenRecipe.query.filter_by(name=recipe_name).first():
+            skipped += 1
+            continue
+        first = recipe_rows[0]
+        recipe = KitchenRecipe(name=recipe_name, category=first["category"], note=first["note"] or "由總表 Excel 匯入")
+        db.session.add(recipe)
+        db.session.flush()
+        created_recipes += 1
+        seen_ingredients = set()
+        for item in recipe_rows:
+            if item["ingredient_name"] in seen_ingredients:
+                continue
+            seen_ingredients.add(item["ingredient_name"])
+            supplier = None
+            if item["supplier_name"]:
+                supplier = KitchenSupplier.query.filter_by(name=item["supplier_name"]).one_or_none()
+                if supplier is None:
+                    supplier = KitchenSupplier(name=item["supplier_name"], note="由菜色總表匯入")
+                    db.session.add(supplier)
+                    db.session.flush()
+            ingredient = KitchenIngredient.query.filter_by(name=item["ingredient_name"]).one_or_none()
+            if ingredient is None:
+                ingredient = KitchenIngredient(
+                    name=item["ingredient_name"], supplier_id=supplier.id if supplier else None,
+                    base_unit=item["base_unit"], purchase_unit=item["purchase_unit"],
+                    grams_per_purchase_unit=Decimal(item["conversion"]), unit_price=Decimal(item["unit_price"]),
+                    order_increment=Decimal("0.001") if item["purchase_unit"] == "kg" else Decimal("1"),
+                    note="由菜色總表匯入",
+                )
+                db.session.add(ingredient)
+                db.session.flush()
+            amount = Decimal(item["amount"])
+            db.session.add(KitchenRecipeIngredient(
+                recipe_id=recipe.id,
+                ingredient_id=ingredient.id,
+                grams_per_person=amount,
+                quantity_status="manual" if amount > 0 else "pending",
+                source_note="總表 Excel 匯入" if amount > 0 else "總表 Excel；克數待確認",
+            ))
+            created_components += 1
+    db.session.commit()
+    flash(f"已新增 {created_recipes} 道菜、{created_components} 筆材料；另跳過 {skipped} 道重複菜。", "success")
+    return redirect(url_for("order_tool.catalog_import"))
 
 
 def _generate_date_orders(service_date: date):

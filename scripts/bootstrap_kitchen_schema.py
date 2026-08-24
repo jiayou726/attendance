@@ -15,6 +15,7 @@ KITCHEN_TABLES = (
     "kitchen_school",
     "kitchen_supplier",
     "kitchen_ingredient",
+    "kitchen_supplier_item",
     "kitchen_recipe",
     "kitchen_recipe_ingredient",
     "kitchen_menu_plan",

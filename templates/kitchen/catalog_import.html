@@ -1,0 +1,34 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}匯入菜色總表{% endblock %}
+{% block content %}
+<div class="top"><div><h1>匯入菜色總表</h1><div class="muted">先比對，再確認新增；同名菜色一律跳過，不覆蓋原配方。</div></div><a class="btn secondary" href="{{ url_for('order_tool.summary') }}">← 回總表</a></div>
+<div class="grid">
+  <section class="card span-5">
+    <h2>① 下載格式</h2>
+    <p>同一道菜有多個材料，就用多列填寫。菜色名稱重複列會合併成一道菜。</p>
+    <a class="btn secondary" href="{{ url_for('order_tool.catalog_template') }}">下載 Excel 範本</a>
+    <hr>
+    <h2>② 上傳比對</h2>
+    <form method="post" enctype="multipart/form-data" class="main-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label>選擇填好的 Excel</label><input type="file" name="file" accept=".xlsx" required></div><br>
+      <button class="btn">先看有哪些可以新增</button>
+    </form>
+  </section>
+
+  <section class="card span-7">
+    <h2>③ 比對結果</h2>
+    {% if not preview %}<div class="empty">上傳後，這裡會先列出新菜與重複菜，不會立刻寫入。</div>{% else %}
+      {% if errors %}<div class="flash error"><b>Excel 有問題：</b><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
+      <div class="import-result-grid">
+        <div class="result-box ok"><span>可以新增</span><b>{{ new_names|length }}</b><small>道菜</small></div>
+        <div class="result-box skip"><span>重複跳過</span><b>{{ duplicate_names|length }}</b><small>道菜</small></div>
+        <div class="result-box"><span>新菜材料</span><b>{{ new_material_count }}</b><small>種</small></div>
+      </div>
+      {% if new_names %}<h3>可新增菜色</h3><div class="chip-list">{% for name in new_names %}<span class="pill ok">{{ name }}</span>{% endfor %}</div>{% endif %}
+      {% if duplicate_names %}<hr><h3>已存在，這次不新增</h3><div class="chip-list">{% for name in duplicate_names %}<span class="pill off">{{ name }}</span>{% endfor %}</div>{% endif %}
+      {% if token %}<hr><form method="post" action="{{ url_for('order_tool.catalog_import_apply') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="token" value="{{ token }}"><button class="btn ok">確認新增 {{ new_names|length }} 道菜</button></form>{% endif %}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

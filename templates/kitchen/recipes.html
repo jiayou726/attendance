@@ -16,7 +16,7 @@
   </section>
 
   <section class="card span-7">
-    <h2>菜色清單</h2>
+    <div class="top"><h2>菜色清單</h2><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋菜色，例如茄汁豬柳"><button class="btn secondary">搜尋</button></form></div>
     <div class="muted">這裡的生料合計只加總 g 類食材；「個/人」食材請點進配方查看。</div><br>
     {% if rows %}<div class="table-scroll"><table>
       <thead><tr><th>分類</th><th>菜色</th><th class="right">g 類 AP 生料</th><th class="right">打菜量</th><th>狀態</th><th>操作</th></tr></thead>

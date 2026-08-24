@@ -25,7 +25,7 @@
   </section>
 
   <section class="card span-7">
-    <h2>食材清單</h2>
+    <div class="top"><h2>食材清單</h2><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋食材"><button class="btn secondary">搜尋</button></form></div>
     {% if rows %}<div class="table-scroll"><table>
       <thead><tr><th>食材</th><th>供應商</th><th>配方單位</th><th>採購規格</th><th class="right">單價</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>{% for r in rows %}<tr>

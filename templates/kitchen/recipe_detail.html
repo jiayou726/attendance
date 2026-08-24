@@ -10,10 +10,11 @@
   <section class="card span-8">
     <h2>目前配方</h2>
     {% if recipe.ingredients %}<div class="table-scroll"><table>
-      <thead><tr><th>食材</th><th>每人 AP</th><th>採購規格 / 單價</th><th class="right">每人成本</th><th>修改</th></tr></thead>
+      <thead><tr><th>食材</th><th>每人 AP</th><th>來源</th><th>採購規格 / 單價</th><th class="right">每人成本</th><th>修改</th></tr></thead>
       <tbody>{% for x in recipe.ingredients %}<tr>
         <td>{{ x.ingredient.name }}{% if not x.ingredient.active %}<br><span class="pill off">食材已停用</span>{% endif %}</td>
         <td><form class="row center-y" method="post" action="{{ url_for('order_tool.recipe_ingredient_update', row_id=x.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input style="max-width:120px" name="grams_per_person" type="number" min="0.001" step="0.001" value="{{ x.grams_per_person }}" required><span>{{ x.ingredient.base_unit or 'g' }}/人</span><button class="btn secondary">更新</button></form></td>
+        <td><span class="pill {{ 'warn' if x.quantity_status == 'pending' else ('ok' if x.quantity_status == 'manual' else '') }}">{{ '待確認' if x.quantity_status == 'pending' else ('人工確認' if x.quantity_status == 'manual' else '製造表估算') }}</span><br><span class="muted">{{ x.source_note or '' }}</span></td>
         <td>1 {{ x.ingredient.purchase_unit }} = {{ trim_decimal(x.ingredient.grams_per_purchase_unit) }} {{ x.ingredient.base_unit or 'g' }}<br><span class="muted">${{ '%.2f'|format(x.ingredient.unit_price|float) }}/{{ x.ingredient.purchase_unit }}</span></td>
         <td class="right">${{ '%.3f'|format(component_cost(x)|float) }}</td>
         <td><form method="post" action="{{ url_for('order_tool.recipe_ingredient_delete', row_id=x.id) }}" onsubmit="return confirm('確定移除此食材？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn danger">移除</button></form></td>

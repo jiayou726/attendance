@@ -8,6 +8,10 @@
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="field"><label>廠商名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}"></div><br>
       <div class="field"><label>電話</label><input name="phone" value="{{ edit_row.phone if edit_row and edit_row.phone else '' }}"></div><br>
+      <div class="field"><label>手機</label><input name="mobile" value="{{ edit_row.mobile if edit_row and edit_row.mobile else '' }}"></div><br>
+      <div class="field"><label>聯絡人</label><input name="contact" value="{{ edit_row.contact if edit_row and edit_row.contact else '' }}"></div><br>
+      <div class="field"><label>傳真</label><input name="fax" value="{{ edit_row.fax if edit_row and edit_row.fax else '' }}"></div><br>
+      <div class="field"><label>地址</label><input name="address" value="{{ edit_row.address if edit_row and edit_row.address else '' }}"></div><br>
       <div class="field"><label>備註</label><textarea name="note">{{ edit_row.note if edit_row and edit_row.note else '' }}</textarea></div><br>
       <button class="btn">{{ '儲存修改' if edit_row else '新增' }}</button>
       {% if edit_row %}<a class="btn secondary" href="{{ url_for('order_tool.suppliers') }}">取消</a>{% endif %}
@@ -15,11 +19,11 @@
   </section>
 
   <section class="card span-7">
-    <h2>廠商清單</h2>
+    <div class="top"><h2>廠商清單</h2><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋廠商"><button class="btn secondary">搜尋</button></form></div>
     {% if rows %}<div class="table-scroll"><table>
-      <thead><tr><th>廠商</th><th>電話</th><th>狀態</th><th>備註</th><th>操作</th></tr></thead>
+      <thead><tr><th>廠商</th><th>電話</th><th class="right">叫貨次數</th><th>最後叫貨</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>{% for r in rows %}<tr>
-        <td>{{ r.name }}</td><td>{{ r.phone or '-' }}</td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td><td>{{ r.note or '-' }}</td>
+        <td><a href="{{ url_for('order_tool.supplier_detail', supplier_id=r.id) }}">{{ r.name }}</a></td><td>{{ r.phone or r.mobile or '-' }}</td><td class="right"><b>{{ r.historical_order_count }}</b></td><td>{{ r.last_purchase_date or '-' }}</td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
         <td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.suppliers', edit=r.id) }}">編輯</a>
           <form method="post" action="{{ url_for('order_tool.supplier_toggle', supplier_id=r.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn {{ 'danger' if r.active else 'ok' }}">{{ '停用' if r.active else '恢復' }}</button></form>
         </div></td>

@@ -1,7 +1,9 @@
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
 import pytest
+from openpyxl import Workbook
 
 from app import create_app
 from extensions import db
@@ -11,6 +13,7 @@ from models import (
     KitchenIngredient,
     KitchenMenuAssignment,
     KitchenMenuPlan,
+    KitchenMenuPlanItem,
     KitchenPurchaseOrder,
     KitchenPurchaseOrderItem,
     KitchenRecipe,
@@ -122,10 +125,13 @@ def _create_plan(app, client, ids, service_date="2026-08-13", headcount=801):
     return plan_id
 
 
-def test_kitchen_requires_login(client):
+def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     response = client.get("/admin/order-tool/", follow_redirects=False)
-    assert response.status_code == 302
-    assert "/admin/login" in response.headers["Location"]
+    assert response.status_code == 200
+
+    protected = client.get("/admin/not-a-kitchen-page", follow_redirects=False)
+    assert protected.status_code == 302
+    assert "/admin/login" in protected.headers["Location"]
 
 
 def test_static_pages_render_and_attendance_models_survive(app, authed_client):
@@ -153,6 +159,121 @@ def test_static_pages_render_and_attendance_models_survive(app, authed_client):
     with app.app_context():
         assert db.session.get(Employee, 9001).name == "原打卡員工"
         assert Checkin.query.filter_by(employee_id=9001).count() == 1
+
+
+def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+
+    response = authed_client.get("/admin/order-tool/summary?week=2026-08-13")
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "每週菜單總表" in page
+    assert all(label in page for label in ("週一", "週二", "週三", "週四", "週五", "週六", "週日"))
+    assert "08/10" in page and "08/16" in page
+    assert "搜尋或輸入新菜色" in page
+
+    response = authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    assert response.status_code == 302
+    assert "week=2026-08-10" in response.headers["Location"]
+
+    with app.app_context():
+        plan = KitchenMenuPlan.query.filter_by(
+            service_date=TEST_DAY, meal_type="午餐", name="中央菜單"
+        ).one()
+        item = KitchenMenuPlanItem.query.filter_by(plan_id=plan.id, recipe_id=ids["recipe"]).one()
+        assert item.recipe.name == "南洋綠咖哩雞"
+
+    page = authed_client.get("/admin/order-tool/summary?week=2026-08-10").get_data(as_text=True)
+    assert "南洋綠咖哩雞" in page
+
+    response = authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-14",
+        "week": "2026-08-10",
+        "dish_name": "香煎鯖魚",
+        "category": "主菜",
+    })
+    assert response.status_code == 302
+    with app.app_context():
+        new_recipe = KitchenRecipe.query.filter_by(name="香煎鯖魚", category="主菜").one()
+        friday_plan = KitchenMenuPlan.query.filter_by(service_date=date(2026, 8, 14)).one()
+        assert KitchenMenuPlanItem.query.filter_by(
+            plan_id=friday_plan.id, recipe_id=new_recipe.id
+        ).count() == 1
+
+
+def _menu_upload_file():
+    workbook = Workbook()
+    hidden = workbook.active
+    hidden.title = "舊菜單"
+    hidden.sheet_state = "hidden"
+    hidden.append(["日期", "星期", "主食", "主菜"])
+    hidden.append(["6/1", "一", "不應匯入的舊菜", "舊主菜"])
+
+    sheet = workbook.create_sheet("6月", 0)
+    sheet["A1"] = "中平國小115年6月菜單"
+    sheet.append(["日期", "星期", "主食", "主菜", "副菜", "", "蔬菜", "湯品", "全穀雜糧類(份)"])
+    sheet.append(["6/1", "一", "白米飯", "沙茶雞肉", "麻婆豆腐", "麻婆豆腐", "有機蔬菜", "玉米蛋花湯", 5])
+    sheet.append([None, None, "白米/煮", "雞肉/燒", "豆腐/煮", "豆腐/煮", "青菜/炒", "玉米/煮", None])
+    sheet.append([date(2026, 6, 2), "二", "糙米飯", "日式炸豬排", "日式蒸蛋", "金茸蒲瓜", "有機蔬菜", "肉骨茶湯", 5])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def test_summary_import_detects_template_dates_and_deduplicates(app, authed_client):
+    response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_menu_upload_file(), "中平國小115年6月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "匯入完成" in page
+    assert "2026/06/01 — 2026/06/07" in page
+
+    with app.app_context():
+        monday = KitchenMenuPlan.query.filter_by(service_date=date(2026, 6, 1)).one()
+        tuesday = KitchenMenuPlan.query.filter_by(service_date=date(2026, 6, 2)).one()
+        assert [item.recipe.name for item in monday.items] == [
+            "白米飯", "沙茶雞肉", "麻婆豆腐", "有機蔬菜", "玉米蛋花湯"
+        ]
+        assert len(tuesday.items) == 6
+        assert KitchenRecipe.query.filter_by(name="有機蔬菜").one().category == "青菜"
+        assert KitchenRecipe.query.filter_by(name="不應匯入的舊菜").count() == 0
+        original_item_count = KitchenMenuPlanItem.query.count()
+
+    second = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_menu_upload_file(), "中平國小115年6月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "略過" in second.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenMenuPlanItem.query.count() == original_item_count
+
+
+def test_summary_import_rejects_unknown_template_without_writing(app, authed_client):
+    workbook = Workbook()
+    workbook.active.append(["這是一個還沒支援的格式", "內容"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (output, "陌生模板.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "請提供這種格式作為新模板" in response.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenMenuPlan.query.count() == 0
 
 
 def test_full_801_person_purchase_calculation_and_snapshot(app, authed_client):

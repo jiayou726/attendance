@@ -1,0 +1,106 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}每週菜單總表{% endblock %}
+{% block content %}
+<section class="summary-week-head">
+  <div>
+    <div class="eyebrow">KITCHEN V2</div>
+    <h1>每週菜單總表</h1>
+    <div class="muted">{{ week_start.strftime('%Y/%m/%d') }} — {{ week_end.strftime('%Y/%m/%d') }}　直接在每天欄位新增菜色。</div>
+  </div>
+  <nav class="week-switcher" aria-label="切換週次">
+    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=previous_week.isoformat()) }}">← 上一週</a>
+    <a class="btn" href="{{ url_for('order_tool.summary') }}">回到本週</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=next_week.isoformat()) }}">下一週 →</a>
+  </nav>
+</section>
+
+<script id="recipe-search-data" type="application/json">{{ recipe_options|tojson }}</script>
+
+<section class="menu-week-grid" aria-label="週一到週日菜單">
+  {% for day in days %}
+  <article class="menu-day{% if day.date == today %} is-today{% endif %}">
+    <header class="menu-day-head">
+      <div><b>{{ day.weekday }}</b><span>{{ day.date.strftime('%m/%d') }}</span></div>
+      {% if day.date == today %}<em>今天</em>{% endif %}
+    </header>
+
+    <form class="quick-dish-form" method="post" action="{{ url_for('order_tool.summary_dish_add') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="service_date" value="{{ day.date.isoformat() }}">
+      <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+      {% if day.draft_plans|length == 1 %}
+        <input type="hidden" name="plan_id" value="{{ day.draft_plans[0].id }}">
+      {% elif day.draft_plans|length > 1 %}
+        <select name="plan_id" aria-label="要加入的菜單">
+          {% for plan in day.draft_plans %}<option value="{{ plan.id }}">{{ plan.meal_type }}・{{ plan.name }}</option>{% endfor %}
+        </select>
+      {% endif %}
+      <div class="dish-search-wrap" data-dish-search>
+        <input type="hidden" name="recipe_id" value="">
+        <input class="dish-search-input" name="dish_name" type="search" maxlength="120" placeholder="搜尋或輸入新菜色…" aria-label="搜尋或輸入新菜色" autocomplete="off" {% if day.plans and not day.draft_plans %}disabled{% endif %} required>
+        <div class="dish-search-results" role="listbox" aria-label="符合的菜色" hidden></div>
+      </div>
+      <div class="quick-dish-actions">
+        <select name="category" aria-label="新菜色分類" {% if day.plans and not day.draft_plans %}disabled{% endif %}>
+          {% for category in categories %}<option value="{{ category }}"{% if category == '其他' %} selected{% endif %}>{{ category }}</option>{% endfor %}
+        </select>
+        <button class="btn quick-add" type="submit" {% if day.plans and not day.draft_plans %}disabled{% endif %}>＋ 新增</button>
+      </div>
+      {% if day.plans and not day.draft_plans %}<small>菜單已確認，無法修改</small>{% endif %}
+    </form>
+
+    <div class="menu-day-body">
+      {% if day.plans %}
+        {% for plan in day.plans %}
+        <section class="daily-plan">
+          {% if day.plans|length > 1 or plan.name != '中央菜單' %}
+          <a class="daily-plan-name" href="{{ url_for('order_tool.plan_detail', plan_id=plan.id) }}">{{ plan.meal_type }}・{{ plan.name }}</a>
+          {% endif %}
+          {% if plan.items %}
+            {% for item in plan.items %}
+            <div class="menu-dish">
+              <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+              <a href="{{ url_for('order_tool.recipe_detail', recipe_id=item.recipe.id) }}">{{ item.recipe.name }}</a>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="day-empty small">這張菜單尚無菜色</div>
+          {% endif %}
+        </section>
+        {% endfor %}
+      {% else %}
+        <div class="day-empty"><span>尚未排菜</span><small>從上方選一道菜開始</small></div>
+      {% endif %}
+    </div>
+
+    <footer class="menu-day-foot">
+      <span>{{ day.plans|length }} 張菜單</span>
+      <a href="{{ url_for('order_tool.plans', start=day.date.isoformat()) }}">{% if day.plans %}管理當日菜單{% else %}完整建立{% endif %} ›</a>
+    </footer>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="menu-import-card card">
+  <div class="menu-import-main">
+    <div class="import-mark" aria-hidden="true">匯</div>
+    <div>
+      <h2>匯入菜單</h2>
+      <div class="muted">上傳 Excel，系統會依日期放進週一到週日；同一天相同菜名自動略過。</div>
+    </div>
+    <form method="post" action="{{ url_for('order_tool.summary_import') }}" enctype="multipart/form-data" class="menu-upload-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <label class="file-picker">
+        <span>選擇 Excel 菜單</span>
+        <input name="menu_file" type="file" accept=".xlsx,.xlsm" required>
+      </label>
+      <button class="btn ok" type="submit">匯入總表</button>
+    </form>
+  </div>
+  <div class="menu-template-zone">
+    <div><b>菜單模板</b><span class="pill ok">已支援</span></div>
+    <p>廣豐月菜單：日期、星期、主食、主菜、副菜、蔬菜、湯品。</p>
+    <small>其他版型也可以直接試傳，系統會自動尋找「日期」與菜名欄。無法辨識時不會寫入資料，會提示把該格式加入模板。</small>
+  </div>
+</section>
+{% endblock %}

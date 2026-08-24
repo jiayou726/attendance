@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
 
@@ -203,6 +203,65 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
         assert KitchenMenuPlanItem.query.filter_by(
             plan_id=friday_plan.id, recipe_id=new_recipe.id
         ).count() == 1
+
+
+def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+
+    page = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert "各家學校菜單" in page
+    assert "南洋綠咖哩雞" in page
+    assert "供餐人數" in page
+
+    payload = {"school_id": str(ids["school"]), "week": "2026-08-10"}
+    for offset in range(7):
+        day = date(2026, 8, 10) + timedelta(days=offset)
+        payload[f"headcount_{day.isoformat()}"] = "0"
+    payload["headcount_2026-08-13"] = "586"
+    payload["recipes_2026-08-13"] = str(ids["recipe"])
+    response = authed_client.post("/admin/order-tool/summary/schools/save", data=payload)
+    assert response.status_code == 302
+
+    with app.app_context():
+        plan = KitchenMenuPlan.query.filter_by(
+            service_date=TEST_DAY, meal_type="午餐", name="內小菜單"
+        ).one()
+        assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=ids["school"]).one()
+        assert assignment.headcount == 586
+        assert [item.recipe_id for item in plan.items] == [ids["recipe"]]
+
+    plans_page = authed_client.get("/admin/order-tool/plans", follow_redirects=False)
+    assert plans_page.status_code == 302
+    assert "/summary" in plans_page.headers["Location"]
+
+
+def test_school_menu_can_import_school_excel_directly(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    response = authed_client.post(
+        "/admin/order-tool/summary/schools/import",
+        data={
+            "school_id": str(ids["school"]),
+            "week": "2026-06-01",
+            "menu_file": (_menu_upload_file(), "中平國小115年6月菜單.xlsx"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "已匯入 內小" in response.get_data(as_text=True)
+    with app.app_context():
+        plan = KitchenMenuPlan.query.filter_by(
+            service_date=date(2026, 6, 1), meal_type="午餐", name="內小菜單"
+        ).one()
+        assert KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=ids["school"]).one().headcount == 0
+        assert "沙茶雞肉" in [item.recipe.name for item in plan.items]
 
 
 def _menu_upload_file():

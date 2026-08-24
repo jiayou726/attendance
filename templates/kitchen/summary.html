@@ -11,6 +11,7 @@
     <a class="btn secondary" href="{{ url_for('order_tool.summary', week=previous_week.isoformat()) }}">← 上一週</a>
     <a class="btn" href="{{ url_for('order_tool.summary') }}">回到本週</a>
     <a class="btn secondary" href="{{ url_for('order_tool.summary', week=next_week.isoformat()) }}">下一週 →</a>
+    <a class="btn ok summary-next" href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">下一步：選擇學校 →</a>
   </nav>
 </section>
 
@@ -75,7 +76,7 @@
 
     <footer class="menu-day-foot">
       <span>{{ day.plans|length }} 張菜單</span>
-      <a href="{{ url_for('order_tool.plans', start=day.date.isoformat()) }}">{% if day.plans %}管理當日菜單{% else %}完整建立{% endif %} ›</a>
+      <a href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">分配學校 ›</a>
     </footer>
   </article>
   {% endfor %}

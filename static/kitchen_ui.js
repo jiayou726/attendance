@@ -141,4 +141,14 @@
       text.textContent = input.files?.[0]?.name || '選擇 Excel 菜單';
     });
   });
+
+  document.querySelectorAll('[data-school-picker] select[name="school_id"]').forEach((select) => {
+    select.addEventListener('change', () => select.form?.requestSubmit());
+  });
+
+  document.querySelectorAll('.school-dish-check input[type="checkbox"]').forEach((checkbox) => {
+    const refresh = () => checkbox.closest('.school-dish-check')?.classList.toggle('selected', checkbox.checked);
+    checkbox.addEventListener('change', refresh);
+    refresh();
+  });
 })();

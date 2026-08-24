@@ -3,7 +3,7 @@
 {% block content %}
 <div class="top">
   <div><h1>{{ plan.service_date }}・{{ plan.meal_type }}・{{ plan.name }}</h1><div class="muted">{{ '已確認，菜單已鎖定。' if plan.status == 'confirmed' else '先排菜，再設定每間學校當日人數。' }}</div></div>
-  <a class="btn secondary" href="{{ url_for('order_tool.plans') }}">← 菜單清單</a>
+  <a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=plan.service_date.isoformat()) }}">← 各校菜單</a>
 </div>
 
 {% if has_confirmed_orders %}<div class="notice">這一天已有已確認採購單。歷史採購內容已 snapshot，不會因主檔變更而改變；若要修改本日正式採購，請先到採購單重開草稿。</div>{% endif %}

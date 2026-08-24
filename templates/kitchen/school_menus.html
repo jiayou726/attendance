@@ -1,0 +1,82 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}各校週菜單{% endblock %}
+{% block content %}
+<section class="summary-week-head school-menu-head">
+  <div>
+    <div class="eyebrow">步驟 2</div>
+    <h1>各家學校菜單</h1>
+    <div class="muted">{{ week_start.strftime('%Y/%m/%d') }} — {{ week_end.strftime('%Y/%m/%d') }}　選學校、勾菜色，再填每天實際供餐人數。</div>
+  </div>
+  <nav class="week-switcher" aria-label="切換週次">
+    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=week_start.isoformat()) }}">← 回總表</a>
+    {% if selected_school %}<a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=previous_week.isoformat(), school_id=selected_school.id) }}">上一週</a>{% endif %}
+    {% if selected_school %}<a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=next_week.isoformat(), school_id=selected_school.id) }}">下一週</a>{% endif %}
+  </nav>
+</section>
+
+{% if schools %}
+<section class="school-picker-card card">
+  <form method="get" action="{{ url_for('order_tool.school_menus') }}" class="school-picker-form" data-school-picker>
+    <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+    <div class="field">
+      <label for="school-menu-picker">先選擇學校</label>
+      <select id="school-menu-picker" name="school_id">
+        {% for school in schools %}<option value="{{ school.id }}"{% if selected_school and school.id == selected_school.id %} selected{% endif %}>{{ school.name }}（平常 {{ school.default_headcount }} 人）</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn" type="submit">查看這間學校</button>
+  </form>
+  <form method="post" action="{{ url_for('order_tool.school_menus_import') }}" enctype="multipart/form-data" class="school-import-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="school_id" value="{{ selected_school.id }}">
+    <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+    <div><b>或匯入 {{ selected_school.name }} 的菜單</b><small>日期會自動對到星期；同日同菜名不重複。</small></div>
+    <label class="file-picker"><span>選擇該校 Excel</span><input name="menu_file" type="file" accept=".xlsx,.xlsm" required></label>
+    <button class="btn ok" type="submit">匯入這間學校</button>
+  </form>
+</section>
+
+<form method="post" action="{{ url_for('order_tool.school_menus_save') }}" class="school-week-form">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="school_id" value="{{ selected_school.id }}">
+  <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+  <div class="school-menu-title">
+    <div><span class="pill ok">目前學校</span><h2>{{ selected_school.name }}</h2></div>
+    <button class="btn ok" type="submit">儲存本週菜單與人數</button>
+  </div>
+
+  <section class="school-week-grid" aria-label="{{ selected_school.name }} 週一到週日菜單">
+    {% for day in days %}
+    <article class="school-menu-day{% if day.locked %} locked{% endif %}">
+      <header class="school-day-head">
+        <div><b>{{ day.weekday }}</b><span>{{ day.date.strftime('%m/%d') }}</span></div>
+        {% if day.locked %}<em>已確認</em>{% endif %}
+      </header>
+      <label class="headcount-box">
+        <span>供餐人數</span>
+        <input name="headcount_{{ day.date.isoformat() }}" type="number" min="0" value="{{ day.headcount }}" required{% if day.locked %} disabled{% endif %}>
+        <i>人</i>
+      </label>
+      <div class="school-dish-list">
+        {% if day.source_items %}
+          {% for item in day.source_items %}
+          <label class="school-dish-check{% if item.recipe_id in day.selected_ids %} selected{% endif %}">
+            <input name="recipes_{{ day.date.isoformat() }}" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids %} checked{% endif %}{% if day.locked %} disabled{% endif %}>
+            <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+            <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
+          </label>
+          {% endfor %}
+        {% else %}
+          <div class="day-empty small">總表這天還沒有菜色</div>
+        {% endif %}
+      </div>
+      <footer><b>{{ day.selected_ids|length }}</b> 道已勾選</footer>
+    </article>
+    {% endfor %}
+  </section>
+  <div class="school-save-bar"><button class="btn ok" type="submit">儲存 {{ selected_school.name }} 本週菜單與人數</button></div>
+</form>
+{% else %}
+<section class="card empty">目前沒有啟用中的學校，請先到「學校」新增。</section>
+{% endif %}
+{% endblock %}

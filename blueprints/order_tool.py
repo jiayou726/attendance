@@ -736,6 +736,10 @@ def recipe_ingredient_delete(row_id: int):
 
 @order_bp.route("/plans", methods=["GET", "POST"])
 def plans():
+    if request.method == "GET":
+        selected = _date(request.args.get("start"), default=date.today()) or date.today()
+        week_start = selected - timedelta(days=selected.weekday())
+        return redirect(url_for("order_tool.summary", week=week_start.isoformat()))
     if request.method == "POST":
         service_date = _date(request.form.get("service_date"))
         meal_type = request.form.get("meal_type", "午餐").strip()
@@ -1007,7 +1011,7 @@ def plan_delete(plan_id: int):
     db.session.delete(plan)
     db.session.commit()
     flash("草稿菜單已刪除。", "success")
-    return redirect(url_for("order_tool.plans"))
+    return redirect(url_for("order_tool.summary", week=plan.service_date.isoformat()))
 
 
 # ─────────────────────────────────────────────
@@ -1103,7 +1107,10 @@ def summary():
     week_start = selected_date - timedelta(days=selected_date.weekday())
     week_end = week_start + timedelta(days=6)
     plans = (
-        KitchenMenuPlan.query.filter(KitchenMenuPlan.service_date.between(week_start, week_end))
+        KitchenMenuPlan.query.filter(
+            KitchenMenuPlan.service_date.between(week_start, week_end),
+            db.or_(KitchenMenuPlan.name == "中央菜單", ~KitchenMenuPlan.assignments.any()),
+        )
         .options(selectinload(KitchenMenuPlan.items).selectinload(KitchenMenuPlanItem.recipe))
         .order_by(KitchenMenuPlan.service_date, KitchenMenuPlan.meal_type, KitchenMenuPlan.name)
         .all()
@@ -1136,6 +1143,274 @@ def summary():
         next_week=week_start + timedelta(days=7),
         today=date.today(),
     )
+
+
+def _school_assignment_for_day(school_id: int, service_date: date) -> KitchenMenuAssignment | None:
+    return (
+        KitchenMenuAssignment.query.join(KitchenMenuPlan)
+        .filter(
+            KitchenMenuAssignment.school_id == school_id,
+            KitchenMenuPlan.service_date == service_date,
+            KitchenMenuPlan.meal_type == "午餐",
+        )
+        .first()
+    )
+
+
+def _editable_school_plan(school: KitchenSchool, service_date: date) -> KitchenMenuPlan:
+    """取得學校專屬菜單；舊資料若把學校掛在中央菜單，先安全拆開。"""
+
+    assignment = _school_assignment_for_day(school.id, service_date)
+    if assignment and assignment.plan.name != "中央菜單":
+        return assignment.plan
+    if assignment:
+        db.session.delete(assignment)
+        db.session.flush()
+
+    menu_name = f"{school.name}菜單"
+    plan = KitchenMenuPlan.query.filter_by(
+        service_date=service_date,
+        meal_type="午餐",
+        name=menu_name,
+    ).first()
+    if plan is None:
+        plan = KitchenMenuPlan(
+            service_date=service_date,
+            meal_type="午餐",
+            name=menu_name,
+            status="draft",
+        )
+        db.session.add(plan)
+        db.session.flush()
+    if not KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).first():
+        db.session.add(KitchenMenuAssignment(
+            plan_id=plan.id,
+            school_id=school.id,
+            headcount=max(school.default_headcount, 0),
+        ))
+        db.session.flush()
+    return plan
+
+
+@order_bp.get("/summary/schools")
+def school_menus():
+    selected_date = _date(request.args.get("week"), default=date.today()) or date.today()
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
+    requested_school_id = _int(request.args.get("school_id"), default=0) or 0
+    selected_school = next((school for school in schools if school.id == requested_school_id), None)
+    if selected_school is None and schools:
+        selected_school = schools[0]
+
+    central_plans = (
+        KitchenMenuPlan.query.filter(
+            KitchenMenuPlan.service_date.between(week_start, week_end),
+            KitchenMenuPlan.meal_type == "午餐",
+            db.or_(KitchenMenuPlan.name == "中央菜單", ~KitchenMenuPlan.assignments.any()),
+        )
+        .options(selectinload(KitchenMenuPlan.items).selectinload(KitchenMenuPlanItem.recipe))
+        .order_by(KitchenMenuPlan.service_date, KitchenMenuPlan.id)
+        .all()
+    )
+    school_assignments = []
+    if selected_school:
+        school_assignments = (
+            KitchenMenuAssignment.query.join(KitchenMenuPlan)
+            .filter(
+                KitchenMenuAssignment.school_id == selected_school.id,
+                KitchenMenuPlan.service_date.between(week_start, week_end),
+                KitchenMenuPlan.meal_type == "午餐",
+            )
+            .options(
+                selectinload(KitchenMenuAssignment.plan)
+                .selectinload(KitchenMenuPlan.items)
+                .selectinload(KitchenMenuPlanItem.recipe)
+            )
+            .all()
+        )
+    assignment_by_date = {row.plan.service_date: row for row in school_assignments}
+    days = []
+    for offset, weekday in enumerate(WEEKDAY_LABELS):
+        day_date = week_start + timedelta(days=offset)
+        source_items = []
+        seen_recipe_ids = set()
+        for plan in central_plans:
+            if plan.service_date != day_date:
+                continue
+            for item in plan.items:
+                if item.recipe_id not in seen_recipe_ids:
+                    source_items.append(item)
+                    seen_recipe_ids.add(item.recipe_id)
+        assignment = assignment_by_date.get(day_date)
+        selected_ids = {item.recipe_id for item in assignment.plan.items} if assignment else set()
+        if assignment:
+            for item in assignment.plan.items:
+                if item.recipe_id not in seen_recipe_ids:
+                    source_items.append(item)
+                    seen_recipe_ids.add(item.recipe_id)
+        days.append({
+            "date": day_date,
+            "weekday": weekday,
+            "source_items": source_items,
+            "selected_ids": selected_ids,
+            "assignment": assignment,
+            "headcount": assignment.headcount if assignment else (selected_school.default_headcount if selected_school else 0),
+            "locked": bool(assignment and assignment.plan.status != "draft"),
+        })
+    return render_template(
+        "kitchen/school_menus.html",
+        schools=schools,
+        selected_school=selected_school,
+        days=days,
+        week_start=week_start,
+        week_end=week_end,
+        previous_week=week_start - timedelta(days=7),
+        next_week=week_start + timedelta(days=7),
+    )
+
+
+@order_bp.post("/summary/schools/save")
+def school_menus_save():
+    school_id = _int(request.form.get("school_id"), default=0) or 0
+    school = db.session.get(KitchenSchool, school_id)
+    selected_date = _date(request.form.get("week"), default=date.today()) or date.today()
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+    redirect_to = url_for("order_tool.school_menus", week=week_start.isoformat(), school_id=school_id)
+    if not school or not school.active:
+        flash("請先選擇有效的學校。", "error")
+        return redirect(redirect_to)
+
+    saved_days = 0
+    locked_days = 0
+    for offset in range(7):
+        service_date = week_start + timedelta(days=offset)
+        field_suffix = service_date.isoformat()
+        assignment = _school_assignment_for_day(school.id, service_date)
+        if assignment and assignment.plan.status != "draft":
+            locked_days += 1
+            continue
+        headcount = _int(request.form.get(f"headcount_{field_suffix}"), default=None)
+        if headcount is None or headcount < 0:
+            db.session.rollback()
+            flash(f"{service_date.strftime('%m/%d')} 的人數不可為負數。", "error")
+            return redirect(redirect_to)
+        selected_recipe_ids = {
+            recipe_id for raw in request.form.getlist(f"recipes_{field_suffix}")
+            if (recipe_id := _int(raw, default=0)) and db.session.get(KitchenRecipe, recipe_id)
+        }
+        if not selected_recipe_ids:
+            if assignment:
+                plan = assignment.plan
+                if plan.name == "中央菜單":
+                    db.session.delete(assignment)
+                else:
+                    db.session.delete(plan)
+                saved_days += 1
+            continue
+
+        plan = _editable_school_plan(school, service_date)
+        if plan.status != "draft":
+            locked_days += 1
+            continue
+        for item in list(plan.items):
+            db.session.delete(item)
+        db.session.flush()
+        recipes = KitchenRecipe.query.filter(KitchenRecipe.id.in_(selected_recipe_ids)).order_by(
+            KitchenRecipe.category, KitchenRecipe.name
+        ).all()
+        for sort_order, recipe in enumerate(recipes):
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=recipe.id,
+                sort_order=sort_order,
+            ))
+        assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
+        assignment.headcount = headcount
+        saved_days += 1
+    db.session.commit()
+    message = f"已儲存 {school.name} 本週菜單與人數（{saved_days} 天）。"
+    if locked_days:
+        message += f" {locked_days} 天已確認，未修改。"
+    flash(message, "success")
+    return redirect(redirect_to)
+
+
+@order_bp.post("/summary/schools/import")
+def school_menus_import():
+    school_id = _int(request.form.get("school_id"), default=0) or 0
+    school = db.session.get(KitchenSchool, school_id)
+    upload = request.files.get("menu_file")
+    fallback_week = _date(request.form.get("week"), default=date.today()) or date.today()
+    redirect_to = url_for("order_tool.school_menus", week=fallback_week.isoformat(), school_id=school_id)
+    if not school or not school.active:
+        flash("請先選擇要匯入的學校。", "error")
+        return redirect(redirect_to)
+    if not upload or not upload.filename:
+        flash("請先選擇該校的 Excel 菜單。", "error")
+        return redirect(redirect_to)
+    try:
+        parsed = parse_menu_workbook(upload.read(), upload.filename)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(redirect_to)
+
+    recipes_by_name = {
+        _menu_name_key(recipe.name): recipe
+        for recipe in KitchenRecipe.query.order_by(KitchenRecipe.id).all()
+    }
+    added_items = 0
+    duplicate_items = parsed["duplicate_count"]
+    imported_days = 0
+    locked_days = 0
+    for day in parsed["days"]:
+        service_date = day["date"]
+        assignment = _school_assignment_for_day(school.id, service_date)
+        if assignment and assignment.plan.status != "draft":
+            locked_days += 1
+            continue
+        plan = _editable_school_plan(school, service_date)
+        existing_ids = {item.recipe_id for item in plan.items}
+        day_added = 0
+        for dish in day["dishes"]:
+            key = _menu_name_key(dish["name"])
+            recipe = recipes_by_name.get(key)
+            if recipe is None:
+                recipe = KitchenRecipe(
+                    name=dish["name"],
+                    category=dish["category"] if dish["category"] in CATEGORIES else "其他",
+                    active=True,
+                )
+                db.session.add(recipe)
+                db.session.flush()
+                recipes_by_name[key] = recipe
+            elif not recipe.active:
+                recipe.active = True
+            if recipe.id in existing_ids:
+                duplicate_items += 1
+                continue
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=recipe.id,
+                sort_order=len(existing_ids),
+            ))
+            existing_ids.add(recipe.id)
+            added_items += 1
+            day_added += 1
+        if day_added:
+            imported_days += 1
+    db.session.commit()
+    first_day = parsed["days"][0]["date"]
+    first_week = first_day - timedelta(days=first_day.weekday())
+    message = f"已匯入 {school.name}：{imported_days} 天新增 {added_items} 道菜，略過 {duplicate_items} 筆重複。"
+    if locked_days:
+        message += f" {locked_days} 天已確認，未修改。"
+    flash(message, "success")
+    return redirect(url_for(
+        "order_tool.school_menus",
+        week=first_week.isoformat(),
+        school_id=school.id,
+    ))
 
 
 @order_bp.post("/summary/dishes")
@@ -1183,7 +1458,7 @@ def summary_dish_add():
         return redirect(redirect_to)
     if plan is None:
         plan = KitchenMenuPlan.query.filter_by(
-            service_date=service_date, meal_type="午餐", status="draft"
+            service_date=service_date, meal_type="午餐", name="中央菜單", status="draft"
         ).order_by(KitchenMenuPlan.id).first()
     if plan is None:
         existing_central = KitchenMenuPlan.query.filter_by(
@@ -1408,11 +1683,11 @@ def summary_import():
     for day in parsed["days"]:
         service_date = day["date"]
         plan = KitchenMenuPlan.query.filter_by(
-            service_date=service_date, meal_type="午餐", status="draft"
+            service_date=service_date, meal_type="午餐", name="中央菜單", status="draft"
         ).order_by(KitchenMenuPlan.id).first()
         if plan is None:
             locked_plan = KitchenMenuPlan.query.filter_by(
-                service_date=service_date, meal_type="午餐"
+                service_date=service_date, meal_type="午餐", name="中央菜單"
             ).first()
             if locked_plan:
                 locked_days += 1

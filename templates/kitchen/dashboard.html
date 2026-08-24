@@ -3,7 +3,7 @@
 {% block content %}
 <section class="home-welcome">
   <div><span class="eyebrow">今天要做什麼？</span><h1>從學校開始，最後拿到材料總表</h1><p>學校人數會記住；選好菜單後，系統依每人用量自動換算材料。</p></div>
-  <a class="btn home-primary" href="{{ url_for('order_tool.plans') }}">開始總菜單</a>
+  <a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開始總菜單</a>
 </section>
 
 <div class="home-actions">
@@ -17,7 +17,7 @@
 
 <div class="grid">
   <section class="card span-12">
-    <div class="top"><div><h2>未來 7 天菜單</h2><div class="muted">開啟菜單即可分配學校並修改當天人數。</div></div><a class="btn" href="{{ url_for('order_tool.plans') }}">開始排菜</a></div>
+    <div class="top"><div><h2>未來 7 天菜單</h2><div class="muted">先編總表，再到下一步勾選各校菜色與修改人數。</div></div><a class="btn" href="{{ url_for('order_tool.summary') }}">開始排菜</a></div>
     {% if plans %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>餐別</th><th>菜單</th><th>學校 / 人數</th><th>狀態</th><th></th></tr></thead><tbody>
       {% for p in plans %}<tr><td>{{ p.service_date }}</td><td>{{ p.meal_type }}</td><td>{{ p.name }}</td><td>{{ p.assignments|length }} 校 / {{ p.assignments|sum(attribute='headcount') }} 人</td><td><span class="pill {{ 'ok' if p.status == 'confirmed' else 'warn' }}">{{ '已確認' if p.status == 'confirmed' else '草稿' }}</span></td><td><a href="{{ url_for('order_tool.plan_detail', plan_id=p.id) }}">開啟</a></td></tr>{% endfor %}
     </tbody></table></div>{% else %}<div class="empty">這 7 天還沒有菜單。</div>{% endif %}

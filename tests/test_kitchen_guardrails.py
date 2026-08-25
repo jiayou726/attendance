@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import inspect, text
 
 from app import create_app
 from extensions import db
@@ -38,6 +39,45 @@ def client(app):
     with client.session_transaction() as sess:
         sess["role"] = "mgr"
     return client
+
+
+def test_app_adds_missing_school_service_status_without_full_migration(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy_kitchen.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute("""
+        CREATE TABLE kitchen_menu_assignment (
+            id INTEGER PRIMARY KEY,
+            plan_id INTEGER NOT NULL,
+            school_id INTEGER NOT NULL,
+            headcount INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    connection.execute(
+        "INSERT INTO kitchen_menu_assignment (id, plan_id, school_id, headcount) VALUES (1, 1, 1, 100)"
+    )
+    connection.commit()
+    connection.close()
+
+    legacy_app = create_app({
+        "TESTING": True,
+        "SECRET_KEY": "schema-compatibility-test",
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+        "AUTO_CREATE_DB": False,
+        "KITCHEN_CSRF_ENABLED": False,
+        "PRODUCTION": False,
+    })
+    with legacy_app.app_context():
+        columns = {
+            column["name"]
+            for column in inspect(db.engine).get_columns("kitchen_menu_assignment")
+        }
+        status = db.session.execute(text(
+            "SELECT service_status FROM kitchen_menu_assignment WHERE id = 1"
+        )).scalar_one()
+    assert "service_status" in columns
+    assert status == "serving"
 
 
 def _seed_g_recipe(app, client, service_date="2026-08-13"):

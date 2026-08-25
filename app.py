@@ -3,6 +3,7 @@ import flask.blueprints
 
 import os
 from flask import Flask, redirect, request, session, url_for
+from sqlalchemy import inspect, text
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
@@ -16,6 +17,24 @@ from blueprints.records import rec_bp
 from blueprints.export import exp_bp
 from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
+
+
+def _ensure_kitchen_schema_compatibility(app: Flask):
+    """Apply only the additive kitchen fix needed when deploys skip Alembic."""
+
+    with app.app_context():
+        inspector = inspect(db.engine)
+        table_name = "kitchen_menu_assignment"
+        if not inspector.has_table(table_name):
+            return
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if "service_status" in columns:
+            return
+        with db.engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE kitchen_menu_assignment "
+                "ADD COLUMN service_status VARCHAR(20) NOT NULL DEFAULT 'serving'"
+            ))
 
 
 def create_app(config_overrides=None) -> Flask:
@@ -65,6 +84,7 @@ def create_app(config_overrides=None) -> Flask:
     if app.config.get("AUTO_CREATE_DB", False):
         with app.app_context():
             db.create_all()
+    _ensure_kitchen_schema_compatibility(app)
 
     return app
 

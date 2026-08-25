@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 from openpyxl import Workbook, load_workbook
 
+import blueprints.order_tool as order_tool_module
 from app import create_app
 from extensions import db
 from models import (
@@ -432,6 +433,70 @@ def _menu_upload_file():
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def _menu_upload_file_with_regular_and_vegetarian():
+    workbook = Workbook()
+    regular = workbook.active
+    regular.title = "中平一般菜單"
+    regular.append(["日期", "星期", "主食", "主菜", "副菜", "青菜", "湯品"])
+    regular.append(["8/31", "一", "白米飯", "馬鈴薯燉肉", "炒四季豆", "有機蔬菜", "味噌湯"])
+
+    vegetarian = workbook.create_sheet("中平菜單 (素食)")
+    vegetarian.append(["日期", "星期", "主食", "主菜", "副菜", "青菜", "湯品"])
+    vegetarian.append(["8/31", "一", "糙米飯", "馬鈴薯豆腸", "炒毛豆", "季節蔬菜", "紫菜湯"])
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def test_menu_parser_reads_cells_without_loading_drawings(monkeypatch):
+    real_load_workbook = order_tool_module.load_workbook
+    observed = {}
+
+    def checked_load_workbook(*args, **kwargs):
+        observed.update(kwargs)
+        return real_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(order_tool_module, "load_workbook", checked_load_workbook)
+    parsed = order_tool_module.parse_menu_workbook(
+        _menu_upload_file_with_regular_and_vegetarian().read(),
+        "中平115年8月菜單.xlsx",
+    )
+
+    assert observed["read_only"] is True
+    assert parsed["sheet_names"] == ["中平一般菜單"]
+
+
+def test_summary_import_can_choose_regular_or_vegetarian_sheet(app, authed_client):
+    regular_response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={
+            "menu_file": (_menu_upload_file_with_regular_and_vegetarian(), "中平115年8月菜單.xlsx"),
+            "menu_sheet_kind": "regular",
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "中平一般菜單" in regular_response.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenRecipe.query.filter_by(name="馬鈴薯燉肉").count() == 1
+        assert KitchenRecipe.query.filter_by(name="馬鈴薯豆腸").count() == 0
+
+    vegetarian_response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={
+            "menu_file": (_menu_upload_file_with_regular_and_vegetarian(), "中平115年8月菜單.xlsx"),
+            "menu_sheet_kind": "vegetarian",
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "中平菜單 (素食)" in vegetarian_response.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenRecipe.query.filter_by(name="馬鈴薯豆腸").count() == 1
 
 
 def test_summary_import_detects_template_dates_and_deduplicates(app, authed_client):

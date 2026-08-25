@@ -95,13 +95,21 @@
         <span>選擇 Excel 菜單</span>
         <input name="menu_file" type="file" accept=".xlsx,.xlsm" required>
       </label>
+      <label class="menu-sheet-picker">
+        <span>工作表</span>
+        <select name="menu_sheet_kind">
+          <option value="regular" selected>一般菜單</option>
+          <option value="vegetarian">素食菜單</option>
+          <option value="all">全部工作表</option>
+        </select>
+      </label>
       <button class="btn ok" type="submit">匯入總表</button>
     </form>
   </div>
   <div class="menu-template-zone">
     <div><b>菜單模板</b><span class="pill ok">已支援</span></div>
     <p>廣豐月菜單：日期、星期、主食、主菜、副菜、蔬菜、湯品。</p>
-    <small>其他版型也可以直接試傳，系統會自動尋找「日期」與菜名欄。無法辨識時不會寫入資料，會提示把該格式加入模板。</small>
+    <small>預設只匯入一般菜單；含「素食」名稱的工作表可另外選取。系統只讀儲存格，不會載入 Excel 內的圖片或文字框。</small>
   </div>
 </section>
 {% endblock %}

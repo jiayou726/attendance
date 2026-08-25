@@ -1578,7 +1578,11 @@ def school_menus_import():
         flash("請先選擇該校的 Excel 菜單。", "error")
         return redirect(redirect_to)
     try:
-        parsed = parse_menu_workbook(upload.read(), upload.filename)
+        parsed = parse_menu_workbook(
+            upload.read(),
+            upload.filename,
+            request.form.get("menu_sheet_kind", "regular"),
+        )
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(redirect_to)
@@ -1630,7 +1634,8 @@ def school_menus_import():
     db.session.commit()
     first_day = parsed["days"][0]["date"]
     first_week = first_day - timedelta(days=first_day.weekday())
-    message = f"已匯入 {school.name}：{imported_days} 天新增 {added_items} 道菜，略過 {duplicate_items} 筆重複。"
+    sheet_names = "、".join(parsed["sheet_names"])
+    message = f"已匯入 {school.name}（{sheet_names}）：{imported_days} 天新增 {added_items} 道菜，略過 {duplicate_items} 筆重複。"
     if locked_days:
         message += f" {locked_days} 天已確認，未修改。"
     flash(message, "success")
@@ -1806,7 +1811,7 @@ def _find_menu_header(sheet):
     return best
 
 
-def parse_menu_workbook(raw: bytes, filename: str) -> dict:
+def parse_menu_workbook(raw: bytes, filename: str, sheet_kind: str = "regular") -> dict:
     """從可見工作表自動定位日期與菜名欄，回傳依日期去重的菜色。"""
 
     if not raw:
@@ -1816,19 +1821,29 @@ def parse_menu_workbook(raw: bytes, filename: str) -> dict:
     if not filename.lower().endswith((".xlsx", ".xlsm")):
         raise ValueError("目前請上傳 .xlsx 或 .xlsm 菜單。")
     try:
-        workbook = load_workbook(BytesIO(raw), read_only=False, data_only=True)
+        # 菜單匯入只需要儲存格。唯讀模式不載入圖片／文字框，也能避開
+        # 部分外部製表軟體產生、openpyxl 無法解析的 DrawingML 字型屬性。
+        workbook = load_workbook(BytesIO(raw), read_only=True, data_only=True)
     except Exception as exc:
         raise ValueError("Excel 無法讀取，請確認檔案沒有損壞或加密。") from exc
 
+    sheet_kind = sheet_kind if sheet_kind in {"regular", "vegetarian", "all"} else "regular"
+    visible_worksheets = [sheet for sheet in workbook.worksheets if sheet.sheet_state == "visible"]
+    if sheet_kind == "all":
+        selected_worksheets = visible_worksheets
+    elif sheet_kind == "vegetarian":
+        selected_worksheets = [sheet for sheet in visible_worksheets if "素食" in _menu_text(sheet.title)]
+    else:
+        selected_worksheets = [sheet for sheet in visible_worksheets if "素食" not in _menu_text(sheet.title)]
+    if visible_worksheets and not selected_worksheets:
+        label = "素食" if sheet_kind == "vegetarian" else "一般"
+        raise ValueError(f"找不到{label}菜單工作表，請改選其他工作表類型。")
+
     by_date: dict[date, dict[str, dict]] = defaultdict(dict)
-    visible_sheets = 0
     parsed_sheets = 0
     duplicate_count = 0
     raw_dish_count = 0
-    for sheet in workbook.worksheets:
-        if sheet.sheet_state != "visible":
-            continue
-        visible_sheets += 1
+    for sheet in selected_worksheets:
         header = _find_menu_header(sheet)
         if not header:
             continue
@@ -1871,7 +1886,7 @@ def parse_menu_workbook(raw: bytes, filename: str) -> dict:
                 by_date[service_date][key] = dish
 
     if not by_date:
-        if not visible_sheets:
+        if not visible_worksheets:
             raise ValueError("Excel 沒有可見的工作表。")
         if not parsed_sheets:
             raise ValueError("找不到「日期」與菜名欄位。請提供這種格式作為新模板。")
@@ -1884,6 +1899,7 @@ def parse_menu_workbook(raw: bytes, filename: str) -> dict:
         "parsed_sheets": parsed_sheets,
         "raw_dish_count": raw_dish_count,
         "duplicate_count": duplicate_count,
+        "sheet_names": [sheet.title for sheet in selected_worksheets],
     }
 
 
@@ -1894,7 +1910,11 @@ def summary_import():
         flash("請先選擇要匯入的 Excel 菜單。", "error")
         return redirect(url_for("order_tool.summary"))
     try:
-        parsed = parse_menu_workbook(upload.read(), upload.filename)
+        parsed = parse_menu_workbook(
+            upload.read(),
+            upload.filename,
+            request.form.get("menu_sheet_kind", "regular"),
+        )
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("order_tool.summary"))
@@ -1961,7 +1981,8 @@ def summary_import():
     db.session.commit()
 
     first_day = parsed["days"][0]["date"]
-    message = f"匯入完成：{imported_days} 天新增 {added_items} 道菜，略過 {existing_items} 筆重複；建立 {created_recipes} 個新菜色。"
+    sheet_names = "、".join(parsed["sheet_names"])
+    message = f"匯入完成（{sheet_names}）：{imported_days} 天新增 {added_items} 道菜，略過 {existing_items} 筆重複；建立 {created_recipes} 個新菜色。"
     if locked_days:
         message += f" 另有 {locked_days} 天已確認，未修改。"
     flash(message, "success")

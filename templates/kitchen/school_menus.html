@@ -33,6 +33,7 @@
     <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
     <div><b>或匯入 {{ selected_school.name }} 的菜單</b><small>日期會自動對到星期；同日同菜名不重複。</small></div>
     <label class="file-picker"><span>選擇該校 Excel</span><input name="menu_file" type="file" accept=".xlsx,.xlsm" required></label>
+    <label class="menu-sheet-picker"><span>工作表</span><select name="menu_sheet_kind"><option value="regular" selected>一般菜單</option><option value="vegetarian">素食菜單</option><option value="all">全部工作表</option></select></label>
     <button class="btn ok" type="submit">匯入這間學校</button>
   </form>
 </section>

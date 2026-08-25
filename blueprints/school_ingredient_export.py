@@ -1,7 +1,7 @@
 """學校食材登錄 Excel 匯出。
 
-不新增資料表／欄位：直接使用既有學校、菜單、配方、人數與當日採購供應商。
-優先沿用使用者提供的 schoolingredient Excel 模板；模板讀取失敗時也能依同樣欄位結構輸出，避免 500。
+不新增資料表／欄位：直接使用既有學校、菜單、配方與人數。
+製造商依使用者提供的 schoolingredient Excel 模板各食材帶入；供應商名稱沿用模板固定值。
 """
 
 from __future__ import annotations
@@ -21,8 +21,6 @@ from models import (
     KitchenMenuAssignment,
     KitchenMenuPlan,
     KitchenMenuPlanItem,
-    KitchenPurchaseOrder,
-    KitchenPurchaseOrderItem,
     KitchenRecipe,
     KitchenRecipeIngredient,
 )
@@ -30,14 +28,31 @@ from models import (
 school_ingredient_export_bp = Blueprint("school_ingredient_export", __name__)
 
 TEMPLATE_PATH = Path("static/schoolingredient_template.xlsx")
-FIXED_MANUFACTURER_NAME = "廣豐食品有限公司"
 EXPECTED_HEADERS = (
     "供餐日期", "學校", "菜色名稱", "食材名稱", "進貨日期", "生產日期", "有效日期", "批號",
     "製造商", "供應商名稱", "食材驗證標章", "驗證號碼", "產品名稱", "重量(公斤)",
     "非基改玉米", "非基改黃豆", "加工品", "食材原產地",
 )
 
-# 只作模板讀取失敗時的備援；值皆來自使用者提供的 schoolingredient_20260601.xlsx。
+# 模板讀取失敗時的備援值；內容來自使用者提供的 schoolingredient_20260601.xlsx。
+FALLBACK_MANUFACTURER = {
+    "粳米": "陸穀實業股份有限公司",
+    "帶皮雞胸肉": "保證責任台灣省北台肉雞運銷合作社",
+    "洋蔥": "徐匯恩",
+    "豆腐": "津悅",
+    "絞肉": "大湖畜牧場",
+    "敏豆": "豐誠冷凍食品有限公司",
+    "甜不辣": "品豐國際企業有限公司",
+    "蚵白菜": "盛綻農業農產品初級加工場",
+    "玉米粒": "富士鮮品股份有限公司-二廠",
+    "雞蛋(白殼)": "炎稜畜牧場",
+    "荷葉白菜": "羅勻晨",
+    "素排": "佛心素食材料行",
+    "三色丁": "富士鮮品股份有限公司",
+    "香菇": "彰化縣菇類生產合作社",
+    "杏鮑菇": "彰化縣菇類生產合作社",
+    "甜椒": "劉明仁",
+}
 FALLBACK_CERTIFICATION = {
     "粳米": ("產銷履歷", "2605190098801217"),
     "帶皮雞胸肉": ("CAS台灣優良農產品", "016683"),
@@ -56,7 +71,13 @@ FALLBACK_CERTIFICATION = {
     "杏鮑菇": ("生產追溯-農產品", "1004000002"),
     "甜椒": ("生產追溯-農產品", "1101003260"),
 }
-FALLBACK_FIXED = {"corn": "Y", "soy": "Y", "processed": "N", "origin": "臺灣"}
+FALLBACK_FIXED = {
+    "supplier": "廣豐食品有限公司",
+    "corn": "Y",
+    "soy": "Y",
+    "processed": "N",
+    "origin": "臺灣",
+}
 
 
 def _parse_date(raw: str | None) -> date:
@@ -82,56 +103,37 @@ def _ingredient_weight_kg(component: KitchenRecipeIngredient, headcount: int) ->
     return None
 
 
-def _supplier_name(item: KitchenPurchaseOrderItem) -> str:
-    snapshot = (item.supplier_name_snapshot or "").strip()
-    if snapshot and not snapshot.startswith("⚠"):
-        return snapshot
-    if item.supplier:
-        return item.supplier.name
-    return ""
-
-
-def _supplier_names_for_date(service_date: date) -> dict[int, str]:
-    orders = (
-        KitchenPurchaseOrder.query.filter(
-            KitchenPurchaseOrder.service_date == service_date,
-            KitchenPurchaseOrder.status.in_(("draft", "confirmed")),
-        )
-        .options(selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.supplier))
-        .order_by(KitchenPurchaseOrder.id.desc())
-        .all()
-    )
-    names = {}
-    for order in orders:
-        for item in order.items:
-            if item.ingredient_id and item.ingredient_id not in names:
-                names[item.ingredient_id] = _supplier_name(item)
-    return names
-
-
 def _template_values(sheet):
+    manufacturers = dict(FALLBACK_MANUFACTURER)
     certification = dict(FALLBACK_CERTIFICATION)
     fixed = dict(FALLBACK_FIXED)
+
     for row_number in range(2, sheet.max_row + 1):
         ingredient_name = str(sheet.cell(row_number, 4).value or "").strip()
         if ingredient_name:
+            manufacturer = sheet.cell(row_number, 9).value
             mark = sheet.cell(row_number, 11).value
             number = sheet.cell(row_number, 12).value
+            if manufacturer is not None and str(manufacturer).strip():
+                manufacturers[ingredient_name] = str(manufacturer).strip()
             certification[ingredient_name] = (
                 "" if mark is None else str(mark).strip(),
                 "" if number is None else str(number).strip(),
             )
+
         if row_number == 2:
             fixed = {
+                "supplier": str(sheet.cell(row_number, 10).value or FALLBACK_FIXED["supplier"]).strip(),
                 "corn": sheet.cell(row_number, 15).value or "Y",
                 "soy": sheet.cell(row_number, 16).value or "Y",
                 "processed": sheet.cell(row_number, 17).value or "N",
                 "origin": sheet.cell(row_number, 18).value or "臺灣",
             }
-    return certification, fixed
+
+    return manufacturers, certification, fixed
 
 
-def _rows_for_date(service_date: date, certification, fixed):
+def _rows_for_date(service_date: date, manufacturers, certification, fixed):
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
@@ -150,7 +152,6 @@ def _rows_for_date(service_date: date, certification, fixed):
         .all()
     )
     assignments.sort(key=lambda row: (row.school.name.casefold(), row.plan.meal_type or "", row.plan.name.casefold()))
-    supplier_names = _supplier_names_for_date(service_date)
 
     rows = []
     unresolved = set()
@@ -166,10 +167,9 @@ def _rows_for_date(service_date: date, certification, fixed):
                     unresolved.add(ingredient.name)
                     continue
 
-                supplier_name = supplier_names.get(ingredient.id, "")
-                if not supplier_name and ingredient.supplier:
-                    supplier_name = ingredient.supplier.name
-                mark, verification_number = certification.get(ingredient.name.strip(), ("", ""))
+                ingredient_key = ingredient.name.strip()
+                manufacturer_name = manufacturers.get(ingredient_key, "")
+                mark, verification_number = certification.get(ingredient_key, ("", ""))
                 headcount = max(assignment.headcount, 0)
                 per_person_kg = weight_kg / Decimal(headcount) if headcount else Decimal("0")
                 rows.append({
@@ -182,8 +182,8 @@ def _rows_for_date(service_date: date, certification, fixed):
                         None,
                         None,
                         None,
-                        FIXED_MANUFACTURER_NAME,
-                        supplier_name,
+                        manufacturer_name,
+                        fixed["supplier"],
                         mark,
                         verification_number,
                         None,
@@ -258,8 +258,8 @@ def _copy_template_row(sheet, source_row: int, target_row: int):
 def _build_workbook(service_date: date):
     workbook = _load_template()
     sheet = workbook.active
-    certification, fixed = _template_values(sheet)
-    rows, unresolved = _rows_for_date(service_date, certification, fixed)
+    manufacturers, certification, fixed = _template_values(sheet)
+    rows, unresolved = _rows_for_date(service_date, manufacturers, certification, fixed)
     if unresolved:
         names = "、".join(unresolved)
         return None, (

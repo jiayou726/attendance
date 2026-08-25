@@ -37,7 +37,10 @@
   <section class="card procurement-sheet">
     <div class="top">
       <div><h2>{{ service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">每一列修改後自動儲存；輸入新廠商名稱會直接建立，並依廠商分組排列。</div></div>
-      <a class="btn warn" href="{{ url_for('order_tool.procurement_export', date=service_date.isoformat()) }}">匯出 Excel</a>
+      <div class="row">
+        <a class="btn secondary" href="{{ url_for('school_ingredient_export.school_ingredient_export', date=service_date.isoformat()) }}">匯出食材登錄 Excel</a>
+        <a class="btn warn" href="{{ url_for('order_tool.procurement_export', date=service_date.isoformat()) }}">匯出 Excel</a>
+      </div>
     </div>
     <div class="table-scroll"><table class="procurement-table">
       <thead><tr><th>已叫貨</th><th>食材名稱</th><th>總供餐人次</th><th>系統需求量</th><th>實際採購量／包裝換算</th><th>交貨日期／時段</th><th>供應廠商</th><th>儲存</th></tr></thead>

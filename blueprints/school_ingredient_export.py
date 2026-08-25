@@ -1,7 +1,7 @@
 """學校食材登錄 Excel 匯出。
 
-不新增資料表／欄位：直接使用既有學校、菜單、配方、人數與當日採購供應商，
-並以使用者提供的 schoolingredient Excel 原檔作為輸出模板。
+不新增資料表／欄位：直接使用既有學校、菜單、配方、人數與當日採購供應商。
+優先沿用使用者提供的 schoolingredient Excel 模板；模板讀取失敗時也能依同樣欄位結構輸出，避免 500。
 """
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, request, send_file
-from openpyxl import load_workbook
+from flask import Blueprint, current_app, request, send_file
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, PatternFill
 from sqlalchemy.orm import selectinload
 
 from models import (
@@ -30,25 +31,31 @@ school_ingredient_export_bp = Blueprint("school_ingredient_export", __name__)
 
 TEMPLATE_PATH = Path("static/schoolingredient_template.xlsx")
 EXPECTED_HEADERS = (
-    "供餐日期",
-    "學校",
-    "菜色名稱",
-    "食材名稱",
-    "進貨日期",
-    "生產日期",
-    "有效日期",
-    "批號",
-    "製造商",
-    "供應商名稱",
-    "食材驗證標章",
-    "驗證號碼",
-    "產品名稱",
-    "重量(公斤)",
-    "非基改玉米",
-    "非基改黃豆",
-    "加工品",
-    "食材原產地",
+    "供餐日期", "學校", "菜色名稱", "食材名稱", "進貨日期", "生產日期", "有效日期", "批號",
+    "製造商", "供應商名稱", "食材驗證標章", "驗證號碼", "產品名稱", "重量(公斤)",
+    "非基改玉米", "非基改黃豆", "加工品", "食材原產地",
 )
+
+# 只作模板讀取失敗時的備援；值皆來自使用者提供的 schoolingredient_20260601.xlsx。
+FALLBACK_CERTIFICATION = {
+    "粳米": ("產銷履歷", "2605190098801217"),
+    "帶皮雞胸肉": ("CAS台灣優良農產品", "016683"),
+    "洋蔥": ("生產追溯-農產品", "1201004693"),
+    "豆腐": ("", ""),
+    "絞肉": ("生產追溯-豬肉", "LE300431"),
+    "敏豆": ("產銷履歷", "2604155169113265"),
+    "甜不辣": ("生產追溯-水產品", "0316600001"),
+    "蚵白菜": ("產銷履歷", "00993663601066"),
+    "玉米粒": ("CAS台灣優良農產品", "123701"),
+    "雞蛋(白殼)": ("雞蛋噴印-洗選鮮蛋", "D43003260530C"),
+    "荷葉白菜": ("台灣有機農產品", "1-010-100311"),
+    "素排": ("", ""),
+    "三色丁": ("CAS台灣優良農產品", "123706"),
+    "香菇": ("生產追溯-農產品", "1004000002"),
+    "杏鮑菇": ("生產追溯-農產品", "1004000002"),
+    "甜椒": ("生產追溯-農產品", "1101003260"),
+}
+FALLBACK_FIXED = {"corn": "Y", "soy": "Y", "processed": "N", "origin": "臺灣"}
 
 
 def _parse_date(raw: str | None) -> date:
@@ -59,8 +66,6 @@ def _parse_date(raw: str | None) -> date:
 
 
 def _ingredient_weight_kg(component: KitchenRecipeIngredient, headcount: int) -> Decimal | None:
-    """把此學校、此菜色、此食材需求換成公斤；沒有可靠換算時回傳 None。"""
-
     ingredient = component.ingredient
     per_person = component.grams_per_person or Decimal("0")
     base_amount = per_person * Decimal(max(headcount, 0))
@@ -69,12 +74,10 @@ def _ingredient_weight_kg(component: KitchenRecipeIngredient, headcount: int) ->
 
     if base_unit in {"g", "公克", "克"}:
         return base_amount / Decimal("1000")
-
     if purchase_unit in {"kg", "公斤"}:
         units_per_kg = ingredient.grams_per_purchase_unit or Decimal("0")
         if units_per_kg > 0:
             return base_amount / units_per_kg
-
     return None
 
 
@@ -88,18 +91,13 @@ def _supplier_name(item: KitchenPurchaseOrderItem) -> str:
 
 
 def _supplier_names_for_date(service_date: date) -> dict[int, str]:
-    """以採購頁當日品項的供應商為準，確保匯出與畫面一致。"""
-
     orders = (
         KitchenPurchaseOrder.query.filter(
             KitchenPurchaseOrder.service_date == service_date,
             KitchenPurchaseOrder.status.in_(("draft", "confirmed")),
         )
-        .options(
-            selectinload(KitchenPurchaseOrder.items)
-            .selectinload(KitchenPurchaseOrderItem.supplier)
-        )
-        .order_by(KitchenPurchaseOrder.status.desc(), KitchenPurchaseOrder.id.desc())
+        .options(selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.supplier))
+        .order_by(KitchenPurchaseOrder.id.desc())
         .all()
     )
     names = {}
@@ -111,13 +109,11 @@ def _supplier_names_for_date(service_date: date) -> dict[int, str]:
 
 
 def _template_values(sheet):
-    """只從原模板讀取可重用的驗證資料與固定欄位，不把範例日期/產品名稱帶入。"""
-
-    certification = {}
-    fixed = {"corn": "Y", "soy": "Y", "processed": "N", "origin": "臺灣"}
+    certification = dict(FALLBACK_CERTIFICATION)
+    fixed = dict(FALLBACK_FIXED)
     for row_number in range(2, sheet.max_row + 1):
         ingredient_name = str(sheet.cell(row_number, 4).value or "").strip()
-        if ingredient_name and ingredient_name not in certification:
+        if ingredient_name:
             mark = sheet.cell(row_number, 11).value
             number = sheet.cell(row_number, 12).value
             certification[ingredient_name] = (
@@ -152,7 +148,7 @@ def _rows_for_date(service_date: date, certification, fixed):
         )
         .all()
     )
-    assignments.sort(key=lambda row: (row.school.name.casefold(), row.plan.meal_type, row.plan.name.casefold()))
+    assignments.sort(key=lambda row: (row.school.name.casefold(), row.plan.meal_type or "", row.plan.name.casefold()))
     supplier_names = _supplier_names_for_date(service_date)
 
     rows = []
@@ -173,31 +169,79 @@ def _rows_for_date(service_date: date, certification, fixed):
                 if not supplier_name and ingredient.supplier:
                     supplier_name = ingredient.supplier.name
                 mark, verification_number = certification.get(ingredient.name.strip(), ("", ""))
-                rows.append((
-                    service_date,
-                    assignment.school.name,
-                    recipe.name,
-                    ingredient.name,
-                    service_date,
-                    None,
-                    None,
-                    None,
-                    supplier_name,
-                    supplier_name,
-                    mark,
-                    verification_number,
-                    None,
-                    weight_kg,
-                    fixed["corn"],
-                    fixed["soy"],
-                    fixed["processed"],
-                    fixed["origin"],
-                ))
+                headcount = max(assignment.headcount, 0)
+                per_person_kg = weight_kg / Decimal(headcount) if headcount else Decimal("0")
+                rows.append({
+                    "values": (
+                        service_date,
+                        assignment.school.name,
+                        recipe.name,
+                        ingredient.name,
+                        service_date,
+                        None,
+                        None,
+                        None,
+                        supplier_name,
+                        supplier_name,
+                        mark,
+                        verification_number,
+                        None,
+                        weight_kg,
+                        fixed["corn"],
+                        fixed["soy"],
+                        fixed["processed"],
+                        fixed["origin"],
+                    ),
+                    "per_person_kg": per_person_kg,
+                    "headcount": headcount,
+                })
     return rows, sorted(unresolved)
 
 
+def _new_template_workbook():
+    """依原 Excel 欄位結構建立備援模板；F/G/M 隱藏，S/T/U 保留原本計算輔助欄。"""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    for column, header in enumerate(EXPECTED_HEADERS, start=1):
+        sheet.cell(1, column).value = header
+    widths = {
+        "A": 10.45, "B": 19.63, "C": 13.36, "D": 9, "E": 11.09, "F": 6.63,
+        "G": 9, "H": 13, "I": 15.09, "J": 9.36, "K": 19, "L": 21.36,
+        "M": 0.09, "N": 11.09, "O": 9, "P": 13, "Q": 13, "R": 13,
+        "S": 9, "T": 9, "U": 13,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.column_dimensions["F"].hidden = True
+    sheet.column_dimensions["G"].hidden = True
+    sheet.column_dimensions["M"].hidden = True
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    for cell in sheet[1][:18]:
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    return workbook
+
+
+def _load_template():
+    template_path = Path(current_app.root_path) / TEMPLATE_PATH
+    if template_path.is_file():
+        try:
+            workbook = load_workbook(template_path)
+            sheet = workbook.active
+            headers = tuple(sheet.cell(1, column).value for column in range(1, 19))
+            if headers == EXPECTED_HEADERS:
+                return workbook
+            current_app.logger.warning("schoolingredient template header mismatch; using fallback template")
+        except Exception:
+            current_app.logger.exception("schoolingredient template could not be loaded; using fallback template")
+    else:
+        current_app.logger.warning("schoolingredient template missing; using fallback template")
+    return _new_template_workbook()
+
+
 def _copy_template_row(sheet, source_row: int, target_row: int):
-    for column in range(1, max(sheet.max_column, 21) + 1):
+    for column in range(1, 22):
         source = sheet.cell(source_row, column)
         target = sheet.cell(target_row, column)
         target._style = copy(source._style)
@@ -211,16 +255,8 @@ def _copy_template_row(sheet, source_row: int, target_row: int):
 
 
 def _build_workbook(service_date: date):
-    template_path = Path(current_app.root_path) / TEMPLATE_PATH
-    if not template_path.is_file():
-        abort(500, description="找不到學校食材登錄 Excel 模板。")
-
-    workbook = load_workbook(template_path)
+    workbook = _load_template()
     sheet = workbook.active
-    headers = tuple(sheet.cell(1, column).value for column in range(1, 19))
-    if headers != EXPECTED_HEADERS:
-        abort(500, description="學校食材登錄 Excel 模板欄位已被修改。")
-
     certification, fixed = _template_values(sheet)
     rows, unresolved = _rows_for_date(service_date, certification, fixed)
     if unresolved:
@@ -237,12 +273,15 @@ def _build_workbook(service_date: date):
         _copy_template_row(sheet, first_data_row, row_number)
 
     for row_number in range(first_data_row, required_last_row + 1):
-        for column in range(1, max(sheet.max_column, 21) + 1):
+        for column in range(1, 22):
             sheet.cell(row_number, column).value = None
 
     for row_number, row in enumerate(rows, start=first_data_row):
-        for column, value in enumerate(row, start=1):
+        for column, value in enumerate(row["values"], start=1):
             sheet.cell(row_number, column).value = value
+        sheet.cell(row_number, 19).value = row["per_person_kg"]
+        sheet.cell(row_number, 20).value = row["headcount"]
+        sheet.cell(row_number, 21).value = f"=S{row_number}*T{row_number}"
 
     return workbook, None
 

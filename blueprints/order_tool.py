@@ -2974,6 +2974,35 @@ def purchase_order_ordered(order_id: int):
     return redirect(request.referrer or url_for("order_tool.purchases", start=order.service_date, end=order.service_date))
 
 
+@order_bp.post("/purchases/<int:order_id>/delete")
+def purchase_delete(order_id: int):
+    order = db.session.get(KitchenPurchaseOrder, order_id)
+    if not order:
+        abort(404)
+
+    return_to = request.form.get("return_to")
+    if return_to == "dashboard":
+        redirect_url = url_for("order_tool.index")
+    else:
+        redirect_url = url_for(
+            "order_tool.purchases",
+            start=request.form.get("start") or order.service_date,
+            end=request.form.get("end") or order.service_date,
+        )
+
+    # 除了前端確認視窗，後端也要求明確的確認值，避免誤送 POST 就刪除。
+    if request.form.get("confirm_delete") != "1":
+        flash("未完成刪除確認，採購單已保留。", "error")
+        return redirect(redirect_url)
+
+    service_date = order.service_date
+    item_count = len(order.items)
+    db.session.delete(order)
+    db.session.commit()
+    flash(f"已刪除 {service_date} 的採購單與 {item_count} 筆採購品項。", "success")
+    return redirect(redirect_url)
+
+
 @order_bp.post("/purchases/<int:order_id>/confirm")
 def purchase_confirm(order_id: int):
     order = db.session.get(KitchenPurchaseOrder, order_id)

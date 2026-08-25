@@ -916,6 +916,53 @@ def test_cancelled_purchase_is_reused_when_regenerated(app, authed_client):
         assert orders[0].status == "draft"
 
 
+def test_purchase_order_delete_requires_confirmation_and_removes_items(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=801)
+    authed_client.post("/admin/order-tool/purchases/generate", data={
+        "start": "2026-08-13", "end": "2026-08-13",
+    })
+
+    with app.app_context():
+        order = KitchenPurchaseOrder.query.one()
+        order_id = order.id
+        assert KitchenPurchaseOrderItem.query.filter_by(order_id=order_id).count() == 1
+
+    dashboard = authed_client.get("/admin/order-tool/").get_data(as_text=True)
+    history = authed_client.get(
+        "/admin/order-tool/purchases?start=2026-08-13&end=2026-08-13"
+    ).get_data(as_text=True)
+    delete_url = f"/admin/order-tool/purchases/{order_id}/delete"
+    assert delete_url in dashboard
+    assert delete_url in history
+    assert "此動作無法復原" in dashboard
+    assert "此動作無法復原" in history
+
+    refused = authed_client.post(
+        delete_url,
+        data={"return_to": "history", "start": "2026-08-13", "end": "2026-08-13"},
+        follow_redirects=True,
+    )
+    assert "未完成刪除確認，採購單已保留" in refused.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrder, order_id) is not None
+
+    deleted = authed_client.post(
+        delete_url,
+        data={
+            "confirm_delete": "1",
+            "return_to": "history",
+            "start": "2026-08-13",
+            "end": "2026-08-13",
+        },
+        follow_redirects=True,
+    )
+    assert "已刪除 2026-08-13 的採購單與 1 筆採購品項" in deleted.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrder, order_id) is None
+        assert KitchenPurchaseOrderItem.query.filter_by(order_id=order_id).count() == 0
+
+
 def test_cross_school_aggregation(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     plan_id = _create_plan(app, authed_client, ids, headcount=801)

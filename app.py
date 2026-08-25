@@ -17,6 +17,7 @@ from blueprints.records import rec_bp
 from blueprints.export import exp_bp
 from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
+from blueprints.school_ingredient_export import school_ingredient_export_bp
 
 
 def _ensure_kitchen_schema_compatibility(app: Flask):
@@ -63,6 +64,7 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(exp_bp, url_prefix="/admin")
     app.register_blueprint(import_bp, url_prefix="/admin")
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
+    app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)
 
     @app.before_request

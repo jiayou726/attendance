@@ -30,6 +30,7 @@ from models import (
 school_ingredient_export_bp = Blueprint("school_ingredient_export", __name__)
 
 TEMPLATE_PATH = Path("static/schoolingredient_template.xlsx")
+FIXED_MANUFACTURER_NAME = "廣豐食品有限公司"
 EXPECTED_HEADERS = (
     "供餐日期", "學校", "菜色名稱", "食材名稱", "進貨日期", "生產日期", "有效日期", "批號",
     "製造商", "供應商名稱", "食材驗證標章", "驗證號碼", "產品名稱", "重量(公斤)",
@@ -181,7 +182,7 @@ def _rows_for_date(service_date: date, certification, fixed):
                         None,
                         None,
                         None,
-                        supplier_name,
+                        FIXED_MANUFACTURER_NAME,
                         supplier_name,
                         mark,
                         verification_number,

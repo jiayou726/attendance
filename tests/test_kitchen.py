@@ -211,6 +211,62 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
         ).count() == 1
 
 
+def test_summary_recipe_category_search_picker_and_delete(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+
+    with app.app_context():
+        plan = KitchenMenuPlan.query.filter_by(service_date=TEST_DAY, name="中央菜單").one()
+        plan_id = plan.id
+        item_id = plan.items[0].id
+
+    recipe_page = authed_client.get(
+        f"/admin/order-tool/recipes/{ids['recipe']}"
+    ).get_data(as_text=True)
+    assert "菜色分類" in recipe_page
+    assert "選擇後自動儲存" in recipe_page
+    assert 'onchange="this.form.requestSubmit()"' in recipe_page
+    assert "儲存分類" not in recipe_page
+    assert "輸入食材名稱搜尋" in recipe_page
+    assert "data-ingredient-search" in recipe_page
+    assert "ingredient-search-data" in recipe_page
+
+    response = authed_client.post(
+        f"/admin/order-tool/recipes/{ids['recipe']}/category",
+        data={"category": "副菜"},
+    )
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, ids["recipe"]).category == "副菜"
+
+    plan_page = authed_client.get(
+        f"/admin/order-tool/plans/{plan_id}"
+    ).get_data(as_text=True)
+    assert "輸入菜名搜尋" in plan_page
+    assert 'data-search-mode="select"' in plan_page
+    assert "南洋綠咖哩雞" in plan_page
+
+    summary_page = authed_client.get(
+        "/admin/order-tool/summary?week=2026-08-10"
+    ).get_data(as_text=True)
+    assert "副菜" in summary_page
+    assert f"/summary/dishes/{item_id}/delete" in summary_page
+    assert "移除南洋綠咖哩雞" in summary_page
+
+    response = authed_client.post(
+        f"/admin/order-tool/summary/dishes/{item_id}/delete",
+        data={"week": "2026-08-10"},
+    )
+    assert response.status_code == 302
+    assert "week=2026-08-10" in response.headers["Location"]
+    with app.app_context():
+        assert db.session.get(KitchenMenuPlanItem, item_id) is None
+
+
 def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={
@@ -228,6 +284,13 @@ def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_cl
     assert "產生採購單" in page
     assert "儲存本週菜單與人數" not in page
     assert "data-school-menu-autosave" in page
+    assert "今日停餐" in page
+    assert "data-no-service-toggle" in page
+    script = authed_client.get("/static/kitchen_ui.js").get_data(as_text=True)
+    assert "headcount?.addEventListener('input'" in script
+    assert "等待儲存…" in script
+    assert "請輸入人數" in script
+    assert "window.setTimeout(saveDay, 1000)" in script
 
     payload = {"school_id": str(ids["school"]), "week": "2026-08-10"}
     for offset in range(7):
@@ -287,26 +350,149 @@ def test_school_menu_auto_saves_one_day_and_blocks_incomplete_procurement(app, a
         assert KitchenPurchaseOrder.query.count() == 0
 
 
-def test_school_menu_can_import_school_excel_directly(app, authed_client):
+def test_no_service_school_is_complete_and_excluded_from_procurement(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
-    response = authed_client.post(
-        "/admin/order-tool/summary/schools/import",
-        data={
-            "school_id": str(ids["school"]),
-            "week": "2026-06-01",
-            "menu_file": (_menu_upload_file(), "中平國小115年6月菜單.xlsx"),
-        },
-        content_type="multipart/form-data",
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "586",
+        "service_status": "serving",
+        "recipe_ids": str(ids["recipe"]),
+    })
+    assert authed_client.post("/admin/order-tool/schools", data={
+        "name": "今日停餐國小",
+        "code": "3-08",
+        "default_headcount": "320",
+    }).status_code == 302
+    with app.app_context():
+        stopped_school_id = KitchenSchool.query.filter_by(name="今日停餐國小").one().id
+
+    response = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(stopped_school_id),
+        "service_date": "2026-08-13",
+        "headcount": "320",
+        "service_status": "no_service",
+    })
+    assert response.status_code == 204
+    with app.app_context():
+        stopped = KitchenMenuAssignment.query.join(KitchenMenuPlan).filter(
+            KitchenMenuAssignment.school_id == stopped_school_id,
+            KitchenMenuPlan.service_date == TEST_DAY,
+        ).one()
+        assert stopped.service_status == "no_service"
+        assert stopped.headcount == 320
+        assert stopped.plan.items == []
+
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
         follow_redirects=True,
     )
-    assert response.status_code == 200
-    assert "已匯入 內小" in response.get_data(as_text=True)
+    assert generated.status_code == 200
+    assert "尚有學校未完成菜單勾選" not in generated.get_data(as_text=True)
     with app.app_context():
-        plan = KitchenMenuPlan.query.filter_by(
-            service_date=date(2026, 6, 1), meal_type="午餐", name="內小菜單"
+        assert KitchenPurchaseOrder.query.count() == 1
+        item = KitchenPurchaseOrderItem.query.one()
+        assert item.required_qty == Decimal("51.568")
+
+
+def test_no_service_preserves_dishes_when_toggled_back(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    for status in ("serving", "no_service", "serving"):
+        response = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+            "school_id": str(ids["school"]),
+            "service_date": "2026-08-13",
+            "headcount": "586",
+            "service_status": status,
+            "recipe_ids": str(ids["recipe"]),
+        })
+        assert response.status_code == 204
+
+    with app.app_context():
+        assignment = KitchenMenuAssignment.query.join(KitchenMenuPlan).filter(
+            KitchenMenuAssignment.school_id == ids["school"],
+            KitchenMenuPlan.service_date == TEST_DAY,
         ).one()
-        assert KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=ids["school"]).one().headcount == 0
-        assert "沙茶雞肉" in [item.recipe.name for item in plan.items]
+        assert assignment.service_status == "serving"
+        assert assignment.headcount == 586
+        assert [item.recipe_id for item in assignment.plan.items] == [ids["recipe"]]
+
+
+def test_school_menu_exports_selected_date_into_nonregistered_template(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    plan_id = _create_plan(app, authed_client, ids)
+    with app.app_context():
+        plan = db.session.get(KitchenMenuPlan, plan_id)
+        recipes = [
+            KitchenRecipe(name="香Q米飯", category="主食"),
+            KitchenRecipe(name="麻婆豆腐", category="副菜"),
+            KitchenRecipe(name="有機青菜", category="青菜"),
+            KitchenRecipe(name="玉米蛋花湯", category="湯品"),
+            KitchenRecipe(name="當季水果", category="點心"),
+        ]
+        db.session.add_all(recipes)
+        db.session.flush()
+        for sort_order, recipe in enumerate(recipes, start=1):
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=recipe.id,
+                sort_order=sort_order,
+            ))
+        stopped_school = KitchenSchool(name="停餐校", default_headcount=100)
+        db.session.add(stopped_school)
+        db.session.flush()
+        db.session.add(KitchenMenuAssignment(
+            plan_id=plan.id,
+            school_id=stopped_school.id,
+            headcount=100,
+            service_status="no_service",
+        ))
+        db.session.commit()
+
+    page = authed_client.get(
+        "/admin/order-tool/summary/schools?week=2026-08-10"
+    ).get_data(as_text=True)
+    assert "匯出非登合菜名" in page
+    assert "菜單日期" in page
+    assert "選擇該校 Excel" not in page
+    assert "匯入這間學校" not in page
+
+    response = authed_client.get(
+        "/admin/order-tool/summary/schools/nonregistered-menu.xlsx?date=2026-08-13"
+    )
+    assert response.status_code == 200
+    assert "2026-08-13.xlsx" in response.headers["Content-Disposition"]
+    workbook = load_workbook(BytesIO(response.data))
+    sheet = workbook["Sheet1"]
+    assert sheet.max_column == 27
+    assert sheet["A1"].value == "學校*"
+    assert sheet["AA1"].value == "附餐"
+    assert sheet["A2"].value == "內小"
+    assert sheet["B2"].value.date() == TEST_DAY
+    assert sheet["B2"].number_format == "m/d;@"
+    assert sheet["C2"].value == "午餐"
+    assert [sheet.cell(2, column).value for column in range(4, 11)] == [4, 2, 1.7, 0, 0, 2, 563]
+    assert sheet["K2"].value == "香Q米飯"
+    assert sheet["M2"].value == "南洋綠咖哩雞"
+    assert sheet["Q2"].value == "麻婆豆腐"
+    assert sheet["W2"].value == "有機青菜"
+    assert sheet["X2"].value == "玉米蛋花湯"
+    assert sheet["Y2"].value == "當季水果"
+    assert sheet["A3"].value is None
+    assert sheet.column_dimensions["P"].hidden is True
+    assert sheet.column_dimensions["Z"].hidden is True
+
+    assert authed_client.post("/admin/order-tool/summary/schools/import").status_code == 404
 
 
 def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, authed_client):
@@ -340,6 +526,9 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
         "已叫貨", "食材名稱", "總供餐人次", "系統需求量", "實際採購量／包裝換算", "交貨日期／時段", "供應廠商"
     ))
     assert 'list="supplier-search-options"' in page
+    assert "data-procurement-autosave" in page
+    assert "data-auto-save-url" in page
+    assert "每一列修改後自動儲存" in page
     assert ">801</b> 人次" in page
     assert "1箱＝10kg" in page
 
@@ -393,14 +582,19 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
     assert exported.status_code == 200
     assert exported.headers["Content-Disposition"].endswith(".xlsx")
     workbook = load_workbook(BytesIO(exported.data))
-    sheet = workbook["每日採購單"]
-    assert sheet["A4"].value == "已叫"
-    assert sheet["B4"].value == "骨腿丁"
-    assert sheet["F4"].value == 71
-    assert sheet["G4"].value == 3
-    assert sheet["H4"].value == "箱"
-    assert sheet["J4"].value == "測試肉品"
-    assert sheet["A4"].fill.fgColor.rgb == "00FFF1A8"
+    sheet = workbook["每日訂購單"]
+    assert sheet["A1"].value == "每日訂購單"
+    assert sheet["C1"].value == "進貨日期：115/08/12 下午"
+    assert [cell.value for cell in sheet[2]] == ["廠商", "品名", "數量", "單位", "備註"]
+    assert sheet["A3"].value == "測試肉品"
+    assert sheet["B3"].value == "骨腿丁"
+    assert sheet["C3"].value == 3
+    assert sheet["C3"].number_format == "0.00"
+    assert sheet["D3"].value == "箱"
+    assert sheet["E3"].value == "1箱＝23.6667kg"
+    assert sheet["A3"].fill.fgColor.rgb == "00FFF1A8"
+    assert sheet.print_title_rows == "$2:$2"
+    assert sheet.page_setup.fitToWidth == 1
 
     assert authed_client.post(f"/admin/order-tool/purchase-items/{item_id}/ordered", data={}).status_code == 302
     with app.app_context():
@@ -413,6 +607,103 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
     assert authed_client.post(f"/admin/order-tool/purchases/{order_id}/ordered", data={"ordered": "1"}).status_code == 302
     with app.app_context():
         assert db.session.get(KitchenPurchaseOrderItem, item_id).ordered is True
+
+
+def test_procurement_autosave_creates_suppliers_and_groups_every_output(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    assert authed_client.post("/admin/order-tool/ingredients", data={
+        "name": "洋蔥",
+        "supplier_id": "",
+        "base_unit": "g",
+        "purchase_unit": "kg",
+        "grams_per_purchase_unit": "1000",
+        "unit_price": "25",
+        "order_increment": "0.001",
+        "note": "",
+    }).status_code == 302
+    with app.app_context():
+        onion_id = KitchenIngredient.query.filter_by(name="洋蔥").one().id
+    assert authed_client.post(f"/admin/order-tool/recipes/{ids['recipe']}/ingredients", data={
+        "ingredient_id": str(onion_id),
+        "grams_per_person": "12",
+    }).status_code == 302
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "100",
+        "service_status": "serving",
+        "recipe_ids": str(ids["recipe"]),
+    })
+    authed_client.post("/admin/order-tool/summary/procurement/generate", data={"date": "2026-08-13"})
+    with app.app_context():
+        items = {item.ingredient_name_snapshot: item.id for item in KitchenPurchaseOrderItem.query.all()}
+        order_id = KitchenPurchaseOrder.query.one().id
+
+    for ingredient_name, supplier_name in (("骨腿丁", "乙供應商"), ("洋蔥", "甲供應商")):
+        response = authed_client.post(
+            f"/admin/order-tool/summary/procurement/items/{items[ingredient_name]}/save",
+            data={
+                "actual": "10",
+                "package_qty": "",
+                "package_unit": "",
+                "delivery_date": "2026-08-12",
+                "delivery_slot": "上午",
+                "supplier_name": supplier_name,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json["supplierCreated"] is True
+
+    # 包裝單位是選填；把原本不同廠商改成同一家後應立即歸在同一組。
+    response = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{items['洋蔥']}/save",
+        data={
+            "actual": "10",
+            "package_qty": "6",
+            "package_unit": "",
+            "delivery_date": "2026-08-12",
+            "delivery_slot": "上午",
+            "supplier_name": "乙供應商",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json["supplierCreated"] is False
+    assert response.json["packageQty"] == "6"
+    assert response.json["packageUnit"] == ""
+
+    with app.app_context():
+        assert KitchenSupplier.query.filter_by(name="甲供應商", active=True).one()
+        assert KitchenSupplier.query.filter_by(name="乙供應商", active=True).one()
+        onion_item = db.session.get(KitchenPurchaseOrderItem, items["洋蔥"])
+        assert onion_item.supplier.name == "乙供應商"
+        assert onion_item.package_qty == Decimal("6.0000")
+        assert onion_item.package_unit is None
+
+    procurement_page = authed_client.get(
+        "/admin/order-tool/summary/procurement?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert '<select class="package-unit-input"' in procurement_page
+    assert '<option value="">不指定</option>' in procurement_page
+    assert procurement_page.count('<tr class="supplier-group-row"><td colspan="8">乙供應商') == 1
+    assert '<tr class="supplier-group-row"><td colspan="8">甲供應商' not in procurement_page
+
+    exported = authed_client.get("/admin/order-tool/summary/procurement.xlsx?date=2026-08-13")
+    workbook = load_workbook(BytesIO(exported.data))
+    sheet = workbook["每日訂購單"]
+    assert [sheet["A3"].value, sheet["A4"].value] == ["乙供應商", None]
+
+    history = authed_client.get(
+        "/admin/order-tool/purchases?start=2026-08-13&end=2026-08-13"
+    ).get_data(as_text=True)
+    assert "乙供應商" in history
+    assert "乙供應商、甲供應商" not in history
+    detail = authed_client.get(f"/admin/order-tool/purchases/{order_id}").get_data(as_text=True)
+    assert detail.count('<tr class="supplier-group-row"><td colspan="8">乙供應商') == 1
 
 
 def _menu_upload_file():

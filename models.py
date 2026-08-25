@@ -250,6 +250,8 @@ class KitchenMenuAssignment(db.Model):
         nullable=False,
     )
     headcount = db.Column(db.Integer, nullable=False, default=0)
+    # serving：正常供餐；no_service：學校當日停餐，不納入採購。
+    service_status = db.Column(db.String(20), nullable=False, default="serving")
 
     plan = db.relationship("KitchenMenuPlan", back_populates="assignments")
     school = db.relationship("KitchenSchool")

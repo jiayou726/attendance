@@ -20,6 +20,7 @@ attendance.db.backup-*
 *.sqlite3
 *.xlsx
 !static/薪資計算範本.xlsx
+!static/非登合菜名範本.xlsx
 
 # OS / editor
 .DS_Store

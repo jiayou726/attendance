@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{% block title %}團膳管理{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=13">
+  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=16">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -31,7 +31,7 @@
 
   {% block content %}{% endblock %}
 </main>
-<script src="{{ url_for('static', filename='kitchen_ui.js') }}?v=8" defer></script>
+<script src="{{ url_for('static', filename='kitchen_ui.js') }}?v=15" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

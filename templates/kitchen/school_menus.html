@@ -27,14 +27,10 @@
     </div>
     <button class="btn" type="submit">查看這間學校</button>
   </form>
-  <form method="post" action="{{ url_for('order_tool.school_menus_import') }}" enctype="multipart/form-data" class="school-import-form">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="school_id" value="{{ selected_school.id }}">
-    <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
-    <div><b>或匯入 {{ selected_school.name }} 的菜單</b><small>日期會自動對到星期；同日同菜名不重複。</small></div>
-    <label class="file-picker"><span>選擇該校 Excel</span><input name="menu_file" type="file" accept=".xlsx,.xlsm" required></label>
-    <label class="menu-sheet-picker"><span>工作表</span><select name="menu_sheet_kind"><option value="regular" selected>一般菜單</option><option value="vegetarian">素食菜單</option><option value="all">全部工作表</option></select></label>
-    <button class="btn ok" type="submit">匯入這間學校</button>
+  <form method="get" action="{{ url_for('order_tool.school_menus_export') }}" class="school-export-form">
+    <div><b>匯出非登合菜名</b><small>套用指定格式，帶入當日正常供餐學校與已勾選菜色。</small></div>
+    <div class="field"><label>菜單日期</label><input name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ export_date.isoformat() }}" required></div>
+    <button class="btn ok" type="submit">匯出 Excel</button>
   </form>
 </section>
 
@@ -60,21 +56,25 @@
 
   <section class="school-week-grid" aria-label="{{ selected_school.name }} 週一到週日菜單">
     {% for day in days %}
-    <article class="school-menu-day{% if day.locked %} locked{% endif %}" data-school-menu-day data-service-date="{{ day.date.isoformat() }}">
+    <article class="school-menu-day{% if day.locked %} locked{% endif %}{% if day.service_status == 'no_service' %} no-service{% endif %}" data-school-menu-day data-service-date="{{ day.date.isoformat() }}">
       <header class="school-day-head">
         <div><b>{{ day.weekday }}</b><span>{{ day.date.strftime('%m/%d') }}</span></div>
-        {% if day.locked %}<em>已確認</em>{% endif %}
+        {% if day.locked %}<em>已確認</em>{% else %}<em data-service-status-badge{% if day.service_status != 'no_service' %} hidden{% endif %}>停餐</em>{% endif %}
       </header>
+      <label class="school-no-service-toggle">
+        <input type="checkbox" data-no-service-toggle{% if day.service_status == 'no_service' %} checked{% endif %}{% if day.locked %} disabled{% endif %}>
+        <span><b>今日停餐</b><small>不計入供餐人數與食材採購</small></span>
+      </label>
       <label class="headcount-box">
         <span>供餐人數</span>
-        <input name="headcount_{{ day.date.isoformat() }}" type="number" min="0" value="{{ day.headcount }}" required{% if day.locked %} disabled{% endif %}>
+        <input name="headcount_{{ day.date.isoformat() }}" type="number" min="0" value="{{ day.headcount }}" required{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
         <i>人</i>
       </label>
       <div class="school-dish-list">
         {% if day.source_items %}
           {% for item in day.source_items %}
           <label class="school-dish-check{% if item.recipe_id in day.selected_ids %} selected{% endif %}">
-            <input name="recipes_{{ day.date.isoformat() }}" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids %} checked{% endif %}{% if day.locked %} disabled{% endif %}>
+            <input name="recipes_{{ day.date.isoformat() }}" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
             <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
@@ -83,7 +83,7 @@
           <div class="day-empty small">總表這天還沒有菜色</div>
         {% endif %}
       </div>
-      <footer><span><b data-selected-count>{{ day.selected_ids|length }}</b> 道已勾選</span><span data-auto-save-state>{% if day.locked %}已確認{% else %}已儲存{% endif %}</span></footer>
+      <footer><span><b data-selected-count>{{ day.selected_ids|length }}</b> 道已勾選</span><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
     </article>
     {% endfor %}
   </section>

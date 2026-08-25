@@ -62,6 +62,7 @@
             <div class="menu-dish">
               <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
               <a href="{{ url_for('order_tool.recipe_detail', recipe_id=item.recipe.id) }}">{{ item.recipe.name }}</a>
+              {% if plan.status == 'draft' %}<form class="menu-dish-delete" method="post" action="{{ url_for('order_tool.summary_dish_delete', row_id=item.id) }}" onsubmit="return confirm('確定從這天菜單移除「{{ item.recipe.name }}」？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="week" value="{{ week_start.isoformat() }}"><button type="submit" aria-label="移除{{ item.recipe.name }}" title="移除菜色">×</button></form>{% endif %}
             </div>
             {% endfor %}
           {% else %}

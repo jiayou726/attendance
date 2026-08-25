@@ -32,7 +32,7 @@
     <div class="top"><div><h2>{{ order.service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">一天一張單；廠商列在各食材品項中。</div></div><div class="purchase-total">總額 ${{ '%.2f'|format(total|float) }}</div></div>
     {% if order.items %}<div class="table-scroll"><table class="procurement-table">
       <thead><tr><th>已叫貨</th><th>食材名稱</th><th>系統需求量</th><th>實際採購量／包裝換算</th><th>交貨日期／時段</th><th>供應廠商</th><th>單價</th><th class="right">金額</th></tr></thead>
-      <tbody>{% for item in order.items %}<tr class="{{ 'is-ordered' if item.ordered else '' }}">
+      <tbody>{% set grouping = namespace(supplier='') %}{% for item in items %}{% set supplier_name = item.supplier_name_snapshot or '⚠ 未指定供應商' %}{% if supplier_name != grouping.supplier %}<tr class="supplier-group-row"><td colspan="8">{{ supplier_name }}</td></tr>{% set grouping.supplier = supplier_name %}{% endif %}<tr class="{{ 'is-ordered' if item.ordered else '' }}">
         <td><form method="post" action="{{ url_for('order_tool.purchase_item_ordered', item_id=item.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><label class="order-check"><input class="order-confirm-toggle" data-auto-submit="true" name="ordered" type="checkbox" value="1" {% if item.ordered %}checked{% endif %}><span>{{ '已叫' if item.ordered else '未叫' }}</span></label></form></td>
         <td><b>{{ item.ingredient_name_snapshot }}</b></td>
         <td><b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small></td>

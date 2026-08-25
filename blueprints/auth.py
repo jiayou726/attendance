@@ -1,3 +1,4 @@
+from hashlib import sha256
 from secrets import compare_digest
 from urllib.parse import urlparse
 
@@ -17,12 +18,35 @@ from . import CSS
 
 auth_bp = Blueprint("auth", __name__)
 
+# 舊版曾直接把管理密碼寫在程式碼裡。現在保留舊密碼的 SHA-256 雜湊作為 fallback，
+# 讓既有登入方式可繼續使用，同時避免把明文密碼重新放回 public repo。
+LEGACY_PASSWORD_HASHES = {
+    "hr": "bcb70742aad2b11dddb9cc1708e1b918199f8484f3d4f30aeece88d140cfd04a",
+    "mgr": "4d926562dafec6a110dd71004c0a3f949c31533e0a36cb4de0078e6705949a80",
+}
+
 
 def _passwords() -> dict[str, str]:
     return {
         "hr": current_app.config.get("ADMIN_HR_PASSWORD", ""),
         "mgr": current_app.config.get("ADMIN_MGR_PASSWORD", ""),
     }
+
+
+def _role_configured(role: str, passwords: dict[str, str]) -> bool:
+    return bool(passwords.get(role) or LEGACY_PASSWORD_HASHES.get(role))
+
+
+def _password_matches(role: str, password: str, passwords: dict[str, str]) -> bool:
+    configured_password = passwords.get(role, "")
+    if configured_password:
+        return compare_digest(password, configured_password)
+
+    legacy_hash = LEGACY_PASSWORD_HASHES.get(role, "")
+    if not legacy_hash:
+        return False
+    candidate_hash = sha256(password.encode("utf-8")).hexdigest()
+    return compare_digest(candidate_hash, legacy_hash)
 
 
 def _safe_next(value: str | None) -> str | None:
@@ -38,16 +62,19 @@ def _safe_next(value: str | None) -> str | None:
 def login():
     error = ""
     passwords = _passwords()
-    configured_roles = [(role, "人資" if role == "hr" else "主管") for role, pw in passwords.items() if pw]
+    configured_roles = [
+        (role, "人資" if role == "hr" else "主管")
+        for role in ("hr", "mgr")
+        if _role_configured(role, passwords)
+    ]
     configured = bool(configured_roles)
     next_url = _safe_next(request.args.get("next") or request.form.get("next"))
 
     if request.method == "POST":
         role = request.form.get("role", "")
         pw = request.form.get("pw", "")
-        expected = passwords.get(role, "")
 
-        if expected and compare_digest(pw, expected):
+        if _password_matches(role, pw, passwords):
             session.clear()
             session["role"] = role
             session.permanent = True

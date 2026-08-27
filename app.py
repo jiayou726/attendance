@@ -17,6 +17,7 @@ from blueprints.records import rec_bp
 from blueprints.export import exp_bp
 from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
+from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
 
 
@@ -66,6 +67,10 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)
+
+    # 菜色配方清單會逐列計算 AP 生料；先把 BOM 與食材一次批次載入，
+    # 避免正式站對遠端 PostgreSQL 產生每道菜一次的 N+1 查詢。
+    install_recipe_performance_views(app)
 
     @app.before_request
     def protect_admin_pages():

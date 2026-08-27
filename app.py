@@ -26,17 +26,23 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
 
     with app.app_context():
         inspector = inspect(db.engine)
-        table_name = "kitchen_menu_assignment"
-        if not inspector.has_table(table_name):
-            return
-        columns = {column["name"] for column in inspector.get_columns(table_name)}
-        if "service_status" in columns:
-            return
         with db.engine.begin() as connection:
-            connection.execute(text(
-                "ALTER TABLE kitchen_menu_assignment "
-                "ADD COLUMN service_status VARCHAR(20) NOT NULL DEFAULT 'serving'"
-            ))
+            table_name = "kitchen_menu_assignment"
+            if inspector.has_table(table_name):
+                columns = {column["name"] for column in inspector.get_columns(table_name)}
+                if "service_status" not in columns:
+                    connection.execute(text(
+                        "ALTER TABLE kitchen_menu_assignment "
+                        "ADD COLUMN service_status VARCHAR(20) NOT NULL DEFAULT 'serving'"
+                    ))
+            school_table = "kitchen_school"
+            if inspector.has_table(school_table):
+                columns = {column["name"] for column in inspector.get_columns(school_table)}
+                if "default_vegetarian_headcount" not in columns:
+                    connection.execute(text(
+                        "ALTER TABLE kitchen_school ADD COLUMN "
+                        "default_vegetarian_headcount INTEGER NOT NULL DEFAULT 0"
+                    ))
 
 
 def create_app(config_overrides=None) -> Flask:

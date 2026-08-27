@@ -268,6 +268,21 @@
   const pendingSchoolMenuSaves = new Set();
   const schoolMenuForm = document.querySelector('[data-school-menu-autosave]');
   if (schoolMenuForm) {
+    const variantSwitch = schoolMenuForm.querySelector('[data-meal-variant-switch]');
+    const currentMealLabel = schoolMenuForm.querySelector('[data-current-meal-label]');
+    const showVariant = (variant) => {
+      schoolMenuForm.querySelectorAll('[data-variant-panel]').forEach((panel) => {
+        panel.hidden = panel.dataset.variantPanel !== variant;
+      });
+      variantSwitch?.querySelectorAll('[data-meal-variant]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.mealVariant === variant);
+      });
+      if (currentMealLabel) currentMealLabel.textContent = variant === 'vegetarian' ? '素食菜單' : '葷食菜單';
+    };
+    variantSwitch?.querySelectorAll('[data-meal-variant]').forEach((button) => {
+      button.addEventListener('click', () => showVariant(button.dataset.mealVariant || 'regular'));
+    });
+    showVariant('regular');
     schoolMenuForm.addEventListener('submit', (event) => event.preventDefault());
     const csrf = schoolMenuForm.querySelector('input[name="_csrf_token"]')?.value || '';
     const schoolId = schoolMenuForm.dataset.schoolId || '';
@@ -275,11 +290,15 @@
     const saveUrl = schoolMenuForm.dataset.saveUrl || '';
 
     schoolMenuForm.querySelectorAll('[data-school-menu-day]').forEach((day) => {
-      const headcount = day.querySelector('.headcount-box input');
+      const headcount = day.querySelector('[data-variant-panel="regular"] input[type="number"]');
+      const vegetarianHeadcount = day.querySelector('[data-variant-panel="vegetarian"] input[type="number"]');
       const checkboxes = [...day.querySelectorAll('.school-dish-check input[type="checkbox"]')];
       const noServiceToggle = day.querySelector('[data-no-service-toggle]');
       const serviceStatusBadge = day.querySelector('[data-service-status-badge]');
-      const count = day.querySelector('[data-selected-count]');
+      const counts = {
+        regular: day.querySelector('[data-selected-count="regular"]'),
+        vegetarian: day.querySelector('[data-selected-count="vegetarian"]'),
+      };
       const state = day.querySelector('[data-auto-save-state]');
       const serviceDate = day.dataset.serviceDate || '';
       let saveChain = Promise.resolve();
@@ -290,6 +309,7 @@
         const noService = isNoService();
         day.classList.toggle('no-service', noService);
         if (headcount) headcount.disabled = noService || day.classList.contains('locked');
+        if (vegetarianHeadcount) vegetarianHeadcount.disabled = noService || day.classList.contains('locked');
         checkboxes.forEach((item) => {
           item.disabled = noService || day.classList.contains('locked');
         });
@@ -298,17 +318,21 @@
 
       const currentState = () => JSON.stringify({
         headcount: headcount?.value || '',
-        recipeIds: checkboxes.filter((item) => item.checked).map((item) => item.value),
+        vegetarianHeadcount: vegetarianHeadcount?.value || '',
+        regularRecipeIds: checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'regular').map((item) => item.value),
+        vegetarianRecipeIds: checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'vegetarian').map((item) => item.value),
         serviceStatus: isNoService() ? 'no_service' : 'serving',
       });
       let lastQueuedState = currentState();
 
       const updateCount = () => {
-        if (count) count.textContent = String(checkboxes.filter((item) => item.checked).length);
+        Object.entries(counts).forEach(([variant, node]) => {
+          if (node) node.textContent = String(checkboxes.filter((item) => item.checked && item.dataset.menuVariant === variant).length);
+        });
       };
       const saveDay = () => {
-        if (!saveUrl || !serviceDate || !headcount || day.classList.contains('locked')) return;
-        if (!isNoService() && headcount.value.trim() === '') {
+        if (!saveUrl || !serviceDate || !headcount || !vegetarianHeadcount || day.classList.contains('locked')) return;
+        if (!isNoService() && (headcount.value.trim() === '' || vegetarianHeadcount.value.trim() === '')) {
           if (state) state.textContent = '請輸入人數';
           return;
         }
@@ -321,9 +345,11 @@
           school_id: schoolId,
           service_date: serviceDate,
           headcount: headcount.value,
+          vegetarian_headcount: vegetarianHeadcount.value,
           service_status: isNoService() ? 'no_service' : 'serving',
         });
-        checkboxes.filter((item) => item.checked).forEach((item) => body.append('recipe_ids', item.value));
+        checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'regular').forEach((item) => body.append('regular_recipe_ids', item.value));
+        checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'vegetarian').forEach((item) => body.append('vegetarian_recipe_ids', item.value));
         if (state) state.textContent = '儲存中…';
 
         const operation = saveChain.then(async () => {
@@ -333,9 +359,13 @@
             body,
           });
           if (!response.ok) throw new Error('save failed');
-          const selectedCount = checkboxes.filter((item) => item.checked).length;
+          const regularCount = checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'regular').length;
+          const vegetarianCount = checkboxes.filter((item) => item.checked && item.dataset.menuVariant === 'vegetarian').length;
           const names = new Set(missingSchools[serviceDate] || []);
-          const complete = isNoService() || (selectedCount > 0 && Number(headcount.value) > 0);
+          const complete = isNoService() || (
+            regularCount > 0 && Number(headcount.value) > 0
+            && (Number(vegetarianHeadcount.value) <= 0 || vegetarianCount > 0)
+          );
           if (complete) names.delete(schoolName);
           else names.add(schoolName);
           missingSchools[serviceDate] = [...names];
@@ -366,6 +396,19 @@
         headcountSaveTimer = window.setTimeout(saveDay, 1000);
       });
       headcount?.addEventListener('change', () => {
+        window.clearTimeout(headcountSaveTimer);
+        saveDay();
+      });
+      vegetarianHeadcount?.addEventListener('input', () => {
+        window.clearTimeout(headcountSaveTimer);
+        if (vegetarianHeadcount.value.trim() === '') {
+          if (state) state.textContent = '請輸入人數';
+          return;
+        }
+        if (state) state.textContent = '等待儲存…';
+        headcountSaveTimer = window.setTimeout(saveDay, 1000);
+      });
+      vegetarianHeadcount?.addEventListener('change', () => {
         window.clearTimeout(headcountSaveTimer);
         saveDay();
       });

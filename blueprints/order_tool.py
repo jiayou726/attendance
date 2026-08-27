@@ -424,10 +424,15 @@ def schools():
         if default_headcount is None or default_headcount < 0:
             flash("平常人數不可為負數。", "error")
             return redirect(url_for("order_tool.schools"))
+        default_vegetarian_headcount = _int(request.form.get("default_vegetarian_headcount"), default=0)
+        if default_vegetarian_headcount is None or default_vegetarian_headcount < 0:
+            flash("平常素食人數不可為負數。", "error")
+            return redirect(url_for("order_tool.schools"))
         db.session.add(KitchenSchool(
             name=name,
             code=request.form.get("code", "").strip() or None,
             default_headcount=default_headcount,
+            default_vegetarian_headcount=default_vegetarian_headcount,
         ))
         return _commit("學校已新增。", "order_tool.schools")
     q = request.args.get("q", "").strip()
@@ -455,6 +460,11 @@ def school_update(school_id: int):
         flash("平常人數不可為負數。", "error")
         return redirect(url_for("order_tool.schools", edit=school_id))
     row.default_headcount = default_headcount
+    default_vegetarian_headcount = _int(request.form.get("default_vegetarian_headcount"), default=0)
+    if default_vegetarian_headcount is None or default_vegetarian_headcount < 0:
+        flash("平常素食人數不可為負數。", "error")
+        return redirect(url_for("order_tool.schools", edit=school_id))
+    row.default_vegetarian_headcount = default_vegetarian_headcount
     return _commit("學校資料已更新。", "order_tool.schools")
 
 
@@ -1317,29 +1327,41 @@ def summary():
     )
 
 
-def _school_assignment_for_day(school_id: int, service_date: date) -> KitchenMenuAssignment | None:
-    return (
+def _vegetarian_menu_name(school: KitchenSchool) -> str:
+    return f"{school.name}素食菜單"
+
+
+def _school_assignment_for_day(
+    school_id: int, service_date: date, variant: str = "regular"
+) -> KitchenMenuAssignment | None:
+    query = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
             KitchenMenuAssignment.school_id == school_id,
             KitchenMenuPlan.service_date == service_date,
             KitchenMenuPlan.meal_type == "午餐",
         )
-        .first()
     )
+    if variant == "vegetarian":
+        query = query.filter(KitchenMenuPlan.name.like("%素食菜單"))
+    else:
+        query = query.filter(~KitchenMenuPlan.name.like("%素食菜單"))
+    return query.first()
 
 
-def _editable_school_plan(school: KitchenSchool, service_date: date) -> KitchenMenuPlan:
+def _editable_school_plan(
+    school: KitchenSchool, service_date: date, variant: str = "regular"
+) -> KitchenMenuPlan:
     """取得學校專屬菜單；舊資料若把學校掛在中央菜單，先安全拆開。"""
 
-    assignment = _school_assignment_for_day(school.id, service_date)
+    assignment = _school_assignment_for_day(school.id, service_date, variant)
     if assignment and assignment.plan.name != "中央菜單":
         return assignment.plan
     if assignment:
         db.session.delete(assignment)
         db.session.flush()
 
-    menu_name = f"{school.name}菜單"
+    menu_name = _vegetarian_menu_name(school) if variant == "vegetarian" else f"{school.name}菜單"
     plan = KitchenMenuPlan.query.filter_by(
         service_date=service_date,
         meal_type="午餐",
@@ -1358,7 +1380,10 @@ def _editable_school_plan(school: KitchenSchool, service_date: date) -> KitchenM
         db.session.add(KitchenMenuAssignment(
             plan_id=plan.id,
             school_id=school.id,
-            headcount=max(school.default_headcount, 0),
+            headcount=max(
+                school.default_vegetarian_headcount if variant == "vegetarian" else school.default_headcount,
+                0,
+            ),
         ))
         db.session.flush()
     return plan
@@ -1383,10 +1408,28 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
         .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
         .all()
     )
-    dates_by_school: dict[int, set[date]] = defaultdict(set)
+    assignments_by_school_date: dict[tuple[int, date], list[KitchenMenuAssignment]] = defaultdict(list)
     for assignment in assignments:
-        if assignment.service_status == "no_service" or (assignment.plan.items and assignment.headcount > 0):
-            dates_by_school[assignment.school_id].add(assignment.plan.service_date)
+        assignments_by_school_date[(assignment.school_id, assignment.plan.service_date)].append(assignment)
+    dates_by_school: dict[int, set[date]] = defaultdict(set)
+    for school in schools:
+        for service_date in required_dates:
+            rows = assignments_by_school_date[(school.id, service_date)]
+            if any(row.service_status == "no_service" for row in rows):
+                dates_by_school[school.id].add(service_date)
+                continue
+            regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
+            vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
+            regular_ok = bool(regular and regular.plan.items and regular.headcount > 0)
+            vegetarian_ok = (
+                bool(vegetarian and (
+                    vegetarian.headcount == 0
+                    or (vegetarian.plan.items and vegetarian.headcount > 0)
+                ))
+                or (vegetarian is None and school.default_vegetarian_headcount <= 0)
+            )
+            if regular_ok and vegetarian_ok:
+                dates_by_school[school.id].add(service_date)
     complete_ids = {
         school.id for school in schools
         if required_dates and required_dates.issubset(dates_by_school[school.id])
@@ -1406,10 +1449,28 @@ def _missing_school_names_for_date(service_date: date) -> list[str]:
         .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
         .all()
     )
-    completed_ids = {
-        row.school_id for row in assignments
-        if row.service_status == "no_service" or (row.plan.items and row.headcount > 0)
-    }
+    rows_by_school: dict[int, list[KitchenMenuAssignment]] = defaultdict(list)
+    for row in assignments:
+        rows_by_school[row.school_id].append(row)
+    completed_ids = set()
+    for school in schools:
+        rows = rows_by_school[school.id]
+        if any(row.service_status == "no_service" for row in rows):
+            completed_ids.add(school.id)
+            continue
+        regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
+        vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
+        if (
+            regular and regular.plan.items and regular.headcount > 0
+            and (
+                (vegetarian and (
+                    vegetarian.headcount == 0
+                    or (vegetarian.plan.items and vegetarian.headcount > 0)
+                ))
+                or (vegetarian is None and school.default_vegetarian_headcount <= 0)
+            )
+        ):
+            completed_ids.add(school.id)
     return [school.name for school in schools if school.id not in completed_ids]
 
 
@@ -1456,7 +1517,10 @@ def school_menus():
             )
             .all()
         )
-    assignment_by_date = {row.plan.service_date: row for row in school_assignments}
+    assignment_by_date_variant = {
+        (row.plan.service_date, "vegetarian" if row.plan.name.endswith("素食菜單") else "regular"): row
+        for row in school_assignments
+    }
     days = []
     for offset, weekday in enumerate(WEEKDAY_LABELS):
         day_date = week_start + timedelta(days=offset)
@@ -1469,24 +1533,31 @@ def school_menus():
                 if item.recipe_id not in seen_recipe_ids:
                     source_items.append(item)
                     seen_recipe_ids.add(item.recipe_id)
-        assignment = assignment_by_date.get(day_date)
-        selected_ids = {item.recipe_id for item in assignment.plan.items} if assignment else set()
-        if assignment:
+        regular_assignment = assignment_by_date_variant.get((day_date, "regular"))
+        vegetarian_assignment = assignment_by_date_variant.get((day_date, "vegetarian"))
+        assignments_for_day = [row for row in (regular_assignment, vegetarian_assignment) if row]
+        selected_ids = {
+            "regular": {item.recipe_id for item in regular_assignment.plan.items} if regular_assignment else set(),
+            "vegetarian": {item.recipe_id for item in vegetarian_assignment.plan.items} if vegetarian_assignment else set(),
+        }
+        for assignment in assignments_for_day:
             for item in assignment.plan.items:
                 if item.recipe_id not in seen_recipe_ids:
                     source_items.append(item)
                     seen_recipe_ids.add(item.recipe_id)
+        no_service = any(row.service_status == "no_service" for row in assignments_for_day)
         days.append({
             "date": day_date,
             "weekday": weekday,
             "source_items": source_items,
             "selected_ids": selected_ids,
-            "assignment": assignment,
-            "headcount": assignment.headcount if assignment else (selected_school.default_headcount if selected_school else 0),
-            "service_status": assignment.service_status if assignment else "serving",
+            "assignments": assignments_for_day,
+            "headcount": regular_assignment.headcount if regular_assignment else (selected_school.default_headcount if selected_school else 0),
+            "vegetarian_headcount": vegetarian_assignment.headcount if vegetarian_assignment else (selected_school.default_vegetarian_headcount if selected_school else 0),
+            "service_status": "no_service" if no_service else "serving",
             "locked": bool(
                 day_date in confirmed_order_dates
-                or (assignment and assignment.plan.status != "draft")
+                or any(row.plan.status != "draft" for row in assignments_for_day)
             ),
         })
     _all_schools, complete_school_ids, required_dates = _school_week_completion(week_start)
@@ -1616,6 +1687,60 @@ def school_menu_save_day():
         return {"message": "供餐狀態不正確。"}, 400
     if _active_confirmed_orders(service_date):
         return {"message": "這一天已有確認採購單，請先重開採購草稿。"}, 409
+
+    # 新介面會一次送出葷、素兩組資料，切換畫面時不會覆蓋另一組勾選。
+    if "vegetarian_headcount" in request.form:
+        regular_headcount = _int(request.form.get("headcount"), default=None)
+        vegetarian_headcount = _int(request.form.get("vegetarian_headcount"), default=None)
+        if regular_headcount is None or regular_headcount < 0 or vegetarian_headcount is None or vegetarian_headcount < 0:
+            return {"message": "葷、素供餐人數不可為負數。"}, 400
+        existing = [
+            row for row in (
+                _school_assignment_for_day(school.id, service_date, "regular"),
+                _school_assignment_for_day(school.id, service_date, "vegetarian"),
+            ) if row
+        ]
+        if any(row.plan.status != "draft" for row in existing):
+            return {"message": "這一天已確認，無法修改。"}, 409
+        if service_status == "no_service":
+            plan = _editable_school_plan(school, service_date, "regular")
+            assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
+            assignment.headcount = regular_headcount
+            assignment.service_status = "no_service"
+            for row in existing:
+                row.service_status = "no_service"
+            db.session.commit()
+            return "", 204
+
+        def sync_variant(variant: str, people: int, field_name: str):
+            recipe_ids = {
+                recipe_id for raw in request.form.getlist(field_name)
+                if (recipe_id := _int(raw, default=0)) and db.session.get(KitchenRecipe, recipe_id)
+            }
+            assignment = _school_assignment_for_day(school.id, service_date, variant)
+            if variant == "regular" and people <= 0 and not recipe_ids:
+                if assignment:
+                    db.session.delete(assignment.plan)
+                return
+            plan = _editable_school_plan(school, service_date, variant)
+            for item in list(plan.items):
+                db.session.delete(item)
+            db.session.flush()
+            recipes = KitchenRecipe.query.filter(KitchenRecipe.id.in_(recipe_ids or {-1})).order_by(
+                KitchenRecipe.category, KitchenRecipe.name
+            ).all()
+            for sort_order, recipe in enumerate(recipes):
+                db.session.add(KitchenMenuPlanItem(
+                    plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order
+                ))
+            row = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
+            row.headcount = people
+            row.service_status = "serving"
+
+        sync_variant("regular", regular_headcount, "regular_recipe_ids")
+        sync_variant("vegetarian", vegetarian_headcount, "vegetarian_recipe_ids")
+        db.session.commit()
+        return "", 204
 
     assignment = _school_assignment_for_day(school.id, service_date)
     if assignment and assignment.plan.status != "draft":

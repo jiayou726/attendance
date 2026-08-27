@@ -22,7 +22,7 @@
     <div class="field">
       <label for="school-menu-picker">先選擇學校</label>
       <select id="school-menu-picker" name="school_id">
-        {% for school in schools %}<option value="{{ school.id }}"{% if selected_school and school.id == selected_school.id %} selected{% endif %}>{{ school.name }}（平常 {{ school.default_headcount }} 人）</option>{% endfor %}
+        {% for school in schools %}<option value="{{ school.id }}"{% if selected_school and school.id == selected_school.id %} selected{% endif %}>{{ school.name }}（葷 {{ school.default_headcount }}／素 {{ school.default_vegetarian_headcount }}／共 {{ school.default_headcount + school.default_vegetarian_headcount }} 人）</option>{% endfor %}
       </select>
     </div>
     <button class="btn" type="submit">查看這間學校</button>
@@ -53,6 +53,11 @@
     <div><span class="pill ok">目前學校</span><h2>{{ selected_school.name }}</h2></div>
     <span class="school-auto-save-hint">勾選菜色或修改人數後會自動儲存</span>
   </div>
+  <div class="meal-variant-switch" role="group" aria-label="切換葷素菜單" data-meal-variant-switch>
+    <button type="button" class="active" data-meal-variant="regular">葷食 {{ selected_school.default_headcount }} 人</button>
+    <button type="button" data-meal-variant="vegetarian">素食 {{ selected_school.default_vegetarian_headcount }} 人</button>
+  </div>
+  <p class="meal-variant-hint">目前正在勾選：<b data-current-meal-label>葷食菜單</b>。切換後會保留另一邊已勾選的菜色。</p>
 
   <section class="school-week-grid" aria-label="{{ selected_school.name }} 週一到週日菜單">
     {% for day in days %}
@@ -65,16 +70,26 @@
         <input type="checkbox" data-no-service-toggle{% if day.service_status == 'no_service' %} checked{% endif %}{% if day.locked %} disabled{% endif %}>
         <span><b>今日停餐</b><small>不計入供餐人數與食材採購</small></span>
       </label>
-      <label class="headcount-box">
-        <span>供餐人數</span>
+      <label class="headcount-box" data-variant-panel="regular">
+        <span>葷食人數</span>
         <input name="headcount_{{ day.date.isoformat() }}" type="number" min="0" value="{{ day.headcount }}" required{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
+        <i>人</i>
+      </label>
+      <label class="headcount-box" data-variant-panel="vegetarian" hidden>
+        <span>素食人數</span>
+        <input name="vegetarian_headcount_{{ day.date.isoformat() }}" type="number" min="0" value="{{ day.vegetarian_headcount }}" required{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
         <i>人</i>
       </label>
       <div class="school-dish-list">
         {% if day.source_items %}
           {% for item in day.source_items %}
-          <label class="school-dish-check{% if item.recipe_id in day.selected_ids %} selected{% endif %}">
-            <input name="recipes_{{ day.date.isoformat() }}" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
+          <label class="school-dish-check{% if item.recipe_id in day.selected_ids.regular %} selected{% endif %}" data-variant-panel="regular">
+            <input data-menu-variant="regular" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.regular %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
+            <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+            <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
+          </label>
+          <label class="school-dish-check vegetarian{% if item.recipe_id in day.selected_ids.vegetarian %} selected{% endif %}" data-variant-panel="vegetarian" hidden>
+            <input data-menu-variant="vegetarian" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.vegetarian %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
             <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
@@ -83,7 +98,7 @@
           <div class="day-empty small">總表這天還沒有菜色</div>
         {% endif %}
       </div>
-      <footer><span><b data-selected-count>{{ day.selected_ids|length }}</b> 道已勾選</span><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
+      <footer><span>葷 <b data-selected-count="regular">{{ day.selected_ids.regular|length }}</b> 道／素 <b data-selected-count="vegetarian">{{ day.selected_ids.vegetarian|length }}</b> 道</span><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
     </article>
     {% endfor %}
   </section>

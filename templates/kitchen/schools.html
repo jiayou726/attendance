@@ -8,7 +8,8 @@
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="field"><label>名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}" placeholder="例如：內小"></div><br>
       <div class="field"><label>代碼（可空白）</label><input name="code" value="{{ edit_row.code if edit_row and edit_row.code else '' }}" placeholder="例如：1-08"></div><br>
-      <div class="field"><label>平常供餐人數</label><input name="default_headcount" type="number" min="0" value="{{ edit_row.default_headcount if edit_row else 0 }}" required><div class="muted">排菜時會先帶入，當天仍可修改。</div></div><br>
+      <div class="field"><label>平常葷食人數</label><input name="default_headcount" type="number" min="0" value="{{ edit_row.default_headcount if edit_row else 0 }}" required></div><br>
+      <div class="field"><label>平常素食人數</label><input name="default_vegetarian_headcount" type="number" min="0" value="{{ edit_row.default_vegetarian_headcount if edit_row else 0 }}" required><div class="muted">排菜時會分別帶入，當天仍可修改。</div></div><br>
       <button class="btn">{{ '儲存修改' if edit_row else '新增' }}</button>
       {% if edit_row %}<a class="btn secondary" href="{{ url_for('order_tool.schools') }}">取消</a>{% endif %}
     </form>
@@ -17,9 +18,9 @@
   <section class="card span-7">
     <div class="top"><h2>學校清單</h2><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋學校"><button class="btn secondary">搜尋</button></form></div>
     {% if rows %}<div class="table-scroll"><table>
-      <thead><tr><th>代碼</th><th>名稱</th><th class="right">平常人數</th><th>狀態</th><th>操作</th></tr></thead>
+      <thead><tr><th>代碼</th><th>名稱</th><th class="right">葷食</th><th class="right">素食</th><th class="right">合計</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>{% for r in rows %}<tr>
-        <td>{{ r.code or '-' }}</td><td>{{ r.name }}</td><td class="right">{{ r.default_headcount }}</td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
+        <td>{{ r.code or '-' }}</td><td>{{ r.name }}</td><td class="right">{{ r.default_headcount }}</td><td class="right">{{ r.default_vegetarian_headcount }}</td><td class="right"><b>{{ r.default_headcount + r.default_vegetarian_headcount }}</b></td><td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
         <td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.schools', edit=r.id) }}">編輯</a>
           <form method="post" action="{{ url_for('order_tool.school_toggle', school_id=r.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn {{ 'danger' if r.active else 'ok' }}">{{ '停用' if r.active else '恢復' }}</button></form>
         </div></td>

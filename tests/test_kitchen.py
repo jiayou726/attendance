@@ -350,6 +350,54 @@ def test_school_menu_auto_saves_one_day_and_blocks_incomplete_procurement(app, a
         assert KitchenPurchaseOrder.query.count() == 0
 
 
+def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procurement(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    response = authed_client.post(f"/admin/order-tool/schools/{ids['school']}/update", data={
+        "name": "內小",
+        "code": "1-08",
+        "default_headcount": "40",
+        "default_vegetarian_headcount": "3",
+    })
+    assert response.status_code == 302
+    schools_page = authed_client.get("/admin/order-tool/schools").get_data(as_text=True)
+    assert "平常葷食人數" in schools_page
+    assert "平常素食人數" in schools_page
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+
+    page = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert "data-meal-variant=\"regular\"" in page
+    assert "data-meal-variant=\"vegetarian\"" in page
+    assert "葷食 40 人" in page
+    assert "素食 3 人" in page
+
+    response = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "40",
+        "vegetarian_headcount": "3",
+        "regular_recipe_ids": str(ids["recipe"]),
+        "vegetarian_recipe_ids": str(ids["recipe"]),
+    })
+    assert response.status_code == 204
+
+    with app.app_context():
+        assignments = KitchenMenuAssignment.query.join(KitchenMenuPlan).filter(
+            KitchenMenuAssignment.school_id == ids["school"],
+            KitchenMenuPlan.service_date == TEST_DAY,
+        ).all()
+        assert sorted(row.headcount for row in assignments) == [3, 40]
+        assert {row.plan.name for row in assignments} == {"內小菜單", "內小素食菜單"}
+        requirements = order_tool_module._requirements_for_date(TEST_DAY)
+        ingredient_row = next(iter(next(iter(requirements.values())).values()))
+        assert ingredient_row["total_people"] == 43
+
+
 def test_no_service_school_is_complete_and_excluded_from_procurement(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={

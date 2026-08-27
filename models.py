@@ -40,6 +40,8 @@ class KitchenSchool(db.Model):
     code = db.Column(db.String(50), unique=True)
     # 平常供餐人數；排菜時自動帶入，當天仍可另外修改。
     default_headcount = db.Column(db.Integer, nullable=False, default=0)
+    # 平常素食人數；葷食仍沿用 default_headcount，確保舊資料相容。
+    default_vegetarian_headcount = db.Column(db.Integer, nullable=False, default=0)
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

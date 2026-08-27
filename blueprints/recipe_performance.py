@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from extensions import db
 from models import KitchenIngredient, KitchenRecipe, KitchenRecipeIngredient
-from blueprints.order_tool import CATEGORIES, _recipe_cost, _recipe_total_g
+from blueprints.order_tool import CATEGORIES, _int, _recipe_cost, _recipe_total_g
 
 
 def _recipe_bom_load():
@@ -44,8 +44,8 @@ def install_recipe_performance_views(app):
             KitchenRecipe.name,
         ).all()
         edit_row = (
-            db.session.get(KitchenRecipe, int(request.args["edit"]))
-            if request.args.get("edit", "").isdigit()
+            db.session.get(KitchenRecipe, _int(request.args.get("edit"), default=0))
+            if request.args.get("edit")
             else None
         )
         return render_template(

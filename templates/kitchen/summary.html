@@ -1,5 +1,12 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}每週菜單總表{% endblock %}
+{% macro render_menu_dish(item, plan, week_start) -%}
+<div class="menu-dish">
+  <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+  <a href="{{ url_for('order_tool.recipe_detail', recipe_id=item.recipe.id) }}">{{ item.recipe.name }}</a>
+  {% if plan.status == 'draft' %}<form class="menu-dish-delete" method="post" action="{{ url_for('order_tool.summary_dish_delete', row_id=item.id) }}" onsubmit="return confirm('確定從這天菜單移除「{{ item.recipe.name }}」？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="week" value="{{ week_start.isoformat() }}"><button type="submit" aria-label="移除{{ item.recipe.name }}" title="移除菜色">×</button></form>{% endif %}
+</div>
+{%- endmacro %}
 {% block content %}
 <section class="summary-week-head">
   <div>
@@ -58,12 +65,19 @@
           <a class="daily-plan-name" href="{{ url_for('order_tool.plan_detail', plan_id=plan.id) }}">{{ plan.meal_type }}・{{ plan.name }}</a>
           {% endif %}
           {% if plan.items %}
+            {# 固定依 CATEGORIES 顯示：主食 → 主菜 → 副菜 → 青菜 → 湯品 → 點心 → 其他。 #}
+            {% for category in categories %}
+              {% for item in plan.items %}
+                {% if (item.recipe.category or '其他') == category %}
+                  {{ render_menu_dish(item, plan, week_start) }}
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+            {# 舊資料若有非標準分類仍保留，統一放到最後，不讓菜色消失。 #}
             {% for item in plan.items %}
-            <div class="menu-dish">
-              <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
-              <a href="{{ url_for('order_tool.recipe_detail', recipe_id=item.recipe.id) }}">{{ item.recipe.name }}</a>
-              {% if plan.status == 'draft' %}<form class="menu-dish-delete" method="post" action="{{ url_for('order_tool.summary_dish_delete', row_id=item.id) }}" onsubmit="return confirm('確定從這天菜單移除「{{ item.recipe.name }}」？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="week" value="{{ week_start.isoformat() }}"><button type="submit" aria-label="移除{{ item.recipe.name }}" title="移除菜色">×</button></form>{% endif %}
-            </div>
+              {% if (item.recipe.category or '其他') not in categories %}
+                {{ render_menu_dish(item, plan, week_start) }}
+              {% endif %}
             {% endfor %}
           {% else %}
             <div class="day-empty small">這張菜單尚無菜色</div>

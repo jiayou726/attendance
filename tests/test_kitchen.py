@@ -375,6 +375,8 @@ def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procur
     assert "data-meal-variant=\"vegetarian\"" in page
     assert "葷食 40 人" in page
     assert "素食 3 人" in page
+    css = authed_client.get("/static/kitchen_mobile.css").get_data(as_text=True)
+    assert "[data-variant-panel][hidden]{display:none!important}" in css
 
     response = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
         "school_id": str(ids["school"]),

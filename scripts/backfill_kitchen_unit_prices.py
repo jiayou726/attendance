@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import create_app
 from extensions import db
 from models import KitchenIngredient, KitchenSupplierItem
 
@@ -170,6 +169,10 @@ def parse_args():
 
 
 def main():
+    # Import lazily so the application can reuse the idempotent backfill logic
+    # during deployment startup without creating an app.py import cycle.
+    from app import create_app
+
     args = parse_args()
     if args.end_date < args.start_date:
         raise SystemExit("end date must be on or after start date")

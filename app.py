@@ -2,6 +2,8 @@
 import flask.blueprints
 
 import os
+from datetime import date
+from decimal import Decimal
 from flask import Flask, redirect, request, session, url_for
 from sqlalchemy import inspect, text
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -43,6 +45,25 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                         "ALTER TABLE kitchen_school ADD COLUMN "
                         "default_vegetarian_headcount INTEGER NOT NULL DEFAULT 0"
                     ))
+
+        # Historical supplier prices already live in production.  Apply the
+        # conservative, idempotent unit conversion after each deploy so a
+        # pushed release updates zero-priced ingredient master rows as well.
+        required_tables = {
+            "kitchen_ingredient", "kitchen_supplier", "kitchen_supplier_item",
+        }
+        if all(inspector.has_table(table) for table in required_tables):
+            from scripts.backfill_kitchen_unit_prices import backfill_prices
+
+            selected = backfill_prices(
+                date(2012, 1, 1),
+                date(2025, 12, 31),
+                Decimal("5"),
+                Decimal("2000"),
+                overwrite=False,
+            )
+            if selected:
+                db.session.commit()
 
 
 def create_app(config_overrides=None) -> Flask:

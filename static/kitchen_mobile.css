@@ -104,6 +104,7 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,t
 .recipe-picker-field{min-width:min(360px,100%);flex:1}
 .recipe-picker-field .dish-search-wrap{margin-bottom:0}
 .supplier-group-row td{padding:9px 12px!important;border-top:2px solid #b7cddd;border-bottom:1px solid #b7cddd!important;background:#eaf3fb!important;color:#24445f;font-size:13px!important;font-weight:900;letter-spacing:.02em}.supplier-group-row:first-child td{border-top:0}.procurement-save-state{display:inline-block;min-width:56px;color:var(--ok);font-size:11px;font-weight:800;white-space:normal}.supplier-order-list{max-width:260px;color:#475467;font-size:12px;overflow-wrap:anywhere}
+.procurement-people{vertical-align:middle}.procurement-people .included-schools{display:block;margin-top:7px;color:#475467;font-size:11px;line-height:1.5;overflow-wrap:anywhere}.procurement-people .included-schools span{display:block;color:#667085;font-size:10px;font-weight:700}
 @media print{
   body{background:#fff;padding:0!important}.no-print{display:none!important}.wrap{max-width:none;padding:0}.card{box-shadow:none;border:0;padding:0;overflow:visible}.table-scroll{overflow:visible;margin:0;width:100%;padding:0}.table-scroll>table{min-width:0}.table-scroll::after{display:none!important}table{display:table;white-space:normal}th,td{font-size:10.5px;padding:5px}.purchase-group{break-inside:avoid;margin-bottom:20px}.print-title{display:block;margin-bottom:16px}h1{font-size:20px}h2{font-size:16px}.flash{display:none}
 }

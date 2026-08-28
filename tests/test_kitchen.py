@@ -398,6 +398,7 @@ def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procur
         requirements = order_tool_module._requirements_for_date(TEST_DAY)
         ingredient_row = next(iter(next(iter(requirements.values())).values()))
         assert ingredient_row["total_people"] == 43
+        assert ingredient_row["school_names"] == {"內小"}
 
 
 def test_no_service_school_is_complete_and_excluded_from_procurement(app, authed_client):
@@ -580,6 +581,7 @@ def test_single_day_procurement_has_simple_fields_and_searchable_supplier(app, a
     assert "data-auto-save-url" in page
     assert "每一列修改後自動儲存" in page
     assert ">801</b> 人次" in page
+    assert '<small class="included-schools"><span>包含學校（1）</span>內小</small>' in page
     assert "1箱＝10kg" in page
 
     with app.app_context():

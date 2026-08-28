@@ -1206,7 +1206,12 @@ def _requirements_for_date(service_date: date):
     plans_on_day = KitchenMenuPlan.query.filter_by(service_date=service_date).all()
     grouped: dict[str, dict[int, dict]] = defaultdict(dict)
     for plan in plans_on_day:
-        people = sum(max(x.headcount, 0) for x in plan.assignments if x.service_status == "serving")
+        serving_assignments = [
+            assignment
+            for assignment in plan.assignments
+            if assignment.service_status == "serving" and assignment.headcount > 0
+        ]
+        people = sum(assignment.headcount for assignment in serving_assignments)
         if people <= 0:
             continue
         for menu_item in plan.items:
@@ -1224,10 +1229,14 @@ def _requirements_for_date(service_date: date):
                         "ingredient": ing,
                         "required_amount": Decimal("0"),
                         "total_people": 0,
+                        "school_names": set(),
                     }
                     grouped[supplier_key][ing.id] = current
                 current["required_amount"] += base_amount
                 current["total_people"] += people
+                current["school_names"].update(
+                    assignment.school.name for assignment in serving_assignments
+                )
     return grouped
 
 
@@ -2597,17 +2606,19 @@ def _procurement_rows(service_date: date):
         .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.supplier_name_snapshot)
         .all()
     )
-    people_by_key = {}
+    requirements_by_key = {}
     for ingredient_rows in _requirements_for_date(service_date).values():
         for data in ingredient_rows.values():
-            people_by_key[data["ingredient"].id] = data["total_people"]
+            requirements_by_key[data["ingredient"].id] = data
     rows = []
     for order in orders:
         for item in _sorted_purchase_items(order.items):
+            requirement = requirements_by_key.get(item.ingredient_id, {})
             rows.append({
                 "order": order,
                 "item": item,
-                "total_people": people_by_key.get(item.ingredient_id, 0),
+                "total_people": requirement.get("total_people", 0),
+                "school_names": sorted(requirement.get("school_names", set())),
                 "supplier_name": _purchase_item_supplier_name(item),
             })
     rows.sort(key=lambda row: (row["order"].service_date, _purchase_item_sort_key(row["item"])))

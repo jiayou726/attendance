@@ -618,7 +618,6 @@ def supplier_item_delete(item_id: int):
 
 def _ingredient_form_values():
     name = request.form.get("name", "").strip()
-    supplier_id = _int(request.form.get("supplier_id"), default=None)
     base_unit = request.form.get("base_unit", "g").strip()
     purchase_unit = request.form.get("purchase_unit", "kg").strip()
     units_per_purchase = _decimal(request.form.get("grams_per_purchase_unit"))
@@ -638,8 +637,30 @@ def _ingredient_form_values():
         return None, "單價不可為負數。"
     if increment is None or increment <= 0:
         return None, "最小叫貨增量必須大於 0。"
-    if supplier_id is not None and not db.session.get(KitchenSupplier, supplier_id):
-        return None, "找不到指定廠商。"
+
+    supplier_name_raw = request.form.get("supplier_name")
+    if supplier_name_raw is None:
+        supplier_id = _int(request.form.get("supplier_id"), default=None)
+        if supplier_id is not None and not db.session.get(KitchenSupplier, supplier_id):
+            return None, "找不到指定廠商。"
+    else:
+        supplier_name = supplier_name_raw.strip()
+        if len(supplier_name) > 100:
+            return None, "廠商名稱不可超過 100 個字。"
+        supplier = None
+        if supplier_name:
+            supplier = KitchenSupplier.query.filter(
+                db.func.lower(KitchenSupplier.name) == supplier_name.lower()
+            ).first()
+            if supplier is None:
+                supplier = KitchenSupplier(
+                    name=supplier_name,
+                    note="由食材主檔新增",
+                    active=True,
+                )
+                db.session.add(supplier)
+                db.session.flush()
+        supplier_id = supplier.id if supplier else None
     return {
         "name": name,
         "supplier_id": supplier_id,

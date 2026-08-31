@@ -167,6 +167,48 @@ def test_static_pages_render_and_attendance_models_survive(app, authed_client):
         assert Checkin.query.filter_by(employee_id=9001).count() == 1
 
 
+def test_ingredient_supplier_can_search_existing_or_create_new(app, authed_client):
+    assert authed_client.post(
+        "/admin/order-tool/suppliers",
+        data={"name": "搜尋得到的肉品商"},
+    ).status_code == 302
+
+    page = authed_client.get("/admin/order-tool/ingredients").get_data(as_text=True)
+    assert 'name="supplier_name"' in page
+    assert 'list="ingredient-supplier-options"' in page
+    assert '<option value="搜尋得到的肉品商"' in page
+    assert "若沒有符合項目，送出後會直接新增廠商" in page
+
+    assert authed_client.post("/admin/order-tool/ingredients", data={
+        "name": "搜尋既有廠商食材",
+        "supplier_name": "搜尋得到的肉品商",
+        "base_unit": "g",
+        "purchase_unit": "kg",
+        "grams_per_purchase_unit": "1000",
+        "unit_price": "10",
+        "order_increment": "0.001",
+        "note": "",
+    }).status_code == 302
+    assert authed_client.post("/admin/order-tool/ingredients", data={
+        "name": "直接新增廠商食材",
+        "supplier_name": "現場新廠商",
+        "base_unit": "g",
+        "purchase_unit": "kg",
+        "grams_per_purchase_unit": "1000",
+        "unit_price": "20",
+        "order_increment": "0.001",
+        "note": "",
+    }).status_code == 302
+
+    with app.app_context():
+        existing = KitchenSupplier.query.filter_by(name="搜尋得到的肉品商").one()
+        created = KitchenSupplier.query.filter_by(name="現場新廠商").one()
+        assert KitchenSupplier.query.filter_by(name="搜尋得到的肉品商").count() == 1
+        assert KitchenIngredient.query.filter_by(name="搜尋既有廠商食材").one().supplier_id == existing.id
+        assert KitchenIngredient.query.filter_by(name="直接新增廠商食材").one().supplier_id == created.id
+        assert created.note == "由食材主檔新增"
+
+
 def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
 

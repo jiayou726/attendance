@@ -744,10 +744,30 @@ def test_procurement_autosave_creates_suppliers_and_groups_every_output(app, aut
     assert procurement_page.count('<tr class="supplier-group-row"><td colspan="8">乙供應商') == 1
     assert '<tr class="supplier-group-row"><td colspan="8">甲供應商' not in procurement_page
 
+    response = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{items['洋蔥']}/save",
+        data={
+            "actual": "10",
+            "package_qty": "6",
+            "package_unit": "",
+            "delivery_date": "2026-08-12",
+            "delivery_slot": "下午",
+            "supplier_name": "乙供應商",
+        },
+    )
+    assert response.status_code == 200
+
     exported = authed_client.get("/admin/order-tool/summary/procurement.xlsx?date=2026-08-13")
     workbook = load_workbook(BytesIO(exported.data))
     sheet = workbook["每日訂購單"]
-    assert [sheet["A3"].value, sheet["A4"].value] == ["乙供應商", None]
+    assert sheet["C1"].value == "進貨日期：115/08/12 上午"
+    assert [cell.value for cell in sheet[2]] == ["廠商", "品名", "數量", "單位", "備註"]
+    assert [sheet["A3"].value, sheet["B3"].value] == ["乙供應商", "骨腿丁"]
+    assert sheet["C5"].value == "進貨日期：115/08/12 下午"
+    assert [cell.value for cell in sheet[6]] == ["廠商", "品名", "數量", "單位", "備註"]
+    assert [sheet["A7"].value, sheet["B7"].value] == ["乙供應商", "洋蔥"]
+    assert "進貨：" not in (sheet["E3"].value or "")
+    assert "進貨：" not in (sheet["E7"].value or "")
 
     history = authed_client.get(
         "/admin/order-tool/purchases?start=2026-08-13&end=2026-08-13"

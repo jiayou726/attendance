@@ -2594,6 +2594,24 @@ def _sorted_purchase_items(items):
     return sorted(items, key=_purchase_item_sort_key)
 
 
+def _purchase_item_delivery_key(item: KitchenPurchaseOrderItem, service_date: date):
+    delivery_date = item.delivery_date or service_date
+    delivery_slot = item.delivery_slot or "上午"
+    return delivery_date, delivery_slot
+
+
+def _procurement_export_sort_key(row, service_date: date):
+    item = row["item"]
+    delivery_date, delivery_slot = _purchase_item_delivery_key(item, service_date)
+    slot_order = 0 if delivery_slot == "上午" else 1
+    return (
+        delivery_date,
+        slot_order,
+        delivery_slot,
+        _purchase_item_sort_key(item),
+    )
+
+
 def _procurement_rows(service_date: date):
     orders = (
         KitchenPurchaseOrder.query.filter(
@@ -2691,85 +2709,86 @@ def procurement():
 @order_bp.get("/summary/procurement.xlsx")
 def procurement_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
-    rows = _procurement_rows(service_date)
+    rows = sorted(
+        _procurement_rows(service_date),
+        key=lambda row: _procurement_export_sort_key(row, service_date),
+    )
 
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "每日訂購單"
 
-    delivery_keys = {
-        (item.delivery_date or service_date, item.delivery_slot or "上午")
-        for row in rows
-        for item in (row["item"],)
-    }
-    if len(delivery_keys) == 1:
-        delivery_date, delivery_slot = next(iter(delivery_keys))
-        roc_delivery = f"{delivery_date.year - 1911:03d}/{delivery_date.month:02d}/{delivery_date.day:02d} {delivery_slot}"
-    elif delivery_keys:
-        roc_delivery = "依各品項備註"
-    else:
-        roc_delivery = f"{service_date.year - 1911:03d}/{service_date.month:02d}/{service_date.day:02d} 上午"
-
-    sheet.merge_cells("A1:B1")
-    sheet.merge_cells("C1:E1")
-    sheet["A1"] = "每日訂購單"
-    sheet["C1"] = f"進貨日期：{roc_delivery}"
-    sheet["A1"].font = Font(size=16, bold=True)
-    sheet["C1"].font = Font(size=12, bold=True)
-    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    sheet["C1"].alignment = Alignment(horizontal="right", vertical="center")
-    sheet.row_dimensions[1].height = 28
-
     headers = ["廠商", "品名", "數量", "單位", "備註"]
-    sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="F2F2F2")
     ordered_fill = PatternFill("solid", fgColor="FFF1A8")
     thin = Side(style="thin", color="000000")
     table_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    for cell in sheet[2]:
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = table_border
 
-    previous_supplier = None
+    delivery_groups = []
     for row in rows:
-        item = row["item"]
-        supplier_name = row["supplier_name"]
-        use_package = item.package_qty is not None and bool(item.package_unit)
-        quantity = item.package_qty if use_package else item.actual_order_qty
-        unit = item.package_unit if use_package else item.purchase_unit_snapshot
-        notes = []
-        if item.note:
-            notes.append(item.note.strip())
-        if item.package_conversion_snapshot:
-            notes.append(item.package_conversion_snapshot.strip())
-        item_delivery = (item.delivery_date or service_date, item.delivery_slot or "上午")
-        if len(delivery_keys) > 1:
-            delivery_date, delivery_slot = item_delivery
-            notes.append(
-                f"進貨：{delivery_date.year - 1911:03d}/{delivery_date.month:02d}/{delivery_date.day:02d} {delivery_slot}"
-            )
-        sheet.append([
-            supplier_name if supplier_name != previous_supplier else "",
-            item.ingredient_name_snapshot,
-            float(quantity or 0),
-            unit,
-            "；".join(dict.fromkeys(note for note in notes if note)),
-        ])
-        previous_supplier = supplier_name
-        data_row = sheet.max_row
-        sheet.cell(data_row, 3).number_format = "0.00"
-        for cell in sheet[data_row]:
+        delivery_key = _purchase_item_delivery_key(row["item"], service_date)
+        if not delivery_groups or delivery_groups[-1][0] != delivery_key:
+            delivery_groups.append((delivery_key, []))
+        delivery_groups[-1][1].append(row)
+    if not delivery_groups:
+        delivery_groups.append(((service_date, "上午"), []))
+
+    for group_index, ((delivery_date, delivery_slot), group_rows) in enumerate(delivery_groups):
+        title_row = 1 if group_index == 0 else sheet.max_row + 2
+        sheet.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=2)
+        sheet.merge_cells(start_row=title_row, start_column=3, end_row=title_row, end_column=5)
+        sheet.cell(title_row, 1, "每日訂購單")
+        sheet.cell(
+            title_row,
+            3,
+            f"進貨日期：{delivery_date.year - 1911:03d}/{delivery_date.month:02d}/{delivery_date.day:02d} {delivery_slot}",
+        )
+        sheet.cell(title_row, 1).font = Font(size=16, bold=True)
+        sheet.cell(title_row, 3).font = Font(size=12, bold=True)
+        sheet.cell(title_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+        sheet.cell(title_row, 3).alignment = Alignment(horizontal="right", vertical="center")
+        sheet.row_dimensions[title_row].height = 28
+
+        sheet.append(headers)
+        header_row = sheet.max_row
+        for cell in sheet[header_row]:
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = table_border
-            cell.alignment = Alignment(
-                horizontal="right" if cell.column == 3 else "left",
-                vertical="center",
-                wrap_text=True,
-            )
-        if item.ordered:
+
+        previous_supplier = None
+        for row in group_rows:
+            item = row["item"]
+            supplier_name = row["supplier_name"]
+            use_package = item.package_qty is not None and bool(item.package_unit)
+            quantity = item.package_qty if use_package else item.actual_order_qty
+            unit = item.package_unit if use_package else item.purchase_unit_snapshot
+            notes = []
+            if item.note:
+                notes.append(item.note.strip())
+            if item.package_conversion_snapshot:
+                notes.append(item.package_conversion_snapshot.strip())
+            sheet.append([
+                supplier_name if supplier_name != previous_supplier else "",
+                item.ingredient_name_snapshot,
+                float(quantity or 0),
+                unit,
+                "；".join(dict.fromkeys(note for note in notes if note)),
+            ])
+            previous_supplier = supplier_name
+            data_row = sheet.max_row
+            sheet.cell(data_row, 3).number_format = "0.00"
             for cell in sheet[data_row]:
-                cell.fill = ordered_fill
+                cell.border = table_border
+                cell.alignment = Alignment(
+                    horizontal="right" if cell.column == 3 else "left",
+                    vertical="center",
+                    wrap_text=True,
+                )
+            if item.ordered:
+                for cell in sheet[data_row]:
+                    cell.fill = ordered_fill
 
     sheet.freeze_panes = "A3"
     widths = (18, 28, 14, 10, 42)

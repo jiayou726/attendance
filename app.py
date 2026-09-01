@@ -21,6 +21,7 @@ from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
 from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
+from blueprints.nonregistered_menu_format import install_nonregistered_menu_export_format_fix
 
 
 def _ensure_kitchen_schema_compatibility(app: Flask):
@@ -94,6 +95,10 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)
+
+    # 非登合菜名範本本身有幾列格式不同；匯出前把所有資料列
+    # 統一成第 2 列格式，避免日期、底色、框線在中間幾列跑掉。
+    install_nonregistered_menu_export_format_fix(app)
 
     # 菜色配方清單會逐列計算 AP 生料；先把 BOM 與食材一次批次載入，
     # 避免正式站對遠端 PostgreSQL 產生每道菜一次的 N+1 查詢。

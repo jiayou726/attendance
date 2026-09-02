@@ -21,10 +21,13 @@
     <div class="field"><label for="production-date">供餐日期</label><input id="production-date" name="date" type="date" value="{{ service_date.isoformat() }}" required></div>
     <button class="btn" type="submit">查看</button>
   </form>
-  <nav class="production-variant-switch" aria-label="切換葷素用量表">
-    <a class="{{ 'active' if variant == 'regular' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='regular') }}">葷食 <b>{{ variant_counts.regular }}</b> 道</a>
-    <a class="vegetarian {{ 'active' if variant == 'vegetarian' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='vegetarian') }}">素食 <b>{{ variant_counts.vegetarian }}</b> 道</a>
-  </nav>
+  <div class="production-control-actions">
+    <nav class="production-variant-switch" aria-label="切換葷素用量表">
+      <a class="{{ 'active' if variant == 'regular' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='regular') }}">葷食 <b>{{ variant_counts.regular }}</b> 道</a>
+      <a class="vegetarian {{ 'active' if variant == 'vegetarian' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='vegetarian') }}">素食 <b>{{ variant_counts.vegetarian }}</b> 道</a>
+    </nav>
+    <a class="btn ok" href="{{ url_for('order_tool.production_sheet_export', date=service_date.isoformat()) }}">匯出 Excel（葷／素分頁）</a>
+  </div>
 </section>
 
 {% if dishes %}

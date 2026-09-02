@@ -113,6 +113,7 @@ def _bad_request(error):
 
 @order_bp.context_processor
 def _template_helpers():
+    production_nav_date, production_nav_available = _production_nav_state()
     return {
         "csrf_token": _csrf_token,
         "status_label": _status_label,
@@ -122,6 +123,8 @@ def _template_helpers():
         "trim_decimal": _trim_decimal,
         "base_unit_label": _base_unit_label,
         "required_display": _required_display,
+        "production_nav_date": production_nav_date,
+        "production_nav_available": production_nav_available,
     }
 
 
@@ -2779,9 +2782,46 @@ def _production_sheet_data(service_date: date):
     return result
 
 
+def _production_order_for_date(service_date: date):
+    return (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date == service_date,
+            KitchenPurchaseOrder.status != "cancelled",
+            KitchenPurchaseOrder.items.any(),
+        )
+        .order_by(KitchenPurchaseOrder.id.desc())
+        .first()
+    )
+
+
+def _production_nav_state():
+    requested_date = _date(request.args.get("date"))
+    if requested_date:
+        return requested_date, _production_order_for_date(requested_date) is not None
+    latest_order = (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.status != "cancelled",
+            KitchenPurchaseOrder.items.any(),
+        )
+        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
+        .first()
+    )
+    return (latest_order.service_date, True) if latest_order else (date.today(), False)
+
+
+def _require_production_order(service_date: date):
+    if _production_order_for_date(service_date):
+        return None
+    flash("請先產生這一天的採購明細，才能查看菜色用量表。", "warning")
+    return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+
 @order_bp.get("/summary/production-sheet")
 def production_sheet():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    blocked = _require_production_order(service_date)
+    if blocked:
+        return blocked
     variant = request.args.get("variant", "regular")
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
@@ -2795,6 +2835,104 @@ def production_sheet():
         variant=variant,
         dishes=sheets[variant],
         variant_counts={key: len(value) for key, value in sheets.items()},
+    )
+
+
+def _write_production_export_sheet(sheet, service_date: date, variant_label: str, dishes: list[dict]):
+    dark = "1769AA" if variant_label == "葷食" else "08735C"
+    light = "EAF3FB" if variant_label == "葷食" else "EAF6F1"
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_properties.tabColor = dark
+    sheet.freeze_panes = "A5"
+    sheet.merge_cells("A1:K1")
+    sheet["A1"] = f"{service_date.strftime('%Y/%m/%d')} {variant_label}菜色用量表"
+    sheet["A1"].font = Font(name="Microsoft JhengHei", size=16, bold=True, color="FFFFFF")
+    sheet["A1"].fill = PatternFill("solid", fgColor=dark)
+    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 30
+    sheet.merge_cells("A2:K2")
+    sheet["A2"] = "當日總採購量為該食材整日採購總量；同一食材出現在多道菜時會重複顯示，供現場對照。"
+    sheet["A2"].font = Font(name="Microsoft JhengHei", size=10, color="667085")
+    sheet["A2"].alignment = Alignment(wrap_text=True, vertical="center")
+    sheet.row_dimensions[2].height = 28
+
+    headers = [
+        "菜色類別", "菜色", "食材", "每人用量", "每人單位", "供餐人數",
+        "理論總量", "採購單位", "當日總採購量", "現場備註", "供餐學校",
+    ]
+    for column, header in enumerate(headers, 1):
+        cell = sheet.cell(row=4, column=column, value=header)
+        cell.font = Font(name="Microsoft JhengHei", bold=True, color="24445F")
+        cell.fill = PatternFill("solid", fgColor=light)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[4].height = 24
+
+    output_row = 5
+    for dish in dishes:
+        for component in dish["components"]:
+            item = component["purchase_item"]
+            values = [
+                dish["recipe"].category or "其他",
+                dish["recipe"].name,
+                component["ingredient"].name,
+                float(component["per_person"]) if not component["pending"] else None,
+                f"{component['per_person_unit']}/人",
+                dish["headcount"],
+                float(component["theoretical_qty"]),
+                component["theoretical_unit"],
+                float(item.actual_order_qty) if item else None,
+                item.note if item and item.note else "",
+                "、".join(dish["school_names"]),
+            ]
+            for column, value in enumerate(values, 1):
+                cell = sheet.cell(row=output_row, column=column, value=value)
+                cell.font = Font(name="Microsoft JhengHei", size=10)
+                cell.alignment = Alignment(
+                    horizontal="right" if column in {4, 6, 7, 9} else "left",
+                    vertical="center",
+                    wrap_text=column in {10, 11},
+                )
+                cell.border = Border(bottom=Side(style="thin", color="E5E7EB"))
+            sheet.cell(output_row, 4).number_format = "#,##0.###"
+            sheet.cell(output_row, 6).number_format = "#,##0"
+            sheet.cell(output_row, 7).number_format = "#,##0.####"
+            sheet.cell(output_row, 9).number_format = "#,##0.####"
+            output_row += 1
+
+    if output_row == 5:
+        sheet.merge_cells("A5:K5")
+        sheet["A5"] = f"本日無{variant_label}菜色資料"
+        sheet["A5"].font = Font(name="Microsoft JhengHei", color="667085")
+        sheet["A5"].alignment = Alignment(horizontal="center", vertical="center")
+        output_row = 6
+
+    sheet.auto_filter.ref = f"A4:K{max(4, output_row - 1)}"
+    widths = {"A": 12, "B": 24, "C": 20, "D": 12, "E": 12, "F": 12, "G": 14, "H": 12, "I": 16, "J": 28, "K": 34}
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+
+
+@order_bp.get("/summary/production-sheet.xlsx")
+def production_sheet_export():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    blocked = _require_production_order(service_date)
+    if blocked:
+        return blocked
+    sheets = _production_sheet_data(service_date)
+    workbook = Workbook()
+    regular_sheet = workbook.active
+    regular_sheet.title = "葷食"
+    vegetarian_sheet = workbook.create_sheet("素食")
+    _write_production_export_sheet(regular_sheet, service_date, "葷食", sheets["regular"])
+    _write_production_export_sheet(vegetarian_sheet, service_date, "素食", sheets["vegetarian"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"菜色用量表_{service_date.isoformat()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 

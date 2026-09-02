@@ -133,7 +133,15 @@ def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     page = response.get_data(as_text=True)
     assert "開啟菜單" in page
     assert all(label in page for label in ("總表", "菜色配方", "食材", "學校", "廠商", "採購叫貨"))
+    assert '<span class="nav-disabled" aria-disabled="true"' in page
     assert "未來 7 天菜單" not in page
+
+    blocked = client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13",
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 302
+    assert "/summary/procurement?date=2026-08-13" in blocked.headers["Location"]
 
     protected = client.get("/admin/not-a-kitchen-page", follow_redirects=False)
     assert protected.status_code == 302
@@ -487,6 +495,8 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "<b>9.5 kg</b>" in regular
     assert "＝ 1 箱" in regular
     assert "冷藏，上午先到" in regular
+    assert "匯出 Excel（葷／素分頁）" in regular
+    assert "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13" in regular
 
     vegetarian = authed_client.get(
         "/admin/order-tool/summary/production-sheet?date=2026-08-13&variant=vegetarian"
@@ -494,6 +504,27 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "素食 <b>1</b> 道" in vegetarian
     assert "<b>3</b> 人" in vegetarian
     assert "<b>0.264</b> kg" in vegetarian
+
+    exported = authed_client.get(
+        "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13"
+    )
+    assert exported.status_code == 200
+    assert exported.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    workbook = load_workbook(BytesIO(exported.data), data_only=False)
+    assert workbook.sheetnames == ["葷食", "素食"]
+    expected_headers = [
+        "菜色類別", "菜色", "食材", "每人用量", "每人單位", "供餐人數",
+        "理論總量", "採購單位", "當日總採購量", "現場備註", "供餐學校",
+    ]
+    assert [cell.value for cell in workbook["葷食"][4]] == expected_headers
+    regular_row = [cell.value for cell in workbook["葷食"][5]]
+    vegetarian_row = [cell.value for cell in workbook["素食"][5]]
+    assert regular_row[:6] == ["主菜", "南洋綠咖哩雞", "骨腿丁", 88, "g/人", 40]
+    assert regular_row[6] == pytest.approx(3.52)
+    assert regular_row[7:11] == ["kg", 9.5, "冷藏，上午先到", "內小"]
+    assert vegetarian_row[:6] == ["主菜", "南洋綠咖哩雞", "骨腿丁", 88, "g/人", 3]
+    assert vegetarian_row[6] == pytest.approx(0.264)
+    assert vegetarian_row[8] == pytest.approx(9.5)
 
     school_menu = authed_client.get(
         f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"

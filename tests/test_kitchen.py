@@ -512,19 +512,30 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert exported.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     workbook = load_workbook(BytesIO(exported.data), data_only=False)
     assert workbook.sheetnames == ["葷食", "素食"]
-    expected_headers = [
-        "菜色類別", "菜色", "食材", "每人用量", "每人單位", "供餐人數",
-        "理論總量", "採購單位", "當日總採購量", "現場備註", "供餐學校",
-    ]
-    assert [cell.value for cell in workbook["葷食"][4]] == expected_headers
-    regular_row = [cell.value for cell in workbook["葷食"][5]]
-    vegetarian_row = [cell.value for cell in workbook["素食"][5]]
-    assert regular_row[:6] == ["主菜", "南洋綠咖哩雞", "骨腿丁", 88, "g/人", 40]
-    assert regular_row[6] == pytest.approx(3.52)
-    assert regular_row[7:11] == ["kg", 9.5, "冷藏，上午先到", "內小"]
-    assert vegetarian_row[:6] == ["主菜", "南洋綠咖哩雞", "骨腿丁", 88, "g/人", 3]
-    assert vegetarian_row[6] == pytest.approx(0.264)
-    assert vegetarian_row[8] == pytest.approx(9.5)
+    for sheet_name, headcount in (("葷食", 40), ("素食", 3)):
+        sheet = workbook[sheet_name]
+        assert sheet["B2"].value == "採購叫貨量"
+        assert sheet["A3"].value == 1
+        assert sheet["B3"].value == "南洋綠咖哩雞"
+        assert sheet["E3"].value == "供應份數："
+        assert sheet["F3"].value == headcount
+        assert [sheet.cell(4, column).value for column in range(2, 10)] == [
+            "材料明細", "單量", "單份用量", "生產用量(總餐數)",
+            "總量", None, "實際叫貨量", None,
+        ]
+        assert sheet["J4"].value == "現場備註"
+        assert sheet["B5"].value == "骨腿丁"
+        assert sheet["C5"].value == 88
+        assert sheet["D5"].value == "=C5/1000"
+        assert sheet["E5"].value == "=F3"
+        assert sheet["F5"].value == "=D5*E5"
+        assert sheet["G5"].value == "kg"
+        assert sheet["H5"].value == 1
+        assert sheet["I5"].value == "箱"
+        assert sheet["J5"].value == "冷藏，上午先到"
+        assert sheet.auto_filter.ref is None
+        assert sheet.tables == {}
+    assert workbook["素食"]["D2"].value == "(素)"
 
     school_menu = authed_client.get(
         f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"

@@ -2839,77 +2839,160 @@ def production_sheet():
 
 
 def _write_production_export_sheet(sheet, service_date: date, variant_label: str, dishes: list[dict]):
-    dark = "1769AA" if variant_label == "葷食" else "08735C"
-    light = "EAF3FB" if variant_label == "葷食" else "EAF6F1"
-    sheet.sheet_view.showGridLines = False
-    sheet.sheet_properties.tabColor = dark
-    sheet.freeze_panes = "A5"
-    sheet.merge_cells("A1:K1")
-    sheet["A1"] = f"{service_date.strftime('%Y/%m/%d')} {variant_label}菜色用量表"
-    sheet["A1"].font = Font(name="Microsoft JhengHei", size=16, bold=True, color="FFFFFF")
-    sheet["A1"].fill = PatternFill("solid", fgColor=dark)
-    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    sheet.row_dimensions[1].height = 30
-    sheet.merge_cells("A2:K2")
-    sheet["A2"] = "當日總採購量為該食材整日採購總量；同一食材出現在多道菜時會重複顯示，供現場對照。"
-    sheet["A2"].font = Font(name="Microsoft JhengHei", size=10, color="667085")
-    sheet["A2"].alignment = Alignment(wrap_text=True, vertical="center")
-    sheet.row_dimensions[2].height = 28
+    """Match the two-column, dish-by-dish production worksheet used on site."""
+    weekday = "一二三四五六日"[service_date.weekday()]
+    sheet.sheet_properties.tabColor = "1769AA" if variant_label == "葷食" else "08735C"
+    sheet.sheet_view.showGridLines = True
+    sheet.freeze_panes = None
+    sheet.auto_filter.ref = None
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.outlinePr.summaryBelow = True
+    sheet.print_options.horizontalCentered = True
+    sheet.page_margins.left = 0.25
+    sheet.page_margins.right = 0.25
+    sheet.page_margins.top = 0.35
+    sheet.page_margins.bottom = 0.35
 
-    headers = [
-        "菜色類別", "菜色", "食材", "每人用量", "每人單位", "供餐人數",
-        "理論總量", "採購單位", "當日總採購量", "現場備註", "供餐學校",
-    ]
-    for column, header in enumerate(headers, 1):
-        cell = sheet.cell(row=4, column=column, value=header)
-        cell.font = Font(name="Microsoft JhengHei", bold=True, color="24445F")
-        cell.fill = PatternFill("solid", fgColor=light)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-    sheet.row_dimensions[4].height = 24
+    default_font = Font(name="Microsoft JhengHei", size=10, color="000000")
+    title_font = Font(name="Microsoft JhengHei", size=16, color="000000")
+    main_title_font = Font(name="Microsoft JhengHei", size=20, color="000000")
+    actual_header_font = Font(name="Microsoft JhengHei", size=10, bold=True, color="FF0000")
+    actual_value_font = Font(name="Microsoft JhengHei", size=10, color="FF0000")
+    thin_black = Side(style="thin", color="000000")
+    table_border = Border(left=thin_black, right=thin_black, top=thin_black, bottom=thin_black)
 
-    output_row = 5
-    for dish in dishes:
-        for component in dish["components"]:
-            item = component["purchase_item"]
-            values = [
-                dish["recipe"].category or "其他",
-                dish["recipe"].name,
-                component["ingredient"].name,
-                float(component["per_person"]) if not component["pending"] else None,
-                f"{component['per_person_unit']}/人",
-                dish["headcount"],
-                float(component["theoretical_qty"]),
-                component["theoretical_unit"],
-                float(item.actual_order_qty) if item else None,
-                item.note if item and item.note else "",
-                "、".join(dish["school_names"]),
-            ]
-            for column, value in enumerate(values, 1):
-                cell = sheet.cell(row=output_row, column=column, value=value)
-                cell.font = Font(name="Microsoft JhengHei", size=10)
-                cell.alignment = Alignment(
-                    horizontal="right" if column in {4, 6, 7, 9} else "left",
-                    vertical="center",
-                    wrap_text=column in {10, 11},
-                )
-                cell.border = Border(bottom=Side(style="thin", color="E5E7EB"))
-            sheet.cell(output_row, 4).number_format = "#,##0.###"
-            sheet.cell(output_row, 6).number_format = "#,##0"
-            sheet.cell(output_row, 7).number_format = "#,##0.####"
-            sheet.cell(output_row, 9).number_format = "#,##0.####"
-            output_row += 1
+    sheet["B1"] = service_date
+    sheet["B1"].number_format = 'm"月"d"日"'
+    sheet["B1"].font = main_title_font
+    sheet["B1"].alignment = Alignment(horizontal="center")
+    sheet["D1"] = weekday
+    sheet["D1"].font = main_title_font
+    sheet["D1"].alignment = Alignment(horizontal="center")
+    sheet["E1"] = "供應份數："
+    sheet["E1"].font = title_font
+    sheet["H1"] = max((dish["headcount"] for dish in dishes), default=0)
+    sheet["H1"].font = title_font
+    sheet["H1"].number_format = "#,##0"
+    sheet["B2"] = "採購叫貨量"
+    sheet["B2"].font = title_font
+    if variant_label == "素食":
+        sheet["D2"] = "(素)"
+        sheet["D2"].font = title_font
+    sheet.row_dimensions[1].height = 28
+    sheet.row_dimensions[2].height = 24
 
-    if output_row == 5:
-        sheet.merge_cells("A5:K5")
-        sheet["A5"] = f"本日無{variant_label}菜色資料"
-        sheet["A5"].font = Font(name="Microsoft JhengHei", color="667085")
-        sheet["A5"].alignment = Alignment(horizontal="center", vertical="center")
-        output_row = 6
-
-    sheet.auto_filter.ref = f"A4:K{max(4, output_row - 1)}"
-    widths = {"A": 12, "B": 24, "C": 20, "D": 12, "E": 12, "F": 12, "G": 14, "H": 12, "I": 16, "J": 28, "K": 34}
+    widths = {
+        "A": 3.5, "B": 18, "C": 10, "D": 12, "E": 15, "F": 12,
+        "G": 6, "H": 15, "I": 6, "J": 24,
+        "K": 3.5, "L": 18, "M": 10, "N": 12, "O": 15, "P": 12,
+        "Q": 6, "R": 15, "S": 6, "T": 24,
+    }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
+
+    midpoint = (len(dishes) + 1) // 2
+    columns = (dishes[:midpoint], dishes[midpoint:])
+    final_row = 3
+    for side_index, side_dishes in enumerate(columns):
+        row = 3
+        index_col = 1 if side_index == 0 else 11
+        material_col = index_col + 1
+        note_col = index_col + 9
+        for dish_index, dish in enumerate(side_dishes, 1 + (midpoint if side_index else 0)):
+            slots = max(4, len(dish["components"]))
+            title_row = row
+            header_row = row + 1
+            first_data_row = row + 2
+            last_data_row = first_data_row + slots - 1
+            total_row = last_data_row + 1
+
+            sheet.cell(title_row, index_col, dish_index)
+            sheet.cell(title_row, material_col, dish["recipe"].name)
+            sheet.cell(title_row, material_col + 3, "供應份數：")
+            sheet.cell(title_row, material_col + 4, dish["headcount"])
+            for column in (index_col, material_col, material_col + 3, material_col + 4):
+                sheet.cell(title_row, column).font = title_font
+                sheet.cell(title_row, column).alignment = Alignment(vertical="center")
+            sheet.cell(title_row, material_col + 4).number_format = "#,##0"
+            sheet.row_dimensions[title_row].height = 24
+
+            headers = ["材料明細", "單量", "單份用量", "生產用量(總餐數)", "總量", "", "實際叫貨量", ""]
+            for offset, header in enumerate(headers):
+                cell = sheet.cell(header_row, material_col + offset, header)
+                cell.font = actual_header_font if offset == 6 else default_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", shrink_to_fit=True)
+                cell.border = table_border
+            note_header = sheet.cell(header_row, note_col, "現場備註")
+            note_header.font = default_font
+            note_header.alignment = Alignment(horizontal="center", vertical="center")
+            sheet.row_dimensions[header_row].height = 22
+
+            for slot in range(slots):
+                data_row = first_data_row + slot
+                component = dish["components"][slot] if slot < len(dish["components"]) else None
+                for offset in range(8):
+                    cell = sheet.cell(data_row, material_col + offset)
+                    cell.font = default_font
+                    cell.alignment = Alignment(
+                        horizontal="right" if offset in {1, 2, 3, 4, 6} else "left",
+                        vertical="center",
+                        shrink_to_fit=offset not in {0},
+                    )
+                    cell.border = table_border
+                if component:
+                    item = component["purchase_item"]
+                    divisor = component["ingredient"].grams_per_purchase_unit or Decimal("0")
+                    sheet.cell(data_row, material_col, component["ingredient"].name)
+                    sheet.cell(data_row, material_col + 1, float(component["per_person"]) if not component["pending"] else None)
+                    if divisor > 0 and not component["pending"]:
+                        amount_ref = sheet.cell(data_row, material_col + 1).coordinate
+                        sheet.cell(data_row, material_col + 2, f"={amount_ref}/{_trim_decimal(divisor)}")
+                    sheet.cell(data_row, material_col + 3, f"={sheet.cell(title_row, material_col + 4).coordinate}")
+                    portion_ref = sheet.cell(data_row, material_col + 2).coordinate
+                    people_ref = sheet.cell(data_row, material_col + 3).coordinate
+                    sheet.cell(data_row, material_col + 4, f"={portion_ref}*{people_ref}")
+                    sheet.cell(data_row, material_col + 5, component["theoretical_unit"])
+                    actual_uses_package = bool(item and item.package_qty is not None and item.package_unit)
+                    actual_qty = item.package_qty if actual_uses_package else (item.actual_order_qty if item else None)
+                    actual_unit = item.package_unit if actual_uses_package else (
+                        item.purchase_unit_snapshot if item else component["purchase_unit"]
+                    )
+                    sheet.cell(data_row, material_col + 6, float(actual_qty) if actual_qty is not None else None)
+                    sheet.cell(data_row, material_col + 6).font = actual_value_font
+                    sheet.cell(data_row, material_col + 7, actual_unit)
+                    if item and item.note:
+                        note = sheet.cell(data_row, note_col, item.note)
+                        note.font = default_font
+                        note.alignment = Alignment(vertical="center", wrap_text=True)
+                else:
+                    sheet.cell(data_row, material_col + 4, 0)
+                    sheet.cell(data_row, material_col + 5, "Kg")
+                    sheet.cell(data_row, material_col + 7, "Kg")
+                sheet.cell(data_row, material_col + 1).number_format = "#,##0.###"
+                sheet.cell(data_row, material_col + 2).number_format = "0.####"
+                sheet.cell(data_row, material_col + 3).number_format = "#,##0"
+                sheet.cell(data_row, material_col + 4).number_format = "#,##0.####"
+                sheet.cell(data_row, material_col + 6).number_format = "#,##0.####"
+                sheet.row_dimensions[data_row].height = 20
+
+            sum_cell = sheet.cell(total_row, material_col + 1)
+            sum_cell.value = f"=SUM({sheet.cell(first_data_row, material_col + 1).coordinate}:{sheet.cell(last_data_row, material_col + 1).coordinate})"
+            sum_cell.font = default_font
+            sum_cell.alignment = Alignment(horizontal="right")
+            sum_cell.number_format = "#,##0.###"
+            sheet.row_dimensions[total_row].height = 20
+            row = total_row + 1
+            final_row = max(final_row, total_row)
+
+    if not dishes:
+        sheet["B4"] = f"本日無{variant_label}菜色資料"
+        sheet["B4"].font = title_font
+        final_row = 4
+
+    sheet.print_area = f"A1:T{final_row}"
 
 
 @order_bp.get("/summary/production-sheet.xlsx")
@@ -2920,6 +3003,9 @@ def production_sheet_export():
         return blocked
     sheets = _production_sheet_data(service_date)
     workbook = Workbook()
+    workbook.calculation.calcMode = "auto"
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
     regular_sheet = workbook.active
     regular_sheet.title = "葷食"
     vegetarian_sheet = workbook.create_sheet("素食")

@@ -1,7 +1,7 @@
 """學校食材登錄 Excel 匯出。
 
 不新增資料表／欄位：直接使用既有學校、菜單、配方與人數。
-製造商依使用者提供的 schoolingredient Excel 模板各食材帶入；供應商名稱沿用模板固定值。
+製造商依使用者提供的 schoolingredient Excel 模板各食材帶入；供應商名稱使用公司法定全名。
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from flask import Blueprint, current_app, request, send_file
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill
+from openpyxl.workbook.properties import CalcProperties
 from sqlalchemy.orm import selectinload
 
 from models import (
@@ -28,6 +29,7 @@ from models import (
 school_ingredient_export_bp = Blueprint("school_ingredient_export", __name__)
 
 TEMPLATE_PATH = Path("static/schoolingredient_template.xlsx")
+EXPORT_SUPPLIER_NAME = "廣豐食品股份有限公司"
 EXPECTED_HEADERS = (
     "供餐日期", "學校", "菜色名稱", "食材名稱", "進貨日期", "生產日期", "有效日期", "批號",
     "製造商", "供應商名稱", "食材驗證標章", "驗證號碼", "產品名稱", "重量(公斤)",
@@ -72,7 +74,7 @@ FALLBACK_CERTIFICATION = {
     "甜椒": ("生產追溯-農產品", "1101003260"),
 }
 FALLBACK_FIXED = {
-    "supplier": "廣豐食品有限公司",
+    "supplier": EXPORT_SUPPLIER_NAME,
     "corn": "Y",
     "soy": "Y",
     "processed": "N",
@@ -123,7 +125,8 @@ def _template_values(sheet):
 
         if row_number == 2:
             fixed = {
-                "supplier": str(sheet.cell(row_number, 10).value or FALLBACK_FIXED["supplier"]).strip(),
+                # 公司名稱不可被舊模板覆寫，否則外部食材登錄系統會判定供應商不符。
+                "supplier": EXPORT_SUPPLIER_NAME,
                 "corn": sheet.cell(row_number, 15).value or "Y",
                 "soy": sheet.cell(row_number, 16).value or "Y",
                 "processed": sheet.cell(row_number, 17).value or "N",
@@ -269,7 +272,8 @@ def _build_workbook(service_date: date):
 
     first_data_row = 2
     template_last_row = max(sheet.max_row, first_data_row)
-    required_last_row = max(template_last_row, first_data_row + len(rows) - 1)
+    last_data_row = first_data_row + len(rows) - 1
+    required_last_row = max(template_last_row, last_data_row)
     for row_number in range(template_last_row + 1, required_last_row + 1):
         _copy_template_row(sheet, first_data_row, row_number)
 
@@ -283,6 +287,18 @@ def _build_workbook(service_date: date):
         sheet.cell(row_number, 19).value = row["per_person_kg"]
         sheet.cell(row_number, 20).value = row["headcount"]
         sheet.cell(row_number, 21).value = f"=S{row_number}*T{row_number}"
+        # 驗證號碼是識別碼，不可讓 Excel 轉成科學記號或遺失前導零。
+        sheet.cell(row_number, 12).number_format = "@"
+
+    # 官方上傳器會把有樣式但無資料的尾端列也視為資料列；匯出時只保留實際資料。
+    if last_data_row < sheet.max_row:
+        sheet.delete_rows(max(last_data_row + 1, first_data_row), sheet.max_row - max(last_data_row, first_data_row - 1))
+
+    workbook.calculation = CalcProperties(
+        calcMode="auto",
+        fullCalcOnLoad=True,
+        forceFullCalc=True,
+    )
 
     return workbook, None
 

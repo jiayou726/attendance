@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
@@ -21,6 +22,18 @@ from models import (
 )
 
 TEST_DAY = date(2026, 8, 24)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_school_ingredient_template_is_valid_xlsx():
+    workbook = load_workbook(PROJECT_ROOT / "static" / "schoolingredient_template.xlsx", data_only=False)
+    sheet = workbook.active
+
+    assert sheet.title == "Sheet1"
+    assert sheet["J2"].value == "廣豐食品股份有限公司"
+    assert sheet["L2"].value == "2605190098801217"
+    assert sheet["L2"].data_type == "s"
+    assert sheet["L2"].number_format == "@"
 
 
 @pytest.fixture()
@@ -51,7 +64,7 @@ def _as_date(value):
     return value.date() if isinstance(value, datetime) else value
 
 
-def test_school_ingredient_export_uses_original_template_and_current_procurement_supplier(app, client):
+def test_school_ingredient_export_uses_original_template_and_legal_supplier_name(app, client):
     with app.app_context():
         school = KitchenSchool(name="桃園市中壢區中平國小", default_headcount=529)
         supplier = KitchenSupplier(name="五五五生鮮豬肉行", active=True)
@@ -129,8 +142,16 @@ def test_school_ingredient_export_uses_original_template_and_current_procurement
     assert row[1:4] == ["桃園市中壢區中平國小", "麻婆豆腐", "絞肉"]
     assert _as_date(row[4]) == TEST_DAY
     assert row[5:8] == [None, None, None]
-    assert row[8:10] == ["五五五生鮮豬肉行", "五五五生鮮豬肉行"]
+    assert row[8:10] == ["大湖畜牧場", "廣豐食品股份有限公司"]
     assert row[10:13] == ["生產追溯-豬肉", "LE300431", None]
     assert row[13] == pytest.approx(3.703)
     assert row[14:18] == ["Y", "Y", "N", "臺灣"]
-    assert row[18:21] == [None, None, None]
+    assert row[18] == pytest.approx(0.007)
+    assert row[19] == 529
+    # openpyxl 不計算公式；data_only 讀取新匯出檔時尚無 U 欄快取值。
+    assert row[20] is None
+    assert sheet.max_row == 2
+    assert sheet["L2"].number_format == "@"
+    assert workbook.calculation.fullCalcOnLoad is True
+    assert workbook.calculation.forceFullCalc is True
+    assert workbook.calculation.calcMode == "auto"

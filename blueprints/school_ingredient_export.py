@@ -1,7 +1,7 @@
 """學校食材登錄 Excel 匯出。
 
 不新增資料表／欄位：直接使用既有學校、菜單、配方與人數。
-製造商依使用者提供的 schoolingredient Excel 模板各食材帶入；供應商名稱使用公司法定全名。
+製造商優先帶入當日採購項目的供應廠商；供應商名稱使用公司法定全名。
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ from models import (
     KitchenMenuAssignment,
     KitchenMenuPlan,
     KitchenMenuPlanItem,
+    KitchenPurchaseOrder,
+    KitchenPurchaseOrderItem,
     KitchenRecipe,
     KitchenRecipeIngredient,
 )
@@ -137,6 +139,27 @@ def _template_values(sheet):
 
 
 def _rows_for_date(service_date: date, manufacturers, certification, fixed):
+    procurement_items = (
+        KitchenPurchaseOrderItem.query.join(KitchenPurchaseOrder)
+        .filter(KitchenPurchaseOrder.service_date == service_date)
+        .options(
+            selectinload(KitchenPurchaseOrderItem.order),
+            selectinload(KitchenPurchaseOrderItem.supplier),
+        )
+        .all()
+    )
+    procurement_items.sort(key=lambda item: (
+        0 if item.order.supplier_key == "daily" else 1,
+        -item.id,
+    ))
+    procurement_suppliers = {}
+    for item in procurement_items:
+        supplier_name = (item.supplier_name_snapshot or "").strip()
+        if not supplier_name or supplier_name.startswith("⚠"):
+            supplier_name = item.supplier.name.strip() if item.supplier else ""
+        if item.ingredient_id and supplier_name:
+            procurement_suppliers.setdefault(item.ingredient_id, supplier_name)
+
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
@@ -171,7 +194,10 @@ def _rows_for_date(service_date: date, manufacturers, certification, fixed):
                     continue
 
                 ingredient_key = ingredient.name.strip()
-                manufacturer_name = manufacturers.get(ingredient_key, "")
+                manufacturer_name = (
+                    procurement_suppliers.get(ingredient.id)
+                    or manufacturers.get(ingredient_key, "")
+                )
                 mark, verification_number = certification.get(ingredient_key, ("", ""))
                 headcount = max(assignment.headcount, 0)
                 per_person_kg = weight_kg / Decimal(headcount) if headcount else Decimal("0")

@@ -67,7 +67,7 @@ def _as_date(value):
 def test_school_ingredient_export_uses_original_template_and_legal_supplier_name(app, client):
     with app.app_context():
         school = KitchenSchool(name="桃園市中壢區中平國小", default_headcount=529)
-        supplier = KitchenSupplier(name="五五五生鮮豬肉行", active=True)
+        supplier = KitchenSupplier(name="食材預設廠商", active=True)
         ingredient = KitchenIngredient(
             name="絞肉",
             supplier=supplier,
@@ -111,7 +111,7 @@ def test_school_ingredient_export_uses_original_template_and_legal_supplier_name
             order_id=order.id,
             ingredient_id=ingredient.id,
             supplier_id=supplier.id,
-            supplier_name_snapshot=supplier.name,
+            supplier_name_snapshot="五五五生鮮豬肉行",
             ingredient_name_snapshot=ingredient.name,
             base_unit_snapshot="g",
             required_grams=Decimal("3703"),
@@ -142,7 +142,7 @@ def test_school_ingredient_export_uses_original_template_and_legal_supplier_name
     assert row[1:4] == ["桃園市中壢區中平國小", "麻婆豆腐", "絞肉"]
     assert _as_date(row[4]) == TEST_DAY
     assert row[5:8] == [None, None, None]
-    assert row[8:10] == ["大湖畜牧場", "廣豐食品股份有限公司"]
+    assert row[8:10] == ["五五五生鮮豬肉行", "廣豐食品股份有限公司"]
     assert row[10:13] == ["生產追溯-豬肉", "LE300431", None]
     assert row[13] == pytest.approx(3.703)
     assert row[14:18] == ["Y", "Y", "N", "臺灣"]

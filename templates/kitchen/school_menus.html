@@ -98,7 +98,7 @@
           <div class="day-empty small">總表這天還沒有菜色</div>
         {% endif %}
       </div>
-      <footer><span>葷 <b data-selected-count="regular">{{ day.selected_ids.regular|length }}</b> 道／素 <b data-selected-count="vegetarian">{{ day.selected_ids.vegetarian|length }}</b> 道</span><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
+      <footer><span>葷 <b data-selected-count="regular">{{ day.selected_ids.regular|length }}</b>／素 <b data-selected-count="vegetarian">{{ day.selected_ids.vegetarian|length }}</b></span><a class="day-usage-link" href="{{ url_for('order_tool.production_sheet', date=day.date.isoformat()) }}">菜色用量</a><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
     </article>
     {% endfor %}
   </section>

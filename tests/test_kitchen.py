@@ -443,6 +443,65 @@ def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procur
         assert ingredient_row["school_names"] == {"內小"}
 
 
+def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    saved = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "40",
+        "vegetarian_headcount": "3",
+        "regular_recipe_ids": str(ids["recipe"]),
+        "vegetarian_recipe_ids": str(ids["recipe"]),
+    })
+    assert saved.status_code == 204
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+    )
+    assert generated.status_code == 302
+
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).one()
+        item.actual_order_qty = Decimal("9.5")
+        item.package_qty = Decimal("1")
+        item.package_unit = "箱"
+        item.note = "冷藏，上午先到"
+        db.session.commit()
+
+    regular = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13&variant=regular"
+    ).get_data(as_text=True)
+    assert all(label in regular for label in (
+        "菜色用量表", "食材", "每人用量", "供餐人數", "理論總量",
+        "採購單位", "當日總採購量", "現場備註",
+    ))
+    assert "南洋綠咖哩雞" in regular
+    assert "88" in regular and "g/人" in regular
+    assert "<b>40</b> 人" in regular
+    assert "<b>3.52</b> kg" in regular
+    assert "<b>9.5 kg</b>" in regular
+    assert "＝ 1 箱" in regular
+    assert "冷藏，上午先到" in regular
+
+    vegetarian = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13&variant=vegetarian"
+    ).get_data(as_text=True)
+    assert "素食 <b>1</b> 道" in vegetarian
+    assert "<b>3</b> 人" in vegetarian
+    assert "<b>0.264</b> kg" in vegetarian
+
+    school_menu = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert "菜色用量" in school_menu
+    assert "/admin/order-tool/summary/production-sheet?date=2026-08-13" in school_menu
+
+
 def test_no_service_school_is_complete_and_excluded_from_procurement(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={

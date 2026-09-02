@@ -38,6 +38,7 @@
     <div class="top">
       <div><h2>{{ service_date.strftime('%m/%d') }} 採購項目</h2><div class="muted">每一列修改後自動儲存；輸入新廠商名稱會直接建立，並依廠商分組排列。</div></div>
       <div class="row">
+        <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat()) }}">菜色用量表</a>
         <a class="btn secondary" href="{{ url_for('school_ingredient_export.school_ingredient_export', date=service_date.isoformat()) }}">匯出食材登錄 Excel</a>
         <a class="btn warn" href="{{ url_for('order_tool.procurement_export', date=service_date.isoformat()) }}">匯出 Excel</a>
       </div>

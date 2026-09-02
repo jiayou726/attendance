@@ -1,0 +1,63 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}單日菜色用量表{% endblock %}
+{% block content %}
+<section class="summary-week-head production-head">
+  <div>
+    <div class="eyebrow">單日備料</div>
+    <h1>菜色用量表</h1>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依菜色查看食材理論用量，並對照當日採購總量與現場備註。</div>
+  </div>
+  <nav class="week-switcher" aria-label="切換用量日期">
+    <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=previous_date.isoformat(), variant=variant) }}">← 前一天</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">回各校菜單</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.procurement', date=service_date.isoformat()) }}">採購明細</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=next_date.isoformat(), variant=variant) }}">後一天 →</a>
+  </nav>
+</section>
+
+<section class="card production-controls">
+  <form method="get" action="{{ url_for('order_tool.production_sheet') }}" class="production-date-form">
+    <input type="hidden" name="variant" value="{{ variant }}">
+    <div class="field"><label for="production-date">供餐日期</label><input id="production-date" name="date" type="date" value="{{ service_date.isoformat() }}" required></div>
+    <button class="btn" type="submit">查看</button>
+  </form>
+  <nav class="production-variant-switch" aria-label="切換葷素用量表">
+    <a class="{{ 'active' if variant == 'regular' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='regular') }}">葷食 <b>{{ variant_counts.regular }}</b> 道</a>
+    <a class="vegetarian {{ 'active' if variant == 'vegetarian' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='vegetarian') }}">素食 <b>{{ variant_counts.vegetarian }}</b> 道</a>
+  </nav>
+</section>
+
+{% if dishes %}
+<div class="production-dish-list">
+  {% for dish in dishes %}
+  <section class="card production-dish-card">
+    <header>
+      <div><span class="dish-category">{{ dish.recipe.category or '菜' }}</span><h2>{{ dish.recipe.name }}</h2></div>
+      <div class="production-dish-meta"><b>{{ dish.headcount }}</b> 人{% if dish.school_names %}<small>{{ dish.school_names|join('、') }}</small>{% endif %}</div>
+    </header>
+    <div class="table-scroll"><table class="production-usage-table">
+      <thead><tr><th>食材</th><th>每人用量</th><th>供餐人數</th><th>理論總量</th><th>採購單位</th><th>當日總採購量</th><th>現場備註</th></tr></thead>
+      <tbody>
+      {% for row in dish.components %}{% set item = row.purchase_item %}
+      <tr class="{{ 'is-pending' if row.pending else '' }}">
+        <td><b>{{ row.ingredient.name }}</b>{% if row.pending %}<small class="pending-text">每人用量待確認</small>{% endif %}</td>
+        <td>{% if row.pending %}待確認{% else %}<b>{{ trim_decimal(row.per_person) }}</b> {{ row.per_person_unit }}/人{% endif %}</td>
+        <td><b>{{ dish.headcount }}</b> 人</td>
+        <td><b>{{ trim_decimal(row.theoretical_qty) }}</b> {{ row.theoretical_unit }}{% if row.conversion_missing %}<small class="pending-text">未設定採購換算</small>{% endif %}</td>
+        <td>{{ row.purchase_unit or '未設定' }}</td>
+        <td class="production-actual">{% if item %}<b>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</b>{% if item.package_qty is not none and item.package_unit %}<small>＝ {{ trim_decimal(item.package_qty) }} {{ item.package_unit }}</small>{% endif %}{% else %}<span>尚未產生採購單</span>{% endif %}</td>
+        <td class="production-note">{% if item and item.note %}{{ item.note }}{% else %}<span>—</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<section class="card empty production-empty">
+  <h2>{{ '素食' if variant == 'vegetarian' else '葷食' }}尚無菜色</h2>
+  <p>請先回「各校菜單」完成這一天的菜色與供餐人數。</p>
+</section>
+{% endif %}
+{% endblock %}

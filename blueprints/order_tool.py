@@ -2699,6 +2699,105 @@ def _procurement_conversion_options(rows):
     return result
 
 
+def _production_sheet_data(service_date: date):
+    """Build a dish-level daily usage sheet without duplicating procurement data."""
+    plans = (
+        KitchenMenuPlan.query.filter_by(service_date=service_date)
+        .options(
+            selectinload(KitchenMenuPlan.assignments).selectinload(KitchenMenuAssignment.school),
+            selectinload(KitchenMenuPlan.items)
+            .selectinload(KitchenMenuPlanItem.recipe)
+            .selectinload(KitchenRecipe.ingredients)
+            .selectinload(KitchenRecipeIngredient.ingredient),
+        )
+        .order_by(KitchenMenuPlan.meal_type, KitchenMenuPlan.name)
+        .all()
+    )
+
+    purchase_orders = (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date == service_date,
+            KitchenPurchaseOrder.status != "cancelled",
+        )
+        .options(selectinload(KitchenPurchaseOrder.items))
+        .order_by(KitchenPurchaseOrder.id.desc())
+        .all()
+    )
+    purchase_items = {}
+    for order in sorted(purchase_orders, key=lambda row: (row.status != "draft", -row.id)):
+        for item in order.items:
+            if item.ingredient_id:
+                purchase_items.setdefault(item.ingredient_id, item)
+
+    grouped = {"regular": {}, "vegetarian": {}}
+    for plan in plans:
+        assignments = [
+            assignment
+            for assignment in plan.assignments
+            if assignment.service_status == "serving" and assignment.headcount > 0
+        ]
+        people = sum(assignment.headcount for assignment in assignments)
+        if people <= 0:
+            continue
+        variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
+        for menu_item in plan.items:
+            recipe = menu_item.recipe
+            dish = grouped[variant].setdefault(recipe.id, {
+                "recipe": recipe,
+                "headcount": 0,
+                "school_names": set(),
+                "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
+            })
+            dish["headcount"] += people
+            dish["school_names"].update(assignment.school.name for assignment in assignments)
+
+    result = {"regular": [], "vegetarian": []}
+    for variant, dishes in grouped.items():
+        for dish in sorted(dishes.values(), key=lambda row: row["sort_key"]):
+            components = []
+            for component in dish["recipe"].ingredients:
+                ingredient = component.ingredient
+                per_person = component.grams_per_person or Decimal("0")
+                base_amount = per_person * dish["headcount"]
+                divisor = ingredient.grams_per_purchase_unit or Decimal("0")
+                has_conversion = divisor > 0
+                purchase_item = purchase_items.get(ingredient.id)
+                components.append({
+                    "ingredient": ingredient,
+                    "per_person": per_person,
+                    "per_person_unit": ingredient.base_unit or "g",
+                    "theoretical_qty": base_amount / divisor if has_conversion else base_amount,
+                    "theoretical_unit": ingredient.purchase_unit if has_conversion else (ingredient.base_unit or "g"),
+                    "purchase_unit": ingredient.purchase_unit,
+                    "purchase_item": purchase_item,
+                    "pending": component.quantity_status == "pending" or per_person <= 0,
+                    "conversion_missing": not has_conversion,
+                })
+            dish["school_names"] = sorted(dish["school_names"])
+            dish["components"] = components
+            result[variant].append(dish)
+    return result
+
+
+@order_bp.get("/summary/production-sheet")
+def production_sheet():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    variant = request.args.get("variant", "regular")
+    if variant not in {"regular", "vegetarian"}:
+        variant = "regular"
+    sheets = _production_sheet_data(service_date)
+    return render_template(
+        "kitchen/production_sheet.html",
+        service_date=service_date,
+        previous_date=service_date - timedelta(days=1),
+        next_date=service_date + timedelta(days=1),
+        week_start=service_date - timedelta(days=service_date.weekday()),
+        variant=variant,
+        dishes=sheets[variant],
+        variant_counts={key: len(value) for key, value in sheets.items()},
+    )
+
+
 @order_bp.get("/summary/procurement")
 def procurement():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()

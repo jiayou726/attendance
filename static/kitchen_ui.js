@@ -619,6 +619,20 @@
   });
   regroupProcurementRows();
 
+  document.querySelectorAll('[data-daily-count-row]').forEach((row) => {
+    const inputs = [...row.querySelectorAll('[data-daily-count]')];
+    const total = row.querySelector('[data-daily-total]');
+    const refreshTotal = () => {
+      if (!total) return;
+      total.textContent = String(inputs.reduce((sum, input) => {
+        const value = Number(input.value);
+        return sum + (Number.isFinite(value) && value >= 0 ? value : 0);
+      }, 0));
+    };
+    inputs.forEach((input) => input.addEventListener('input', refreshTotal));
+    refreshTotal();
+  });
+
   document.querySelectorAll('.order-confirm-toggle').forEach((checkbox) => {
     const refresh = () => checkbox.closest('tr')?.classList.toggle('is-ordered', checkbox.checked);
     checkbox.addEventListener('change', async () => {

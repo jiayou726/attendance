@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">單日出餐</div>
     <h1>每日廚房表格</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　先補上食材的括號備註，儲存後再匯出 Excel。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　可修改食材備註與出餐數字，儲存後再匯出 Excel。</div>
   </div>
   <nav class="week-switcher" aria-label="切換日期">
     <a class="btn secondary" href="{{ url_for('order_tool.daily_kitchen_sheet', date=previous_date.isoformat()) }}">← 前一天</a>
@@ -20,7 +20,7 @@
     <div class="field"><label for="daily-kitchen-date">供餐日期</label><input id="daily-kitchen-date" name="date" type="date" value="{{ service_date.isoformat() }}" required></div>
     <button class="btn" type="submit">查看</button>
   </form>
-  <div class="daily-kitchen-rule">便當＝平鎮高中＋廣豐；平鎮高中小便當的葷食扣 60 份改計合菜。</div>
+  <div class="daily-kitchen-rule">便當＝平鎮高中＋廣豐；小便當 300 份不扣，達 360 份才扣 60 份改計合菜。</div>
 </section>
 
 <form method="post" action="{{ url_for('order_tool.daily_kitchen_sheet') }}" class="daily-kitchen-form">
@@ -34,17 +34,18 @@
     </div>
     {% if sheets[variant] %}
     <div class="table-scroll"><table class="daily-kitchen-table">
-      <thead><tr><th>菜名</th><th>食材（數量、規格請在這裡加括號）</th><th>合菜</th><th>班級數</th><th>便當</th><th>小便當</th><th>總計</th></tr></thead>
+      <thead><tr><th>菜名</th><th>食材（數量、規格請在這裡加括號）</th><th>合菜</th><th>班級數</th><th>便當</th><th>小便當</th><th>總計</th><th>供餐學校／人數</th></tr></thead>
       <tbody>
       {% for dish in sheets[variant] %}
-      <tr>
+      <tr data-daily-count-row>
         <td><span class="dish-category">{{ dish.recipe.category or '其他' }}</span><b>{{ dish.recipe.name }}</b></td>
         <td><textarea name="ingredients_{{ variant }}_{{ dish.recipe.id }}" rows="2" maxlength="2000" required placeholder="例：{{ dish.ingredients_text }}（20K）">{{ dish.ingredients_text }}</textarea></td>
-        <td>{{ dish.combo or '' }}</td>
+        <td><input class="daily-count-input" data-daily-count name="combo_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.combo }}" required aria-label="{{ dish.recipe.name }}合菜數量"></td>
         <td class="daily-class-count"></td>
-        <td>{{ dish.bento or '' }}</td>
-        <td>{{ dish.small_bento or '' }}</td>
-        <td><b>{{ dish.total or '' }}</b></td>
+        <td><input class="daily-count-input" data-daily-count name="bento_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.bento }}" required aria-label="{{ dish.recipe.name }}便當數量"></td>
+        <td><input class="daily-count-input" data-daily-count name="small_bento_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.small_bento }}" required aria-label="{{ dish.recipe.name }}小便當數量"></td>
+        <td><b data-daily-total>{{ dish.total }}</b></td>
+        <td><ul class="daily-school-list">{% for school in dish.school_rows %}<li><b>{{ school.name }}</b><span>{{ school.headcount }} 人</span></li>{% endfor %}</ul></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -55,7 +56,7 @@
   </section>
   {% endfor %}
   <div class="daily-kitchen-actions no-print">
-    <button class="btn ok" type="submit">儲存食材備註</button>
+    <button class="btn ok" type="submit">儲存食材與數字</button>
     <a class="btn secondary" href="{{ url_for('order_tool.daily_kitchen_sheet_export', date=service_date.isoformat()) }}">匯出 Excel</a>
   </div>
 </form>

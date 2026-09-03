@@ -556,7 +556,7 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             "新勢": 100,
             "平鎮高中": 20,
             "廣豐": 10,
-            "平鎮高中小便當": 120,
+            "平鎮高中小便當": 360,
         }
         vegetarian_counts = {
             "新勢": 4,
@@ -586,6 +586,26 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
                     school_id=school.id,
                     headcount=counts[school_name],
                 ))
+        next_day = TEST_DAY + timedelta(days=1)
+        for school_name, headcount in (("新勢", 100), ("平鎮高中小便當", 300)):
+            school = KitchenSchool.query.filter_by(name=school_name).one()
+            plan = KitchenMenuPlan(
+                service_date=next_day,
+                meal_type="午餐",
+                name=f"{school_name}菜單",
+            )
+            db.session.add(plan)
+            db.session.flush()
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=ids["recipe"],
+                sort_order=0,
+            ))
+            db.session.add(KitchenMenuAssignment(
+                plan_id=plan.id,
+                school_id=school.id,
+                headcount=headcount,
+            ))
         db.session.commit()
 
     page = authed_client.get(
@@ -594,7 +614,25 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert "每日廚房表格" in page
     assert "班級數" in page
     assert "平鎮高中＋廣豐" in page
+    assert "小便當 300 份不扣" in page
+    assert "供餐學校／人數" in page
+    assert all(name in page for name in ("新勢", "平鎮高中", "廣豐", "平鎮高中小便當"))
     assert "骨腿丁" in page
+    assert f'name="combo_regular_{ids["recipe"]}"' in page
+    assert f'name="small_bento_regular_{ids["recipe"]}"' in page
+
+    automatic = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
+    )
+    automatic_sheet = load_workbook(BytesIO(automatic.data), data_only=False)["0813"]
+    assert [automatic_sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 300, 490]
+    assert all(name in automatic_sheet["H3"].value for name in regular_counts)
+
+    no_transfer = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-14"
+    )
+    no_transfer_sheet = load_workbook(BytesIO(no_transfer.data), data_only=False)["0814"]
+    assert [no_transfer_sheet.cell(3, column).value for column in range(3, 8)] == [100, None, None, 300, 400]
 
     saved = authed_client.post(
         "/admin/order-tool/summary/daily-kitchen-sheet",
@@ -602,6 +640,12 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             "date": "2026-08-13",
             f"ingredients_regular_{ids['recipe']}": "骨腿丁（18件）、九層塔（1K）",
             f"ingredients_vegetarian_{ids['recipe']}": "骨腿丁（素食備註）",
+            f"combo_regular_{ids['recipe']}": "170",
+            f"bento_regular_{ids['recipe']}": "31",
+            f"small_bento_regular_{ids['recipe']}": "299",
+            f"combo_vegetarian_{ids['recipe']}": "5",
+            f"bento_vegetarian_{ids['recipe']}": "4",
+            f"small_bento_vegetarian_{ids['recipe']}": "1",
         },
     )
     assert saved.status_code == 302
@@ -615,9 +659,10 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert sheet["A2"].value == "葷"
     assert sheet["A3"].value == "南洋綠咖哩雞"
     assert sheet["B3"].value == "骨腿丁（18件）、九層塔（1K）"
-    assert [sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 60, 250]
+    assert [sheet.cell(3, column).value for column in range(3, 8)] == [170, None, 31, 299, 500]
+    assert all(name in sheet["H3"].value for name in regular_counts)
     assert sheet["A6"].value == "素"
-    assert [sheet.cell(7, column).value for column in range(3, 8)] == [4, None, 3, 2, 9]
+    assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, None, 4, 1, 10]
 
 
 def test_school_menu_total_is_sorted_by_fixed_category_order(app, authed_client):

@@ -2867,6 +2867,7 @@ def _daily_kitchen_sheet_data(service_date: date):
                 "combo": 0,
                 "bento": 0,
                 "small_bento": 0,
+                "school_counts": defaultdict(int),
             })
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
@@ -2877,10 +2878,11 @@ def _daily_kitchen_sheet_data(service_date: date):
             for assignment in assignments:
                 bucket = _daily_kitchen_bucket(assignment.school.name)
                 dish[bucket] += max(assignment.headcount, 0)
+                dish["school_counts"][assignment.school.name] += max(assignment.headcount, 0)
 
     recipe_ids = [recipe_id for dishes in grouped.values() for recipe_id in dishes]
     notes = {
-        (row.variant, row.recipe_id): row.ingredients_text
+        (row.variant, row.recipe_id): row
         for row in KitchenDailyDishNote.query.filter(
             KitchenDailyDishNote.service_date == service_date,
             KitchenDailyDishNote.recipe_id.in_(recipe_ids or [-1]),
@@ -2889,15 +2891,31 @@ def _daily_kitchen_sheet_data(service_date: date):
     result = {"regular": [], "vegetarian": []}
     for variant, dishes in grouped.items():
         for dish in sorted(dishes.values(), key=lambda row: row["sort_key"]):
-            # 鎮高小便當的葷食固定抽 60 份改用合菜出餐。
-            if variant == "regular":
-                transferred = min(60, dish["small_bento"])
+            # 小便當 300 份不移轉；達 360 份才抽 60 份改用合菜出餐。
+            if variant == "regular" and dish["small_bento"] >= 360:
+                transferred = 60
                 dish["small_bento"] -= transferred
                 dish["combo"] += transferred
             default_ingredients = _recipe_ingredient_names(dish["recipe"])
-            dish["ingredients_text"] = notes.get(
-                (variant, dish["recipe"].id), default_ingredients
-            ) or default_ingredients
+            note = notes.get((variant, dish["recipe"].id))
+            dish["ingredients_text"] = (
+                note.ingredients_text if note and note.ingredients_text else default_ingredients
+            )
+            if note and note.combo_count is not None:
+                dish["combo"] = note.combo_count
+            if note and note.bento_count is not None:
+                dish["bento"] = note.bento_count
+            if note and note.small_bento_count is not None:
+                dish["small_bento"] = note.small_bento_count
+            dish["school_rows"] = [
+                {"name": name, "headcount": headcount}
+                for name, headcount in sorted(
+                    dish["school_counts"].items(), key=lambda row: row[0].casefold()
+                )
+            ]
+            dish["school_summary"] = "、".join(
+                f"{row['name']} {row['headcount']} 人" for row in dish["school_rows"]
+            )
             dish["total"] = dish["combo"] + dish["bento"] + dish["small_bento"]
             result[variant].append(dish)
     return result
@@ -2910,6 +2928,7 @@ def daily_kitchen_sheet():
     ) or date.today()
     sheets = _daily_kitchen_sheet_data(service_date)
     if request.method == "POST":
+        updates = []
         for variant, dishes in sheets.items():
             for dish in dishes:
                 field_name = f"ingredients_{variant}_{dish['recipe'].id}"
@@ -2918,21 +2937,40 @@ def daily_kitchen_sheet():
                 ingredients_text = request.form.get(field_name, "").strip()[:2000]
                 if not ingredients_text:
                     ingredients_text = _recipe_ingredient_names(dish["recipe"])
-                note = KitchenDailyDishNote.query.filter_by(
+                counts = {}
+                for key in ("combo", "bento", "small_bento"):
+                    value = _int(
+                        request.form.get(f"{key}_{variant}_{dish['recipe'].id}"),
+                        default=None,
+                    )
+                    if value is None or value < 0:
+                        db.session.rollback()
+                        flash("合菜、便當與小便當數量必須是 0 以上的整數。", "error")
+                        return redirect(url_for(
+                            "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
+                        ))
+                    counts[key] = value
+                updates.append((variant, dish, ingredients_text, counts))
+
+        for variant, dish, ingredients_text, counts in updates:
+            note = KitchenDailyDishNote.query.filter_by(
+                service_date=service_date,
+                variant=variant,
+                recipe_id=dish["recipe"].id,
+            ).one_or_none()
+            if note is None:
+                note = KitchenDailyDishNote(
                     service_date=service_date,
                     variant=variant,
                     recipe_id=dish["recipe"].id,
-                ).one_or_none()
-                if note is None:
-                    note = KitchenDailyDishNote(
-                        service_date=service_date,
-                        variant=variant,
-                        recipe_id=dish["recipe"].id,
-                    )
-                    db.session.add(note)
-                note.ingredients_text = ingredients_text
+                )
+                db.session.add(note)
+            note.ingredients_text = ingredients_text
+            note.combo_count = counts["combo"]
+            note.bento_count = counts["bento"]
+            note.small_bento_count = counts["small_bento"]
         db.session.commit()
-        flash("每日廚房表格已儲存，現在可以匯出 Excel。", "success")
+        flash("每日廚房表格的食材與數字已儲存，現在可以匯出 Excel。", "success")
         return redirect(url_for("order_tool.daily_kitchen_sheet", date=service_date.isoformat()))
     return render_template(
         "kitchen/daily_kitchen_sheet.html",
@@ -2946,7 +2984,7 @@ def daily_kitchen_sheet():
 
 def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishes: list[dict]):
     header_row = start_row + 1
-    headers = [label, "", "合菜", "班級數", "便當", "小便當", "總計"]
+    headers = [label, "", "合菜", "班級數", "便當", "小便當", "總計", "供餐學校／人數"]
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(header_row, column, value)
         cell.font = Font(name="Microsoft JhengHei", size=15, bold=True)
@@ -2963,17 +3001,18 @@ def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishe
             dish["bento"] or None,
             dish["small_bento"] or None,
             dish["total"] or None,
+            dish["school_summary"],
         ]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row_number, column, value)
             cell.font = Font(name="Microsoft JhengHei", size=14, bold=True)
             cell.alignment = Alignment(
-                horizontal="right" if column >= 3 else "left",
+                horizontal="right" if 3 <= column <= 7 else "left",
                 vertical="center",
-                wrap_text=column == 2,
+                wrap_text=column in {2, 8},
             )
             cell.border = Border(bottom=Side(style="thin", color="000000"))
-            if column >= 3:
+            if 3 <= column <= 7:
                 cell.number_format = "#,##0"
         sheet.row_dimensions[row_number].height = 31
     return max(header_row + len(dishes), header_row)
@@ -2996,6 +3035,7 @@ def daily_kitchen_sheet_export():
     sheet.column_dimensions["B"].width = 58
     for column in ("C", "D", "E", "F", "G"):
         sheet.column_dimensions[column].width = 13
+    sheet.column_dimensions["H"].width = 48
 
     weekday = "一二三四五六日"[service_date.weekday()]
     current_row = 1
@@ -3014,7 +3054,7 @@ def daily_kitchen_sheet_export():
         current_row = _write_daily_kitchen_export_section(
             sheet, current_row, label, sheets[variant]
         )
-    sheet.print_area = f"A1:G{current_row}"
+    sheet.print_area = f"A1:H{current_row}"
 
     output = BytesIO()
     workbook.save(output)

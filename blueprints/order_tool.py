@@ -2928,6 +2928,7 @@ def daily_kitchen_sheet():
     ) or date.today()
     sheets = _daily_kitchen_sheet_data(service_date)
     if request.method == "POST":
+        autosave = request.headers.get("X-Requested-With") == "daily-kitchen-autosave"
         updates = []
         for variant, dishes in sheets.items():
             for dish in dishes:
@@ -2945,6 +2946,8 @@ def daily_kitchen_sheet():
                     )
                     if value is None or value < 0:
                         db.session.rollback()
+                        if autosave:
+                            return {"message": "合菜、便當與小便當數量必須是 0 以上的整數。"}, 400
                         flash("合菜、便當與小便當數量必須是 0 以上的整數。", "error")
                         return redirect(url_for(
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
@@ -2970,6 +2973,8 @@ def daily_kitchen_sheet():
             note.bento_count = counts["bento"]
             note.small_bento_count = counts["small_bento"]
         db.session.commit()
+        if autosave:
+            return {"message": "已儲存"}
         flash("每日廚房表格的食材與數字已儲存，現在可以匯出 Excel。", "success")
         return redirect(url_for("order_tool.daily_kitchen_sheet", date=service_date.isoformat()))
     return render_template(

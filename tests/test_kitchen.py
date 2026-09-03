@@ -618,6 +618,9 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert "供餐學校／人數" in page
     assert all(name in page for name in ("新勢", "平鎮高中", "廣豐", "平鎮高中小便當"))
     assert "骨腿丁" in page
+    assert "data-daily-kitchen-autosave" in page
+    assert "儲存食材與數字" not in page
+    assert "匯出 Excel" in page
     assert f'name="combo_regular_{ids["recipe"]}"' in page
     assert f'name="small_bento_regular_{ids["recipe"]}"' in page
 
@@ -647,8 +650,10 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             f"bento_vegetarian_{ids['recipe']}": "4",
             f"small_bento_vegetarian_{ids['recipe']}": "1",
         },
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
     )
-    assert saved.status_code == 302
+    assert saved.status_code == 200
+    assert saved.get_json() == {"message": "已儲存"}
 
     exported = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"

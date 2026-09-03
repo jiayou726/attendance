@@ -633,6 +633,56 @@
     refreshTotal();
   });
 
+  const dailyKitchenForm = document.querySelector('[data-daily-kitchen-autosave]');
+  if (dailyKitchenForm) {
+    const saveState = dailyKitchenForm.querySelector('[data-daily-kitchen-save-state]');
+    const fields = [...dailyKitchenForm.querySelectorAll('[data-daily-save-field]')];
+    let saveTimer = null;
+    let saveChain = Promise.resolve();
+    let lastSaved = new URLSearchParams(new FormData(dailyKitchenForm)).toString();
+
+    dailyKitchenForm.addEventListener('submit', (event) => event.preventDefault());
+    const save = () => {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+      if (!fields.every((field) => field.checkValidity())) {
+        if (saveState) saveState.textContent = '請完成數字';
+        return;
+      }
+      const body = new URLSearchParams(new FormData(dailyKitchenForm));
+      const serialized = body.toString();
+      if (serialized === lastSaved) {
+        if (saveState) saveState.textContent = '已儲存';
+        return;
+      }
+      if (saveState) saveState.textContent = '儲存中…';
+      const operation = saveChain.then(async () => {
+        const response = await fetch(dailyKitchenForm.action, {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'daily-kitchen-autosave' },
+          body,
+          keepalive: true,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || '儲存失敗');
+        lastSaved = serialized;
+        if (saveState) saveState.textContent = data.message || '已儲存';
+      });
+      saveChain = operation.catch((error) => {
+        if (saveState) saveState.textContent = error.message || '儲存失敗';
+      });
+    };
+    const scheduleSave = () => {
+      if (saveState) saveState.textContent = '等待儲存…';
+      window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(save, 400);
+    };
+    fields.forEach((field) => {
+      field.addEventListener('input', scheduleSave);
+      field.addEventListener('change', save);
+    });
+  }
+
   document.querySelectorAll('.order-confirm-toggle').forEach((checkbox) => {
     const refresh = () => checkbox.closest('tr')?.classList.toggle('is-ordered', checkbox.checked);
     checkbox.addEventListener('change', async () => {

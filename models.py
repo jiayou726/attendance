@@ -257,6 +257,7 @@ class KitchenDailyDishNote(db.Model):
     ingredients_text = db.Column(db.Text, nullable=False, default="")
     # 空白時使用學校人數自動計算；有值時保留現場人工調整。
     combo_count = db.Column(db.Integer, nullable=True)
+    class_count = db.Column(db.Integer, nullable=True)
     bento_count = db.Column(db.Integer, nullable=True)
     small_bento_count = db.Column(db.Integer, nullable=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

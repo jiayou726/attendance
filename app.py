@@ -57,7 +57,7 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
             for column in inspect(db.engine).get_columns("kitchen_daily_dish_note")
         }
         with db.engine.begin() as connection:
-            for column_name in ("combo_count", "bento_count", "small_bento_count"):
+            for column_name in ("combo_count", "class_count", "bento_count", "small_bento_count"):
                 if column_name not in daily_note_columns:
                     connection.execute(text(
                         f"ALTER TABLE kitchen_daily_dish_note ADD COLUMN {column_name} INTEGER"

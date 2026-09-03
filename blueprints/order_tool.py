@@ -2903,6 +2903,7 @@ def _daily_kitchen_sheet_data(service_date: date):
             )
             if note and note.combo_count is not None:
                 dish["combo"] = note.combo_count
+            dish["class_count"] = note.class_count if note else None
             if note and note.bento_count is not None:
                 dish["bento"] = note.bento_count
             if note and note.small_bento_count is not None:
@@ -2953,9 +2954,22 @@ def daily_kitchen_sheet():
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
                         ))
                     counts[key] = value
-                updates.append((variant, dish, ingredients_text, counts))
+                class_count_text = request.form.get(
+                    f"class_count_{variant}_{dish['recipe'].id}", ""
+                ).strip()
+                class_count = _int(class_count_text, default=None) if class_count_text else None
+                if class_count_text and (class_count is None or class_count < 0):
+                    db.session.rollback()
+                    message = "班級數必須留空，或填寫 0 以上的整數。"
+                    if autosave:
+                        return {"message": message}, 400
+                    flash(message, "error")
+                    return redirect(url_for(
+                        "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
+                    ))
+                updates.append((variant, dish, ingredients_text, counts, class_count))
 
-        for variant, dish, ingredients_text, counts in updates:
+        for variant, dish, ingredients_text, counts, class_count in updates:
             note = KitchenDailyDishNote.query.filter_by(
                 service_date=service_date,
                 variant=variant,
@@ -2970,6 +2984,7 @@ def daily_kitchen_sheet():
                 db.session.add(note)
             note.ingredients_text = ingredients_text
             note.combo_count = counts["combo"]
+            note.class_count = class_count
             note.bento_count = counts["bento"]
             note.small_bento_count = counts["small_bento"]
         db.session.commit()
@@ -3002,7 +3017,7 @@ def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishe
             dish["recipe"].name,
             dish["ingredients_text"],
             dish["combo"] or None,
-            None,
+            dish["class_count"],
             dish["bento"] or None,
             dish["small_bento"] or None,
             dish["total"] or None,

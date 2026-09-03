@@ -622,6 +622,7 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert "儲存食材與數字" not in page
     assert "匯出 Excel" in page
     assert f'name="combo_regular_{ids["recipe"]}"' in page
+    assert f'name="class_count_regular_{ids["recipe"]}"' in page
     assert f'name="small_bento_regular_{ids["recipe"]}"' in page
 
     automatic = authed_client.get(
@@ -644,9 +645,11 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             f"ingredients_regular_{ids['recipe']}": "骨腿丁（18件）、九層塔（1K）",
             f"ingredients_vegetarian_{ids['recipe']}": "骨腿丁（素食備註）",
             f"combo_regular_{ids['recipe']}": "170",
+            f"class_count_regular_{ids['recipe']}": "87",
             f"bento_regular_{ids['recipe']}": "31",
             f"small_bento_regular_{ids['recipe']}": "299",
             f"combo_vegetarian_{ids['recipe']}": "5",
+            f"class_count_vegetarian_{ids['recipe']}": "1",
             f"bento_vegetarian_{ids['recipe']}": "4",
             f"small_bento_vegetarian_{ids['recipe']}": "1",
         },
@@ -664,10 +667,10 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert sheet["A2"].value == "葷"
     assert sheet["A3"].value == "南洋綠咖哩雞"
     assert sheet["B3"].value == "骨腿丁（18件）、九層塔（1K）"
-    assert [sheet.cell(3, column).value for column in range(3, 8)] == [170, None, 31, 299, 500]
+    assert [sheet.cell(3, column).value for column in range(3, 8)] == [170, 87, 31, 299, 500]
     assert all(name in sheet["H3"].value for name in regular_counts)
     assert sheet["A6"].value == "素"
-    assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, None, 4, 1, 10]
+    assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, 1, 4, 1, 10]
 
 
 def test_school_menu_total_is_sorted_by_fixed_category_order(app, authed_client):

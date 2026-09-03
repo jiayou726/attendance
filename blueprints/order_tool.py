@@ -36,6 +36,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 
 from extensions import db
 from models import (
+    KitchenDailyDishNote,
     KitchenIngredient,
     KitchenMenuAssignment,
     KitchenMenuPlan,
@@ -80,6 +81,16 @@ NONREGISTERED_MENU_COLUMNS = {
     "點心": (25, 26, 27),
     "其他": (25, 26, 27),
 }
+CATEGORY_ORDER = {category: index for index, category in enumerate(CATEGORIES)}
+
+
+def _menu_item_category_sort_key(item: KitchenMenuPlanItem):
+    category = item.recipe.category or "其他"
+    return (
+        CATEGORY_ORDER.get(category, len(CATEGORIES)),
+        item.sort_order,
+        item.recipe.name.casefold(),
+    )
 
 
 # ─────────────────────────────────────────────
@@ -1578,6 +1589,9 @@ def school_menus():
                 if item.recipe_id not in seen_recipe_ids:
                     source_items.append(item)
                     seen_recipe_ids.add(item.recipe_id)
+        # 選擇學校時的「總表」固定依菜色分類顯示，
+        # 不受匯入次序或學校專屬菜單的排列影響。
+        source_items.sort(key=_menu_item_category_sort_key)
         no_service = any(row.service_status == "no_service" for row in assignments_for_day)
         days.append({
             "date": day_date,
@@ -1628,11 +1642,12 @@ def _copy_nonregistered_template_row(sheet, source_row: int, target_row: int):
     sheet.row_dimensions[target_row].height = sheet.row_dimensions[source_row].height
 
 
-def _put_nonregistered_dishes(sheet, row_number: int, plan: KitchenMenuPlan):
+def _put_nonregistered_dishes(sheet, row_number: int, plans: list[KitchenMenuPlan]):
     dishes_by_category = defaultdict(list)
-    for item in plan.items:
-        category = item.recipe.category if item.recipe.category in NONREGISTERED_MENU_COLUMNS else "其他"
-        dishes_by_category[category].append(item.recipe.name)
+    for plan in plans:
+        for item in sorted(plan.items, key=_menu_item_category_sort_key):
+            category = item.recipe.category if item.recipe.category in NONREGISTERED_MENU_COLUMNS else "其他"
+            dishes_by_category[category].append(item.recipe.name)
     for category, columns in NONREGISTERED_MENU_COLUMNS.items():
         if category == "其他":
             continue
@@ -1667,10 +1682,21 @@ def school_menus_export():
         )
         .all()
     )
-    assignments = sorted(
-        (assignment for assignment in assignments if assignment.plan.items),
-        key=lambda assignment: assignment.school.name.casefold(),
-    )
+    grouped_assignments = defaultdict(list)
+    for assignment in assignments:
+        if assignment.plan.items:
+            grouped_assignments[assignment.school_id].append(assignment)
+    school_rows = []
+    for school_assignments in grouped_assignments.values():
+        # 同校只佔一列；葷食在前，素食緊接在後。
+        school_assignments.sort(
+            key=lambda assignment: (
+                assignment.plan.name.endswith("素食菜單"),
+                assignment.plan.id,
+            )
+        )
+        school_rows.append((school_assignments[0].school, school_assignments))
+    school_rows.sort(key=lambda row: row[0].name.casefold())
 
     template_path = Path(current_app.root_path) / NONREGISTERED_MENU_TEMPLATE
     if not template_path.is_file():
@@ -1679,20 +1705,24 @@ def school_menus_export():
     sheet = workbook.active
     first_data_row = 2
     template_last_row = max(sheet.max_row, 9)
-    required_last_row = max(template_last_row, first_data_row + len(assignments) - 1)
+    required_last_row = max(template_last_row, first_data_row + len(school_rows) - 1)
     for row_number in range(template_last_row + 1, required_last_row + 1):
         _copy_nonregistered_template_row(sheet, first_data_row, row_number)
     for row_number in range(first_data_row, required_last_row + 1):
         for column in range(1, 28):
             sheet.cell(row_number, column).value = None
 
-    for row_number, assignment in enumerate(assignments, start=first_data_row):
-        sheet.cell(row_number, 1).value = assignment.school.name
+    for row_number, (school, school_assignments) in enumerate(school_rows, start=first_data_row):
+        sheet.cell(row_number, 1).value = school.name
         sheet.cell(row_number, 2).value = service_date
-        sheet.cell(row_number, 3).value = assignment.plan.meal_type or "午餐"
+        sheet.cell(row_number, 3).value = school_assignments[0].plan.meal_type or "午餐"
         for column, value in enumerate(NONREGISTERED_MENU_DEFAULTS, start=4):
             sheet.cell(row_number, column).value = value
-        _put_nonregistered_dishes(sheet, row_number, assignment.plan)
+        _put_nonregistered_dishes(
+            sheet,
+            row_number,
+            [assignment.plan for assignment in school_assignments],
+        )
 
     output = BytesIO()
     workbook.save(output)
@@ -2780,6 +2810,221 @@ def _production_sheet_data(service_date: date):
             dish["components"] = components
             result[variant].append(dish)
     return result
+
+
+def _daily_kitchen_bucket(school_name: str) -> str:
+    """把學校分到每日廚房表的三種出餐方式。"""
+    normalized = re.sub(r"[\s　]+", "", school_name or "")
+    if "小便當" in normalized and ("平鎮" in normalized or "鎮高" in normalized):
+        return "small_bento"
+    if "廣豐" in normalized:
+        return "bento"
+    if "小便當" not in normalized and ("平鎮高中" in normalized or "鎮高" in normalized):
+        return "bento"
+    return "combo"
+
+
+def _recipe_ingredient_names(recipe: KitchenRecipe) -> str:
+    return "、".join(
+        component.ingredient.name
+        for component in recipe.ingredients
+        if component.ingredient and component.ingredient.name
+    )
+
+
+def _daily_kitchen_sheet_data(service_date: date):
+    """產生「每日廚房表格」，人數依學校實際勾選的菜色分流。"""
+    plans = (
+        KitchenMenuPlan.query.filter_by(service_date=service_date, meal_type="午餐")
+        .options(
+            selectinload(KitchenMenuPlan.assignments).selectinload(KitchenMenuAssignment.school),
+            selectinload(KitchenMenuPlan.items)
+            .selectinload(KitchenMenuPlanItem.recipe)
+            .selectinload(KitchenRecipe.ingredients)
+            .selectinload(KitchenRecipeIngredient.ingredient),
+        )
+        .order_by(KitchenMenuPlan.name, KitchenMenuPlan.id)
+        .all()
+    )
+    grouped = {"regular": {}, "vegetarian": {}}
+    for plan in plans:
+        assignments = [
+            assignment for assignment in plan.assignments
+            if assignment.service_status == "serving" and assignment.headcount > 0
+        ]
+        if not assignments:
+            continue
+        variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
+        for menu_item in plan.items:
+            recipe = menu_item.recipe
+            dish = grouped[variant].setdefault(recipe.id, {
+                "recipe": recipe,
+                "sort_key": (
+                    CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
+                    menu_item.sort_order,
+                    recipe.name.casefold(),
+                ),
+                "combo": 0,
+                "bento": 0,
+                "small_bento": 0,
+            })
+            if menu_item.sort_order < dish["sort_key"][1]:
+                dish["sort_key"] = (
+                    CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
+                    menu_item.sort_order,
+                    recipe.name.casefold(),
+                )
+            for assignment in assignments:
+                bucket = _daily_kitchen_bucket(assignment.school.name)
+                dish[bucket] += max(assignment.headcount, 0)
+
+    recipe_ids = [recipe_id for dishes in grouped.values() for recipe_id in dishes]
+    notes = {
+        (row.variant, row.recipe_id): row.ingredients_text
+        for row in KitchenDailyDishNote.query.filter(
+            KitchenDailyDishNote.service_date == service_date,
+            KitchenDailyDishNote.recipe_id.in_(recipe_ids or [-1]),
+        ).all()
+    }
+    result = {"regular": [], "vegetarian": []}
+    for variant, dishes in grouped.items():
+        for dish in sorted(dishes.values(), key=lambda row: row["sort_key"]):
+            # 鎮高小便當的葷食固定抽 60 份改用合菜出餐。
+            if variant == "regular":
+                transferred = min(60, dish["small_bento"])
+                dish["small_bento"] -= transferred
+                dish["combo"] += transferred
+            default_ingredients = _recipe_ingredient_names(dish["recipe"])
+            dish["ingredients_text"] = notes.get(
+                (variant, dish["recipe"].id), default_ingredients
+            ) or default_ingredients
+            dish["total"] = dish["combo"] + dish["bento"] + dish["small_bento"]
+            result[variant].append(dish)
+    return result
+
+
+@order_bp.route("/summary/daily-kitchen-sheet", methods=["GET", "POST"])
+def daily_kitchen_sheet():
+    service_date = _date(
+        request.values.get("date"), default=date.today()
+    ) or date.today()
+    sheets = _daily_kitchen_sheet_data(service_date)
+    if request.method == "POST":
+        for variant, dishes in sheets.items():
+            for dish in dishes:
+                field_name = f"ingredients_{variant}_{dish['recipe'].id}"
+                if field_name not in request.form:
+                    continue
+                ingredients_text = request.form.get(field_name, "").strip()[:2000]
+                if not ingredients_text:
+                    ingredients_text = _recipe_ingredient_names(dish["recipe"])
+                note = KitchenDailyDishNote.query.filter_by(
+                    service_date=service_date,
+                    variant=variant,
+                    recipe_id=dish["recipe"].id,
+                ).one_or_none()
+                if note is None:
+                    note = KitchenDailyDishNote(
+                        service_date=service_date,
+                        variant=variant,
+                        recipe_id=dish["recipe"].id,
+                    )
+                    db.session.add(note)
+                note.ingredients_text = ingredients_text
+        db.session.commit()
+        flash("每日廚房表格已儲存，現在可以匯出 Excel。", "success")
+        return redirect(url_for("order_tool.daily_kitchen_sheet", date=service_date.isoformat()))
+    return render_template(
+        "kitchen/daily_kitchen_sheet.html",
+        service_date=service_date,
+        previous_date=service_date - timedelta(days=1),
+        next_date=service_date + timedelta(days=1),
+        week_start=service_date - timedelta(days=service_date.weekday()),
+        sheets=sheets,
+    )
+
+
+def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishes: list[dict]):
+    header_row = start_row + 1
+    headers = [label, "", "合菜", "班級數", "便當", "小便當", "總計"]
+    for column, value in enumerate(headers, start=1):
+        cell = sheet.cell(header_row, column, value)
+        cell.font = Font(name="Microsoft JhengHei", size=15, bold=True)
+        cell.alignment = Alignment(vertical="center")
+        cell.border = Border(bottom=Side(style="medium", color="000000"))
+    sheet.row_dimensions[header_row].height = 27
+
+    for row_number, dish in enumerate(dishes, start=header_row + 1):
+        values = [
+            dish["recipe"].name,
+            dish["ingredients_text"],
+            dish["combo"] or None,
+            None,
+            dish["bento"] or None,
+            dish["small_bento"] or None,
+            dish["total"] or None,
+        ]
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row_number, column, value)
+            cell.font = Font(name="Microsoft JhengHei", size=14, bold=True)
+            cell.alignment = Alignment(
+                horizontal="right" if column >= 3 else "left",
+                vertical="center",
+                wrap_text=column == 2,
+            )
+            cell.border = Border(bottom=Side(style="thin", color="000000"))
+            if column >= 3:
+                cell.number_format = "#,##0"
+        sheet.row_dimensions[row_number].height = 31
+    return max(header_row + len(dishes), header_row)
+
+
+@order_bp.get("/summary/daily-kitchen-sheet.xlsx")
+def daily_kitchen_sheet_export():
+    service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    sheets = _daily_kitchen_sheet_data(service_date)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = service_date.strftime("%m%d")
+    sheet.sheet_view.showGridLines = True
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 1
+    sheet.page_margins.left = 0.2
+    sheet.page_margins.right = 0.2
+    sheet.column_dimensions["A"].width = 22
+    sheet.column_dimensions["B"].width = 58
+    for column in ("C", "D", "E", "F", "G"):
+        sheet.column_dimensions[column].width = 13
+
+    weekday = "一二三四五六日"[service_date.weekday()]
+    current_row = 1
+    for index, (variant, label) in enumerate((("regular", "葷"), ("vegetarian", "素"))):
+        if index:
+            current_row += 2
+        sheet.cell(current_row, 1, service_date)
+        sheet.cell(current_row, 1).number_format = 'm"月"d"日"'
+        sheet.cell(current_row, 2, f"（{weekday}）")
+        for column in (1, 2):
+            sheet.cell(current_row, column).font = Font(
+                name="Microsoft JhengHei", size=19, bold=True
+            )
+            sheet.cell(current_row, column).alignment = Alignment(vertical="center")
+        sheet.row_dimensions[current_row].height = 34
+        current_row = _write_daily_kitchen_export_section(
+            sheet, current_row, label, sheets[variant]
+        )
+    sheet.print_area = f"A1:G{current_row}"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"每日廚房表格_{service_date.isoformat()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def _production_order_for_date(service_date: date):

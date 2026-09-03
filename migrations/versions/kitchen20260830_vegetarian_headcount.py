@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = "kitchen20260830_vegetarian"
-down_revision = "kitchen20260829_school_no_service"
+down_revision = "kitchen20260829"
 branch_labels = None
 depends_on = None
 

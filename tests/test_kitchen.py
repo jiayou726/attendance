@@ -132,7 +132,12 @@ def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "開啟菜單" in page
-    assert all(label in page for label in ("總表", "菜色配方", "食材", "學校", "廠商", "採購叫貨"))
+    assert all(label in page for label in (
+        "總表", "菜色配方", "食材", "學校", "廠商", "採購叫貨",
+        "菜色用量表", "每日廚房表格",
+    ))
+    assert "/summary/production-sheet?date=" in page
+    assert "/summary/daily-kitchen-sheet?date=" in page
     assert '<span class="nav-disabled" aria-disabled="true"' in page
     assert "未來 7 天菜單" not in page
 
@@ -544,6 +549,111 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "/admin/order-tool/summary/production-sheet?date=2026-08-13" in school_menu
 
 
+def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        regular_counts = {
+            "新勢": 100,
+            "平鎮高中": 20,
+            "廣豐": 10,
+            "平鎮高中小便當": 120,
+        }
+        vegetarian_counts = {
+            "新勢": 4,
+            "平鎮高中": 2,
+            "廣豐": 1,
+            "平鎮高中小便當": 2,
+        }
+        for school_name in regular_counts:
+            school = KitchenSchool(name=school_name)
+            db.session.add(school)
+            db.session.flush()
+            for suffix, counts in (("菜單", regular_counts), ("素食菜單", vegetarian_counts)):
+                plan = KitchenMenuPlan(
+                    service_date=TEST_DAY,
+                    meal_type="午餐",
+                    name=f"{school_name}{suffix}",
+                )
+                db.session.add(plan)
+                db.session.flush()
+                db.session.add(KitchenMenuPlanItem(
+                    plan_id=plan.id,
+                    recipe_id=ids["recipe"],
+                    sort_order=0,
+                ))
+                db.session.add(KitchenMenuAssignment(
+                    plan_id=plan.id,
+                    school_id=school.id,
+                    headcount=counts[school_name],
+                ))
+        db.session.commit()
+
+    page = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert "每日廚房表格" in page
+    assert "班級數" in page
+    assert "平鎮高中＋廣豐" in page
+    assert "骨腿丁" in page
+
+    saved = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={
+            "date": "2026-08-13",
+            f"ingredients_regular_{ids['recipe']}": "骨腿丁（18件）、九層塔（1K）",
+            f"ingredients_vegetarian_{ids['recipe']}": "骨腿丁（素食備註）",
+        },
+    )
+    assert saved.status_code == 302
+
+    exported = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
+    )
+    assert exported.status_code == 200
+    workbook = load_workbook(BytesIO(exported.data), data_only=False)
+    sheet = workbook["0813"]
+    assert sheet["A2"].value == "葷"
+    assert sheet["A3"].value == "南洋綠咖哩雞"
+    assert sheet["B3"].value == "骨腿丁（18件）、九層塔（1K）"
+    assert [sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 60, 250]
+    assert sheet["A6"].value == "素"
+    assert [sheet.cell(7, column).value for column in range(3, 8)] == [4, None, 3, 2, 9]
+
+
+def test_school_menu_total_is_sorted_by_fixed_category_order(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        plan = KitchenMenuPlan(
+            service_date=TEST_DAY,
+            meal_type="午餐",
+            name="中央菜單",
+        )
+        db.session.add(plan)
+        recipes = [
+            KitchenRecipe(name="有機青菜", category="青菜"),
+            KitchenRecipe(name="白飯", category="主食"),
+        ]
+        db.session.add_all(recipes)
+        db.session.flush()
+        for sort_order, recipe in enumerate(recipes):
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id,
+                recipe_id=recipe.id,
+                sort_order=sort_order,
+            ))
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=plan.id,
+            recipe_id=ids["recipe"],
+            sort_order=2,
+        ))
+        db.session.commit()
+
+    page = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert page.index("白飯") < page.index("南洋綠咖哩雞") < page.index("有機青菜")
+
+
 def test_no_service_school_is_complete_and_excluded_from_procurement(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={
@@ -642,6 +752,26 @@ def test_school_menu_exports_selected_date_into_nonregistered_template(app, auth
                 recipe_id=recipe.id,
                 sort_order=sort_order,
             ))
+        vegetarian_recipe = KitchenRecipe(name="素香菇", category="主菜")
+        db.session.add(vegetarian_recipe)
+        db.session.flush()
+        vegetarian_plan = KitchenMenuPlan(
+            service_date=TEST_DAY,
+            meal_type="午餐",
+            name="內小素食菜單",
+        )
+        db.session.add(vegetarian_plan)
+        db.session.flush()
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=vegetarian_plan.id,
+            recipe_id=vegetarian_recipe.id,
+            sort_order=0,
+        ))
+        db.session.add(KitchenMenuAssignment(
+            plan_id=vegetarian_plan.id,
+            school_id=ids["school"],
+            headcount=3,
+        ))
         stopped_school = KitchenSchool(name="停餐校", default_headcount=100)
         db.session.add(stopped_school)
         db.session.flush()
@@ -678,6 +808,7 @@ def test_school_menu_exports_selected_date_into_nonregistered_template(app, auth
     assert [sheet.cell(2, column).value for column in range(4, 11)] == [4, 2, 1.7, 0, 0, 2, 563]
     assert sheet["K2"].value == "香Q米飯"
     assert sheet["M2"].value == "南洋綠咖哩雞"
+    assert sheet["N2"].value == "素香菇"
     assert sheet["Q2"].value == "麻婆豆腐"
     assert sheet["W2"].value == "有機青菜"
     assert sheet["X2"].value == "玉米蛋花湯"

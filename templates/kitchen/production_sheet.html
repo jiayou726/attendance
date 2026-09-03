@@ -11,6 +11,7 @@
     <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=previous_date.isoformat(), variant=variant) }}">← 前一天</a>
     <a class="btn secondary" href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">回各校菜單</a>
     <a class="btn secondary" href="{{ url_for('order_tool.procurement', date=service_date.isoformat()) }}">採購明細</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.daily_kitchen_sheet', date=service_date.isoformat()) }}">每日廚房表格</a>
     <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=next_date.isoformat(), variant=variant) }}">後一天 →</a>
   </nav>
 </section>

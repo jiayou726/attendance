@@ -28,6 +28,8 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
     """Apply only the additive kitchen fix needed when deploys skip Alembic."""
 
     with app.app_context():
+        from models import KitchenDailyDishNote
+
         inspector = inspect(db.engine)
         with db.engine.begin() as connection:
             table_name = "kitchen_menu_assignment"
@@ -46,6 +48,10 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                         "ALTER TABLE kitchen_school ADD COLUMN "
                         "default_vegetarian_headcount INTEGER NOT NULL DEFAULT 0"
                     ))
+
+        # 日常表格的人工食材備註是空白可建的附加資料；
+        # 部署若尚未執行 Alembic，仍可安全、重複地補上新表。
+        KitchenDailyDishNote.__table__.create(bind=db.engine, checkfirst=True)
 
         # Historical supplier prices already live in production.  Apply the
         # conservative, idempotent unit conversion after each deploy so a

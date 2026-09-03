@@ -237,6 +237,36 @@ class KitchenMenuPlanItem(db.Model):
     )
 
 
+class KitchenDailyDishNote(db.Model):
+    """每日廚房表的食材備註。
+
+    配方食材是預設值；現場可在這裡追加「（數量／規格）」，
+    不會回頭改掉共用的配方 BOM。
+    """
+
+    __tablename__ = "kitchen_daily_dish_note"
+
+    id = db.Column(db.Integer, primary_key=True)
+    service_date = db.Column(db.Date, nullable=False, index=True)
+    variant = db.Column(db.String(20), nullable=False, default="regular")
+    recipe_id = db.Column(
+        db.Integer,
+        db.ForeignKey("kitchen_recipe.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ingredients_text = db.Column(db.Text, nullable=False, default="")
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    recipe = db.relationship("KitchenRecipe")
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "service_date", "variant", "recipe_id",
+            name="uq_kitchen_daily_dish_note",
+        ),
+    )
+
+
 class KitchenMenuAssignment(db.Model):
     __tablename__ = "kitchen_menu_assignment"
 

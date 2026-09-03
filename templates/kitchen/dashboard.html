@@ -21,6 +21,8 @@
     <a class="home-action school" href="{{ url_for('order_tool.schools') }}"><span class="home-icon">校</span><span><b>學校</b><small>管理 {{ school_count }} 間學校與平常供餐人數。</small></span><i>›</i></a>
     <a class="home-action supplier" href="{{ url_for('order_tool.suppliers') }}"><span class="home-icon">廠</span><span><b>廠商</b><small>查看 {{ supplier_count }} 家廠商的電話與供應品項。</small></span><i>›</i></a>
     <a class="home-action procurement" href="{{ url_for('order_tool.procurement') }}"><span class="home-icon">購</span><span><b>採購叫貨</b><small>依日期彙整材料需求，填寫廠商、數量與送達時間。</small></span><i>›</i></a>
+    <a class="home-action production" href="{{ url_for('order_tool.production_sheet', date=production_nav_date.isoformat()) }}"><span class="home-icon">量</span><span><b>菜色用量表</b><small>{% if production_nav_available %}查看 {{ production_nav_date.strftime('%Y/%m/%d') }} 每道菜的食材理論用量與採購量。{% else %}依日期查看每道菜的食材用量；需先產生當日採購明細。{% endif %}</small></span><i>›</i></a>
+    <a class="home-action daily-kitchen" href="{{ url_for('order_tool.daily_kitchen_sheet', date=production_nav_date.isoformat()) }}"><span class="home-icon">廚</span><span><b>每日廚房表格</b><small>先在網頁補上食材括號備註，再匯出合菜、便當與小便當表。</small></span><i>›</i></a>
   </div>
 </section>
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{% block title %}團膳管理{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=18">
+  <link rel="stylesheet" href="{{ url_for('static', filename='kitchen_mobile.css') }}?v=19">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -21,6 +21,7 @@
       <a href="{{ url_for('order_tool.suppliers') }}">廠商</a>
       <a href="{{ url_for('order_tool.procurement') }}">採購叫貨</a>
       {% if production_nav_available %}<a href="{{ url_for('order_tool.production_sheet', date=production_nav_date.isoformat()) }}">菜色用量表</a>{% else %}<span class="nav-disabled" aria-disabled="true" title="請先產生採購明細">菜色用量表</span>{% endif %}
+      <a href="{{ url_for('order_tool.daily_kitchen_sheet', date=production_nav_date.isoformat()) }}">每日廚房表格</a>
     </nav>
   </div>
 

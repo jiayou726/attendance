@@ -257,6 +257,9 @@ class KitchenDailyDishNote(db.Model):
     ingredients_text = db.Column(db.Text, nullable=False, default="")
     # 空白時使用學校人數自動計算；有值時保留現場人工調整。
     combo_count = db.Column(db.Integer, nullable=True)
+    # JSON 物件：以學校 id 為 key，保存每校班級數；空白欄位不寫入。
+    school_class_counts = db.Column(db.Text, nullable=False, default="{}")
+    # 保留總班級數欄位以相容既有資料與舊版程式。
     class_count = db.Column(db.Integer, nullable=True)
     bento_count = db.Column(db.Integer, nullable=True)
     small_bento_count = db.Column(db.Integer, nullable=True)

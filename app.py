@@ -62,6 +62,11 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                     connection.execute(text(
                         f"ALTER TABLE kitchen_daily_dish_note ADD COLUMN {column_name} INTEGER"
                     ))
+            if "school_class_counts" not in daily_note_columns:
+                connection.execute(text(
+                    "ALTER TABLE kitchen_daily_dish_note "
+                    "ADD COLUMN school_class_counts TEXT NOT NULL DEFAULT '{}'"
+                ))
 
         # Historical supplier prices already live in production.  Apply the
         # conservative, idempotent unit conversion after each deploy so a

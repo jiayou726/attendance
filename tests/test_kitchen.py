@@ -12,6 +12,7 @@ from models import (
     Checkin,
     Employee,
     KitchenIngredient,
+    KitchenDailyDishNote,
     KitchenMenuAssignment,
     KitchenMenuPlan,
     KitchenMenuPlanItem,
@@ -607,6 +608,12 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
                 headcount=headcount,
             ))
         db.session.commit()
+        school_ids = {
+            school.name: school.id
+            for school in KitchenSchool.query.filter(
+                KitchenSchool.name.in_(regular_counts)
+            ).all()
+        }
 
     page = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet?date=2026-08-13"
@@ -622,21 +629,24 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert "儲存食材與數字" not in page
     assert "匯出 Excel" in page
     assert f'name="combo_regular_{ids["recipe"]}"' in page
-    assert f'name="class_count_regular_{ids["recipe"]}"' in page
+    assert all(
+        f'name="class_count_regular_{ids["recipe"]}_{school_id}"' in page
+        for school_id in school_ids.values()
+    )
     assert f'name="small_bento_regular_{ids["recipe"]}"' in page
 
     automatic = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
     )
     automatic_sheet = load_workbook(BytesIO(automatic.data), data_only=False)["0813"]
-    assert [automatic_sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 300, 490]
-    assert all(name in automatic_sheet["H3"].value for name in regular_counts)
+    assert [automatic_sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [160, 30, 300, 490]
+    assert all(name in automatic_sheet["D3"].value for name in regular_counts)
 
     no_transfer = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-14"
     )
     no_transfer_sheet = load_workbook(BytesIO(no_transfer.data), data_only=False)["0814"]
-    assert [no_transfer_sheet.cell(3, column).value for column in range(3, 8)] == [100, None, None, 300, 400]
+    assert [no_transfer_sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [100, None, 300, 400]
 
     saved = authed_client.post(
         "/admin/order-tool/summary/daily-kitchen-sheet",
@@ -645,11 +655,21 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             f"ingredients_regular_{ids['recipe']}": "骨腿丁（18件）、九層塔（1K）",
             f"ingredients_vegetarian_{ids['recipe']}": "骨腿丁（素食備註）",
             f"combo_regular_{ids['recipe']}": "170",
-            f"class_count_regular_{ids['recipe']}": "87",
+            **{
+                f"class_count_regular_{ids['recipe']}_{school_ids[name]}": value
+                for name, value in {
+                    "新勢": "10", "平鎮高中": "2", "廣豐": "1", "平鎮高中小便當": "36",
+                }.items()
+            },
             f"bento_regular_{ids['recipe']}": "31",
             f"small_bento_regular_{ids['recipe']}": "299",
             f"combo_vegetarian_{ids['recipe']}": "5",
-            f"class_count_vegetarian_{ids['recipe']}": "1",
+            **{
+                f"class_count_vegetarian_{ids['recipe']}_{school_ids[name]}": value
+                for name, value in {
+                    "新勢": "1", "平鎮高中": "1", "廣豐": "", "平鎮高中小便當": "1",
+                }.items()
+            },
             f"bento_vegetarian_{ids['recipe']}": "4",
             f"small_bento_vegetarian_{ids['recipe']}": "1",
         },
@@ -657,6 +677,14 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     )
     assert saved.status_code == 200
     assert saved.get_json() == {"message": "已儲存"}
+    with app.app_context():
+        notes = KitchenDailyDishNote.query.filter_by(
+            service_date=TEST_DAY,
+            recipe_id=ids["recipe"],
+        ).all()
+        regular_note = next(note for note in notes if note.variant == "regular")
+        assert regular_note.class_count == 49
+        assert '"' + str(school_ids["新勢"]) + '": 10' in regular_note.school_class_counts
 
     exported = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
@@ -667,10 +695,11 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert sheet["A2"].value == "葷"
     assert sheet["A3"].value == "南洋綠咖哩雞"
     assert sheet["B3"].value == "骨腿丁（18件）、九層塔（1K）"
-    assert [sheet.cell(3, column).value for column in range(3, 8)] == [170, 87, 31, 299, 500]
-    assert all(name in sheet["H3"].value for name in regular_counts)
+    assert [sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [170, 31, 299, 500]
+    assert "新勢\u3000100 人\u300010 班" in sheet["D3"].value
+    assert all(name in sheet["D3"].value for name in regular_counts)
     assert sheet["A6"].value == "素"
-    assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, 1, 4, 1, 10]
+    assert [sheet.cell(7, column).value for column in (3, 5, 6, 7)] == [5, 4, 1, 10]
 
 
 def test_school_menu_total_is_sorted_by_fixed_category_order(app, authed_client):

@@ -8,6 +8,7 @@ Recipe BOM（每人 AP 數量，可用 g 或 個）→ 中央菜單 → 學校�
 from __future__ import annotations
 
 from copy import copy
+import json
 import secrets
 import re
 from collections import defaultdict
@@ -2867,7 +2868,7 @@ def _daily_kitchen_sheet_data(service_date: date):
                 "combo": 0,
                 "bento": 0,
                 "small_bento": 0,
-                "school_counts": defaultdict(int),
+                "school_counts": {},
             })
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
@@ -2878,7 +2879,12 @@ def _daily_kitchen_sheet_data(service_date: date):
             for assignment in assignments:
                 bucket = _daily_kitchen_bucket(assignment.school.name)
                 dish[bucket] += max(assignment.headcount, 0)
-                dish["school_counts"][assignment.school.name] += max(assignment.headcount, 0)
+                school_count = dish["school_counts"].setdefault(assignment.school_id, {
+                    "id": assignment.school_id,
+                    "name": assignment.school.name,
+                    "headcount": 0,
+                })
+                school_count["headcount"] += max(assignment.headcount, 0)
 
     recipe_ids = [recipe_id for dishes in grouped.values() for recipe_id in dishes]
     notes = {
@@ -2903,19 +2909,39 @@ def _daily_kitchen_sheet_data(service_date: date):
             )
             if note and note.combo_count is not None:
                 dish["combo"] = note.combo_count
-            dish["class_count"] = note.class_count if note else None
+            saved_class_counts = {}
+            if note and note.school_class_counts:
+                try:
+                    decoded_class_counts = json.loads(note.school_class_counts)
+                    if isinstance(decoded_class_counts, dict):
+                        saved_class_counts = decoded_class_counts
+                except (TypeError, ValueError):
+                    saved_class_counts = {}
             if note and note.bento_count is not None:
                 dish["bento"] = note.bento_count
             if note and note.small_bento_count is not None:
                 dish["small_bento"] = note.small_bento_count
-            dish["school_rows"] = [
-                {"name": name, "headcount": headcount}
-                for name, headcount in sorted(
-                    dish["school_counts"].items(), key=lambda row: row[0].casefold()
+            dish["school_rows"] = sorted(
+                dish["school_counts"].values(),
+                key=lambda row: row["name"].casefold(),
+            )
+            for school in dish["school_rows"]:
+                raw_class_count = saved_class_counts.get(str(school["id"]))
+                school["class_count"] = (
+                    raw_class_count
+                    if isinstance(raw_class_count, int) and raw_class_count >= 0
+                    else None
                 )
-            ]
+            # 舊版只有一個總班級數；僅在單一學校時可無歧義地沿用。
+            if (
+                note and note.class_count is not None and not saved_class_counts
+                and len(dish["school_rows"]) == 1
+            ):
+                dish["school_rows"][0]["class_count"] = note.class_count
             dish["school_summary"] = "、".join(
-                f"{row['name']} {row['headcount']} 人" for row in dish["school_rows"]
+                f"{row['name']} {row['headcount']} 人"
+                + (f"／{row['class_count']} 班" if row["class_count"] is not None else "")
+                for row in dish["school_rows"]
             )
             dish["total"] = dish["combo"] + dish["bento"] + dish["small_bento"]
             result[variant].append(dish)
@@ -2954,22 +2980,26 @@ def daily_kitchen_sheet():
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
                         ))
                     counts[key] = value
-                class_count_text = request.form.get(
-                    f"class_count_{variant}_{dish['recipe'].id}", ""
-                ).strip()
-                class_count = _int(class_count_text, default=None) if class_count_text else None
-                if class_count_text and (class_count is None or class_count < 0):
-                    db.session.rollback()
-                    message = "班級數必須留空，或填寫 0 以上的整數。"
-                    if autosave:
-                        return {"message": message}, 400
-                    flash(message, "error")
-                    return redirect(url_for(
-                        "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
-                    ))
-                updates.append((variant, dish, ingredients_text, counts, class_count))
+                school_class_counts = {}
+                for school in dish["school_rows"]:
+                    class_count_text = request.form.get(
+                        f"class_count_{variant}_{dish['recipe'].id}_{school['id']}", ""
+                    ).strip()
+                    class_count = _int(class_count_text, default=None) if class_count_text else None
+                    if class_count_text and (class_count is None or class_count < 0):
+                        db.session.rollback()
+                        message = "各校班級數必須留空，或填寫 0 以上的整數。"
+                        if autosave:
+                            return {"message": message}, 400
+                        flash(message, "error")
+                        return redirect(url_for(
+                            "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
+                        ))
+                    if class_count is not None:
+                        school_class_counts[str(school["id"])] = class_count
+                updates.append((variant, dish, ingredients_text, counts, school_class_counts))
 
-        for variant, dish, ingredients_text, counts, class_count in updates:
+        for variant, dish, ingredients_text, counts, school_class_counts in updates:
             note = KitchenDailyDishNote.query.filter_by(
                 service_date=service_date,
                 variant=variant,
@@ -2984,7 +3014,10 @@ def daily_kitchen_sheet():
                 db.session.add(note)
             note.ingredients_text = ingredients_text
             note.combo_count = counts["combo"]
-            note.class_count = class_count
+            note.school_class_counts = json.dumps(
+                school_class_counts, ensure_ascii=False, sort_keys=True
+            )
+            note.class_count = sum(school_class_counts.values()) if school_class_counts else None
             note.bento_count = counts["bento"]
             note.small_bento_count = counts["small_bento"]
         db.session.commit()
@@ -3004,7 +3037,7 @@ def daily_kitchen_sheet():
 
 def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishes: list[dict]):
     header_row = start_row + 1
-    headers = [label, "", "合菜", "班級數", "便當", "小便當", "總計", "供餐學校／人數"]
+    headers = [label, "", "合菜", "班級數／供餐學校／人數", "便當", "小便當", "總計"]
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(header_row, column, value)
         cell.font = Font(name="Microsoft JhengHei", size=15, bold=True)
@@ -3017,24 +3050,27 @@ def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishe
             dish["recipe"].name,
             dish["ingredients_text"],
             dish["combo"] or None,
-            dish["class_count"],
+            "\n".join(
+                f"{school['name']}　{school['headcount']} 人　"
+                f"{school['class_count'] if school['class_count'] is not None else ''} 班"
+                for school in dish["school_rows"]
+            ),
             dish["bento"] or None,
             dish["small_bento"] or None,
             dish["total"] or None,
-            dish["school_summary"],
         ]
         for column, value in enumerate(values, start=1):
             cell = sheet.cell(row_number, column, value)
             cell.font = Font(name="Microsoft JhengHei", size=14, bold=True)
             cell.alignment = Alignment(
-                horizontal="right" if 3 <= column <= 7 else "left",
+                horizontal="right" if column in {3, 5, 6, 7} else "left",
                 vertical="center",
-                wrap_text=column in {2, 8},
+                wrap_text=column in {2, 4},
             )
             cell.border = Border(bottom=Side(style="thin", color="000000"))
             if 3 <= column <= 7:
                 cell.number_format = "#,##0"
-        sheet.row_dimensions[row_number].height = 31
+        sheet.row_dimensions[row_number].height = max(31, 20 * len(dish["school_rows"]))
     return max(header_row + len(dishes), header_row)
 
 
@@ -3053,9 +3089,9 @@ def daily_kitchen_sheet_export():
     sheet.page_margins.right = 0.2
     sheet.column_dimensions["A"].width = 22
     sheet.column_dimensions["B"].width = 58
-    for column in ("C", "D", "E", "F", "G"):
+    for column in ("C", "E", "F", "G"):
         sheet.column_dimensions[column].width = 13
-    sheet.column_dimensions["H"].width = 48
+    sheet.column_dimensions["D"].width = 48
 
     weekday = "一二三四五六日"[service_date.weekday()]
     current_row = 1
@@ -3074,7 +3110,7 @@ def daily_kitchen_sheet_export():
         current_row = _write_daily_kitchen_export_section(
             sheet, current_row, label, sheets[variant]
         )
-    sheet.print_area = f"A1:H{current_row}"
+    sheet.print_area = f"A1:G{current_row}"
 
     output = BytesIO()
     workbook.save(output)

@@ -2813,9 +2813,17 @@ def _production_sheet_data(service_date: date):
     return result
 
 
-def _daily_kitchen_bucket(school_name: str) -> str:
+def _daily_kitchen_bucket(school_name: str, variant: str = "regular") -> str:
     """把學校分到每日廚房表的三種出餐方式。"""
     normalized = re.sub(r"[\s　]+", "", school_name or "")
+    if variant == "vegetarian":
+        if "中平" in normalized:
+            return "combo"
+        if "小便當" in normalized and (
+            "平鎮高中" in normalized or "平鎮" in normalized or "鎮高" in normalized
+        ):
+            return "small_bento"
+        return "bento"
     if "小便當" in normalized and ("平鎮" in normalized or "鎮高" in normalized):
         return "small_bento"
     if "廣豐" in normalized:
@@ -2877,7 +2885,7 @@ def _daily_kitchen_sheet_data(service_date: date):
                     recipe.name.casefold(),
                 )
             for assignment in assignments:
-                bucket = _daily_kitchen_bucket(assignment.school.name)
+                bucket = _daily_kitchen_bucket(assignment.school.name, variant)
                 dish[bucket] += max(assignment.headcount, 0)
                 school_count = dish["school_counts"].setdefault(assignment.school_id, {
                     "id": assignment.school_id,
@@ -2938,10 +2946,8 @@ def _daily_kitchen_sheet_data(service_date: date):
                 and len(dish["school_rows"]) == 1
             ):
                 dish["school_rows"][0]["class_count"] = note.class_count
-            dish["school_summary"] = "、".join(
-                f"{row['name']} {row['headcount']} 人"
-                + (f"／{row['class_count']} 班" if row["class_count"] is not None else "")
-                for row in dish["school_rows"]
+            dish["class_count_total"] = sum(
+                row["class_count"] or 0 for row in dish["school_rows"]
             )
             dish["total"] = dish["combo"] + dish["bento"] + dish["small_bento"]
             result[variant].append(dish)
@@ -3037,7 +3043,7 @@ def daily_kitchen_sheet():
 
 def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishes: list[dict]):
     header_row = start_row + 1
-    headers = [label, "", "合菜", "班級數／供餐學校／人數", "便當", "小便當", "總計"]
+    headers = [label, "", "合菜", "班級數", "便當", "小便當", "總計"]
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(header_row, column, value)
         cell.font = Font(name="Microsoft JhengHei", size=15, bold=True)
@@ -3050,11 +3056,7 @@ def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishe
             dish["recipe"].name,
             dish["ingredients_text"],
             dish["combo"] or None,
-            "\n".join(
-                f"{school['name']}　{school['headcount']} 人　"
-                f"{school['class_count'] if school['class_count'] is not None else ''} 班"
-                for school in dish["school_rows"]
-            ),
+            dish["class_count_total"] or None,
             dish["bento"] or None,
             dish["small_bento"] or None,
             dish["total"] or None,
@@ -3063,14 +3065,14 @@ def _write_daily_kitchen_export_section(sheet, start_row: int, label: str, dishe
             cell = sheet.cell(row_number, column, value)
             cell.font = Font(name="Microsoft JhengHei", size=14, bold=True)
             cell.alignment = Alignment(
-                horizontal="right" if column in {3, 5, 6, 7} else "left",
+                horizontal="right" if 3 <= column <= 7 else "left",
                 vertical="center",
-                wrap_text=column in {2, 4},
+                wrap_text=column == 2,
             )
             cell.border = Border(bottom=Side(style="thin", color="000000"))
             if 3 <= column <= 7:
                 cell.number_format = "#,##0"
-        sheet.row_dimensions[row_number].height = max(31, 20 * len(dish["school_rows"]))
+        sheet.row_dimensions[row_number].height = 31
     return max(header_row + len(dishes), header_row)
 
 
@@ -3089,9 +3091,8 @@ def daily_kitchen_sheet_export():
     sheet.page_margins.right = 0.2
     sheet.column_dimensions["A"].width = 22
     sheet.column_dimensions["B"].width = 58
-    for column in ("C", "E", "F", "G"):
+    for column in ("C", "D", "E", "F", "G"):
         sheet.column_dimensions[column].width = 13
-    sheet.column_dimensions["D"].width = 48
 
     weekday = "一二三四五六日"[service_date.weekday()]
     current_row = 1

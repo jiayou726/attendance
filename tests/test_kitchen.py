@@ -633,20 +633,23 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
         f'name="class_count_regular_{ids["recipe"]}_{school_id}"' in page
         for school_id in school_ids.values()
     )
+    assert page.count('data-daily-class-total') >= 2
+    assert 'data-daily-class-count' in page
     assert f'name="small_bento_regular_{ids["recipe"]}"' in page
 
     automatic = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
     )
     automatic_sheet = load_workbook(BytesIO(automatic.data), data_only=False)["0813"]
-    assert [automatic_sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [160, 30, 300, 490]
-    assert all(name in automatic_sheet["D3"].value for name in regular_counts)
+    assert [automatic_sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 300, 490]
+    assert automatic_sheet["D2"].value == "班級數"
+    assert [automatic_sheet.cell(7, column).value for column in range(3, 8)] == [None, None, 7, 2, 9]
 
     no_transfer = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-14"
     )
     no_transfer_sheet = load_workbook(BytesIO(no_transfer.data), data_only=False)["0814"]
-    assert [no_transfer_sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [100, None, 300, 400]
+    assert [no_transfer_sheet.cell(3, column).value for column in range(3, 8)] == [100, None, None, 300, 400]
 
     saved = authed_client.post(
         "/admin/order-tool/summary/daily-kitchen-sheet",
@@ -695,11 +698,17 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert sheet["A2"].value == "葷"
     assert sheet["A3"].value == "南洋綠咖哩雞"
     assert sheet["B3"].value == "骨腿丁（18件）、九層塔（1K）"
-    assert [sheet.cell(3, column).value for column in (3, 5, 6, 7)] == [170, 31, 299, 500]
-    assert "新勢\u3000100 人\u300010 班" in sheet["D3"].value
-    assert all(name in sheet["D3"].value for name in regular_counts)
+    assert [sheet.cell(3, column).value for column in range(3, 8)] == [170, 49, 31, 299, 500]
     assert sheet["A6"].value == "素"
-    assert [sheet.cell(7, column).value for column in (3, 5, 6, 7)] == [5, 4, 1, 10]
+    assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, 3, 4, 1, 10]
+
+
+def test_daily_kitchen_vegetarian_school_buckets():
+    bucket = order_tool_module._daily_kitchen_bucket
+    assert bucket("桃園市中壢區中平國小", "vegetarian") == "combo"
+    assert bucket("平鎮高中", "vegetarian") == "bento"
+    assert bucket("廣豐食品股份有限公司", "vegetarian") == "bento"
+    assert bucket("平鎮高中小便當", "vegetarian") == "small_bento"
 
 
 def test_school_menu_total_is_sorted_by_fixed_category_order(app, authed_client):

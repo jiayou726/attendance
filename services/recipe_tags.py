@@ -12,6 +12,7 @@ from dataclasses import dataclass
 SOURCE_MANUAL = "manual"
 SOURCE_SUGGESTED = "suggested"
 AUTO_RULE_TAGS = frozenset({"fish", "fried", "sweet_soup"})
+NON_FISH_SEAFOOD = ("魷魚", "章魚", "墨魚", "花枝", "蝦", "小卷", "海鮮")
 
 @dataclass(frozen=True)
 class TagDef:
@@ -47,7 +48,12 @@ def suggest_tags(recipe) -> set[str]:
             haystack += " " + (row.ingredient.name or "")
     suggested = set()
     for definition in TAG_DEFS:
-        if any(keyword in haystack for keyword in definition.keywords):
+        target = haystack
+        if definition.key == "fish":
+            # 「魷魚／章魚／墨魚」字面含「魚」，但不應拿來充每週魚類次數。
+            for token in NON_FISH_SEAFOOD:
+                target = target.replace(token, " ")
+        if any(keyword in target for keyword in definition.keywords):
             suggested.add(definition.key)
     if "vegetarian" in suggested and suggested & {"chicken", "pork", "beef", "fish"}:
         suggested.discard("vegetarian")

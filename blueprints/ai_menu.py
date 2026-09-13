@@ -214,21 +214,17 @@ def ai_menu_public_excel(draft_id):
 
 @order_bp.route("/ai-menu/practice/login",methods=["GET","POST"])
 def ai_menu_practice_login():
-    configured=current_app.config.get("KITCHEN_PRACTICE_PASSWORD") or os.environ.get("KITCHEN_PRACTICE_PASSWORD","")
     error=""
     if request.method=="POST":
-        if configured and request.form.get("user")==PRACTICE_USER and request.form.get("password")==configured:
-            try:
-                ensure_practice_database()
-            except Exception:
-                current_app.logger.exception("Failed to initialize kitchen practice database")
-                error="練習資料庫初始化失敗，請確認 PRACTICE_DATABASE_URL 或部署儲存空間設定。"
-            else:
-                db.session.remove();session["kitchen_practice"]=True
-                return redirect(url_for("order_tool.index"))
-        elif not error:
-            error="練習帳號或密碼錯誤。" if configured else "尚未設定 KITCHEN_PRACTICE_PASSWORD。"
-    return render_template("kitchen/ai_menu_practice_login.html",error=error,configured=bool(configured),practice_user=PRACTICE_USER)
+        try:
+            ensure_practice_database()
+        except Exception:
+            current_app.logger.exception("Failed to initialize kitchen practice database")
+            error="練習資料庫初始化失敗，請確認 PRACTICE_DATABASE_URL 或部署儲存空間設定。"
+        else:
+            db.session.remove();session["kitchen_practice"]=True
+            return redirect(url_for("order_tool.index"))
+    return render_template("kitchen/ai_menu_practice_login.html",error=error)
 
 @order_bp.get("/ai-menu/practice/logout")
 def ai_menu_practice_logout():

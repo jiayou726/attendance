@@ -21,6 +21,7 @@ from services import meal_profiles as profile_service
 from services import recipe_tags as tag_service
 from services.ai_menu_engine import CATEGORY_ORDER, DEFAULT_STRUCTURE, Rules, build_structure, generate
 from services.nutrition import recipe_nutrition
+from services.practice_database import ensure_practice_database
 
 WEEKDAY = "一二三四五六日"
 PRACTICE_USER = "practice"
@@ -108,6 +109,10 @@ def _group_draft(draft):
     return grouped
 
 
+def _practice_ok():
+    return bool(session.get("kitchen_practice"))
+
+
 @order_bp.get("/ai-menu")
 def ai_menu_index():
     _seed_profiles()
@@ -115,7 +120,7 @@ def ai_menu_index():
     drafts=KitchenMenuDraft.query.order_by(KitchenMenuDraft.id.desc()).limit(20).all()
     return render_template("kitchen/ai_menu.html", profiles=_profiles(), start_default=start,
         end_default=end, categories=CATEGORY_ORDER, defaults=DEFAULT_STRUCTURE,
-        drafts=drafts, practice=False, practice_user=PRACTICE_USER)
+        drafts=drafts, practice=_practice_ok(), practice_user=PRACTICE_USER)
 
 
 @order_bp.post("/ai-menu/generate")
@@ -145,7 +150,7 @@ def ai_menu_draft(draft_id):
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if draft is None: return ("Not found",404)
     return render_template("kitchen/ai_menu_result.html", draft=draft, grouped=_group_draft(draft),
-                           weekday=WEEKDAY, practice=False)
+                           weekday=WEEKDAY, practice=_practice_ok())
 
 
 @order_bp.get("/ai-menu/drafts/<int:draft_id>/public.xlsx")
@@ -188,7 +193,7 @@ def ai_menu_apply(draft_id):
             if item.recipe_id:
                 db.session.add(KitchenMenuPlanItem(plan_id=plan.id,recipe_id=item.recipe_id,sort_order=index))
     draft.status="applied"; draft.applied_at=datetime.utcnow(); db.session.commit()
-    flash("已套用到正式中央菜單；學校人數與採購仍沿用原本流程。","success")
+    flash("已套用到練習中央菜單；正式資料不受影響。" if _practice_ok() else "已套用到正式中央菜單；學校人數與採購仍沿用原本流程。","success")
     return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
 
 
@@ -199,24 +204,29 @@ def ai_menu_delete(draft_id):
     return redirect(url_for("order_tool.ai_menu_index"))
 
 
-def _practice_ok():
-    return bool(session.get("kitchen_practice"))
-
-
 @order_bp.route("/ai-menu/practice/login",methods=["GET","POST"])
 def ai_menu_practice_login():
     configured=current_app.config.get("KITCHEN_PRACTICE_PASSWORD") or os.environ.get("KITCHEN_PRACTICE_PASSWORD","")
     error=""
     if request.method == "POST":
         if configured and request.form.get("user") == PRACTICE_USER and request.form.get("password") == configured:
-            session["kitchen_practice"]=True
-            return redirect(url_for("order_tool.ai_menu_practice"))
-        error="練習帳號或密碼錯誤。" if configured else "尚未設定 KITCHEN_PRACTICE_PASSWORD。"
+            try:
+                ensure_practice_database()
+            except Exception:
+                current_app.logger.exception("Failed to initialize kitchen practice database")
+                error="練習資料庫初始化失敗，請確認 PRACTICE_DATABASE_URL 或部署儲存空間設定。"
+            else:
+                db.session.remove()
+                session["kitchen_practice"]=True
+                return redirect(url_for("order_tool.index"))
+        elif not error:
+            error="練習帳號或密碼錯誤。" if configured else "尚未設定 KITCHEN_PRACTICE_PASSWORD。"
     return render_template("kitchen/ai_menu_practice_login.html",error=error,configured=bool(configured),practice_user=PRACTICE_USER)
 
 
 @order_bp.get("/ai-menu/practice/logout")
 def ai_menu_practice_logout():
+    db.session.remove()
     session.pop("kitchen_practice",None)
     return redirect(url_for("order_tool.ai_menu_practice_login"))
 
@@ -224,18 +234,15 @@ def ai_menu_practice_logout():
 @order_bp.get("/ai-menu/practice")
 def ai_menu_practice():
     if not _practice_ok(): return redirect(url_for("order_tool.ai_menu_practice_login"))
-    start,end=_defaults()
-    return render_template("kitchen/ai_menu.html",profiles=_profiles(read_only=True),start_default=start,end_default=end,
-        categories=CATEGORY_ORDER,defaults=DEFAULT_STRUCTURE,drafts=[],practice=True,practice_user=PRACTICE_USER)
+    return redirect(url_for("order_tool.index"))
 
 
 @order_bp.post("/ai-menu/practice/generate")
 def ai_menu_practice_generate():
     if not _practice_ok(): return redirect(url_for("order_tool.ai_menu_practice_login"))
-    payload,error=_parse_request(read_only=True)
-    if error:
-        flash(error,"error"); return redirect(url_for("order_tool.ai_menu_practice"))
-    return render_template("kitchen/ai_menu_practice_result.html",payload=payload,weekday=WEEKDAY)
+    # Backward-compatible endpoint: practice now uses the exact same draft flow
+    # as the normal planner, with the ORM transparently routed to the sandbox.
+    return ai_menu_generate()
 
 
 @order_bp.get("/recipe-tags")

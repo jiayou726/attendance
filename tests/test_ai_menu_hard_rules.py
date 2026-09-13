@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import services.ai_menu_engine as engine
-from services.ai_menu_engine import CATEGORY_ORDER, Candidate, RuleFeasibilityError, Rules
+from services.ai_menu_engine import CATEGORY_ORDER, Candidate, RuleFeasibilityError, Rules, _vegetarian_compatible
 from services.recipe_tags import suggest_tags
 
 
@@ -52,6 +52,39 @@ def test_keyword_rules_detect_sweet_soups_and_exclude_non_fish_seafood():
     assert "sweet_soup" not in suggest_tags(recipe("銀芽豆包", "點心"))
     assert "fried" not in suggest_tags(recipe("綜合滷味"))
     assert "fried" not in suggest_tags(recipe("敏豆甜不辣"))
+
+
+def test_vegetarian_compatibility_checks_recipe_ingredients_not_only_name():
+    def recipe(name, ingredients):
+        return SimpleNamespace(
+            name=name,
+            ingredients=[SimpleNamespace(ingredient=SimpleNamespace(name=item)) for item in ingredients],
+        )
+
+    assert _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "素肉"]), set())
+    assert _vegetarian_compatible(recipe("素魚排", ["素魚排"]), set())
+    assert not _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "豬絞肉"]), {"vegetarian"})
+    assert not _vegetarian_compatible(recipe("白菜羹", ["白菜", "肉羹"]), set())
+
+
+def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypatch):
+    candidates = [
+        Candidate(1, "白飯", "主食", 300, vegetarian_compatible=True),
+        Candidate(2, "滷雞腿", "主菜", 200, vegetarian_compatible=False),
+        Candidate(3, "素肉燥", "主菜", 180, frozenset({"vegetarian"}), vegetarian_compatible=True),
+    ]
+    monkeypatch.setattr(engine, "load_candidates", lambda: candidates)
+    rules = Rules(recipe_repeat_days=0, main_repeat_days=0, fish_per_week_min=0,
+                  fried_per_week_max=9, sweet_soup_per_week_max=9,
+                  prefer_kcal_in_range=False, exclude_incomplete_nutrition=False)
+
+    regular = engine.generate(date(2026, 9, 14), date(2026, 9, 14),
+                              _structure(主食=1, 主菜=1), rules, meal_variant="regular")
+    vegetarian = engine.generate(date(2026, 9, 14), date(2026, 9, 14),
+                                 _structure(主食=1, 主菜=1), rules, meal_variant="vegetarian")
+
+    assert regular.recipe_at(0, "主菜", 1).name == "滷雞腿"
+    assert vegetarian.recipe_at(0, "主菜", 1).name == "素肉燥"
 
 
 def test_generate_never_exceeds_weekly_sweet_soup_max(monkeypatch):

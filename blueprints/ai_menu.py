@@ -1,6 +1,6 @@
 """AI 菜單：正式草稿、換菜/鎖定/分數、公版 Excel，以及完整練習沙盒。"""
 from __future__ import annotations
-import json,os,re
+import json,os,re,secrets
 from collections import defaultdict
 from datetime import date,datetime,timedelta
 from io import BytesIO
@@ -14,7 +14,7 @@ from extensions import db
 from models import KitchenIngredient,KitchenMenuPlan,KitchenMenuPlanItem,KitchenRecipe,KitchenRecipeIngredient
 from ai_models import KitchenMealProfile,KitchenMenuDraft,KitchenMenuDraftItem
 from services import meal_profiles as profile_service, recipe_tags as tag_service
-from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates
+from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,candidate_allowed,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates,variant_violations
 from services.nutrition import recipe_nutrition
 from services.nutrition_sources import STATUS_ESTIMATED,STATUS_MATCHED,match_ingredient_name
 from services.practice_database import ensure_practice_database
@@ -71,10 +71,22 @@ def _headers(structure):
     return [c if structure[c]==1 else f"{c}{s}" for c in CATEGORY_ORDER for s in range(1,structure.get(c,0)+1)]
 
 def _draft_result(draft):
-    structure=build_structure(json.loads(draft.structure_json or "{}")); rules=Rules.from_dict(json.loads(draft.rules_json or "{}")); dates=service_dates(draft.start_date,draft.end_date,draft.include_weekends); index={d:i for i,d in enumerate(dates)}; assignment={}
+    metadata=json.loads(draft.rules_json or "{}");variant=metadata.get("_meal_variant","legacy")
+    structure=build_structure(json.loads(draft.structure_json or "{}")); rules=Rules.from_dict(metadata); dates=service_dates(draft.start_date,draft.end_date,draft.include_weekends); index={d:i for i,d in enumerate(dates)}; assignment={}
     for x in draft.items:
         if x.service_date in index:assignment[(index[x.service_date],x.category,x.slot_index)]=x.recipe_id
-    p=draft.profile; return rebuild(dates,structure,rules,assignment,int(p.kcal_min) if p and p.kcal_min is not None else None,int(p.kcal_max) if p and p.kcal_max is not None else None)
+    p=draft.profile; return rebuild(dates,structure,rules,assignment,int(p.kcal_min) if p and p.kcal_min is not None else None,int(p.kcal_max) if p and p.kcal_max is not None else None,variant)
+
+def _draft_metadata(draft):
+    try:return json.loads(draft.rules_json or "{}")
+    except (TypeError,ValueError):return {}
+
+def _paired_draft(draft):
+    pair_key=_draft_metadata(draft).get("_pair_key")
+    if not pair_key:return None
+    for row in KitchenMenuDraft.query.filter(KitchenMenuDraft.id!=draft.id).order_by(KitchenMenuDraft.id.desc()).limit(50):
+        if _draft_metadata(row).get("_pair_key")==pair_key:return row
+    return None
 
 def _save_result(draft,result,keep_locked=False):
     existing={(x.service_date,x.category,x.slot_index):x for x in draft.items}; wanted=set()
@@ -105,16 +117,23 @@ def ai_menu_generate():
     pid=_int(request.form.get("profile_id"),default=0);profile=db.session.get(KitchenMealProfile,pid) if pid else None; settings,error=_settings(request.form,profile)
     if error:flash(error,"error");return redirect(url_for("order_tool.ai_menu"))
     start,end,structure,rules,weekends=settings
-    try:result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends)
+    vegetarian_rules=Rules.from_dict(rules.to_dict());vegetarian_rules.fish_per_week_min=0
+    try:
+        regular_result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="regular")
+        vegetarian_result=generate(start,end,structure,vegetarian_rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="vegetarian")
     except RuleFeasibilityError as exc:
         flash(f"無法產生符合硬限制的菜單：{exc}","error");return redirect(url_for("order_tool.ai_menu"))
-    draft=KitchenMenuDraft(name=(request.form.get("name") or "").strip() or f"{profile.name} {start:%Y/%m}",profile_id=profile.id,start_date=start,end_date=end,include_weekends=weekends,meal_type="午餐",structure_json=json.dumps(structure,ensure_ascii=False),rules_json=json.dumps(rules.to_dict(),ensure_ascii=False),status="draft");db.session.add(draft);db.session.flush();_save_result(draft,result);db.session.commit();return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
+    base_name=(request.form.get("name") or "").strip() or f"{profile.name} {start:%Y/%m}";pair_key=secrets.token_hex(12);drafts=[]
+    for variant,label,variant_rules,result in (("regular","葷食",rules,regular_result),("vegetarian","素食",vegetarian_rules,vegetarian_result)):
+        rule_data=variant_rules.to_dict();rule_data.update({"_meal_variant":variant,"_pair_key":pair_key})
+        draft=KitchenMenuDraft(name=f"{base_name}｜{label}",profile_id=profile.id,start_date=start,end_date=end,include_weekends=weekends,meal_type="午餐",structure_json=json.dumps(structure,ensure_ascii=False),rules_json=json.dumps(rule_data,ensure_ascii=False),status="draft");db.session.add(draft);db.session.flush();_save_result(draft,result);drafts.append(draft)
+    db.session.commit();return redirect(url_for("order_tool.ai_menu_draft",draft_id=drafts[0].id))
 
 @order_bp.get("/ai-menu/drafts/<int:draft_id>")
 def ai_menu_draft(draft_id):
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if not draft:abort(404)
-    result=_draft_result(draft);return render_template("kitchen/ai_menu_result.html",draft=draft,result=result,rows=_view_rows(result,draft),headers=_headers(result.structure),rule_lines=describe_rules(result.rules),tag_label=tag_service.tag_label,practice=_practice_ok())
+    result=_draft_result(draft);paired=_paired_draft(draft);return render_template("kitchen/ai_menu_result.html",draft=draft,result=result,rows=_view_rows(result,draft),headers=_headers(result.structure),rule_lines=describe_rules(result.rules),tag_label=tag_service.tag_label,practice=_practice_ok(),meal_variant=result.meal_variant,paired_draft=paired,paired_variant=_draft_metadata(paired).get("_meal_variant") if paired else None)
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/regenerate")
 def ai_menu_regenerate(draft_id):
@@ -126,7 +145,7 @@ def ai_menu_regenerate(draft_id):
         for x in draft.items:
             if x.locked and x.service_date in index:locked[(index[x.service_date],x.category,x.slot_index)]=x.recipe_id
     p=draft.profile
-    try:new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked)
+    try:new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked,meal_variant=old.meal_variant)
     except RuleFeasibilityError as exc:
         flash(f"無法重新排菜：{exc}","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     _save_result(draft,new,keep_locked=True);return _commit("已重新排菜；鎖定菜色保持不變。","order_tool.ai_menu_draft",draft_id=draft.id)
@@ -150,7 +169,10 @@ def ai_menu_swap_apply(draft_id):
     result=_draft_result(draft)
     if d not in result.dates:abort(404)
     key=(result.dates.index(d),cat,slot);trial=dict(result.assignment);trial[key]=rid
-    violations=hard_rule_violations(result.dates,result.rules,trial,result.candidates)
+    candidate=result.candidates.get(rid) if rid else None
+    if rid and not candidate_allowed(candidate,result.meal_variant):
+        flash("不能換成這道菜：不符合目前葷／素菜單分類。","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
+    violations=variant_violations(trial,result.candidates,result.meal_variant)+hard_rule_violations(result.dates,result.rules,trial,result.candidates)
     if violations:
         flash("不能換成這道菜："+"；".join(violations),"error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     item.recipe_id=rid;return _commit("已換菜，熱量與規則分數已重新計算。","order_tool.ai_menu_draft",draft_id=draft.id)
@@ -174,15 +196,16 @@ def ai_menu_apply(draft_id):
     if request.form.get("confirm_apply")!="YES":flash("未套用：請先確認。","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft_id))
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if not draft:abort(404)
-    result=_draft_result(draft);violations=hard_rule_violations(result.dates,result.rules,result.assignment,result.candidates)
+    result=_draft_result(draft);violations=variant_violations(result.assignment,result.candidates,result.meal_variant)+hard_rule_violations(result.dates,result.rules,result.assignment,result.candidates)
     if violations:
         flash("無法套用：目前菜單違反硬限制："+"；".join(violations),"error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     grouped=defaultdict(list)
     for x in draft.items:
         if x.recipe_id:grouped[x.service_date].append(x)
     for d,items in grouped.items():
-        plan=KitchenMenuPlan.query.filter_by(service_date=d,meal_type=draft.meal_type,name="中央菜單").one_or_none()
-        if not plan:plan=KitchenMenuPlan(service_date=d,meal_type=draft.meal_type,name="中央菜單",status="draft");db.session.add(plan);db.session.flush()
+        plan_name="中央素食菜單" if result.meal_variant=="vegetarian" else "中央菜單"
+        plan=KitchenMenuPlan.query.filter_by(service_date=d,meal_type=draft.meal_type,name=plan_name).one_or_none()
+        if not plan:plan=KitchenMenuPlan(service_date=d,meal_type=draft.meal_type,name=plan_name,status="draft");db.session.add(plan);db.session.flush()
         KitchenMenuPlanItem.query.filter_by(plan_id=plan.id).delete(synchronize_session=False)
         for i,x in enumerate(sorted(items,key=lambda z:z.sort_order),1):db.session.add(KitchenMenuPlanItem(plan_id=plan.id,recipe_id=x.recipe_id,sort_order=i))
     draft.status="applied";draft.applied_at=datetime.utcnow()

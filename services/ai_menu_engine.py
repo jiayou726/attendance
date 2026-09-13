@@ -46,7 +46,7 @@ class Rules:
 
 @dataclass(frozen=True)
 class Candidate:
-    id:int; name:str; category:str; kcal:int|None; tags:frozenset[str]=frozenset(); servings:tuple=()
+    id:int; name:str; category:str; kcal:int|None; tags:frozenset[str]=frozenset(); servings:tuple=(); vegetarian_compatible:bool=False
     def serving_dict(self):return dict(self.servings)
 
 @dataclass
@@ -55,7 +55,7 @@ class DayResult:
 
 @dataclass
 class PlanResult:
-    dates:list[date]; structure:dict; rules:Rules; assignment:dict; candidates:dict[int,Candidate]; penalty:float; breakdown:dict[str,float]; days:dict[date,DayResult]; warnings:list[str]; kcal_min:int|None=None; kcal_max:int|None=None
+    dates:list[date]; structure:dict; rules:Rules; assignment:dict; candidates:dict[int,Candidate]; penalty:float; breakdown:dict[str,float]; days:dict[date,DayResult]; warnings:list[str]; kcal_min:int|None=None; kcal_max:int|None=None; meal_variant:str="regular"
     def recipe_at(self,day_index,category,slot_index):
         rid=self.assignment.get((day_index,category,slot_index));return self.candidates.get(rid) if rid else None
 
@@ -80,6 +80,13 @@ def describe_rules(r):
     if r.exclude_incomplete_nutrition:lines.append("排除營養資料不完整的菜色")
     return lines
 
+def _vegetarian_compatible(recipe,tags):
+    names=[recipe.name or ""]+[row.ingredient.name or "" for row in recipe.ingredients or () if row.ingredient]
+    text=" ".join(names)
+    for phrase in ("素肉","素魚","素排","素雞","素火腿"):text=text.replace(phrase," ")
+    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","火腿","培根","貢丸","肉羹")
+    return not any(term in text for term in animal_terms)
+
 def load_candidates():
     rows=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags)).filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.name).all())
     out=[]
@@ -87,11 +94,21 @@ def load_candidates():
         cat=(r.category or "").strip()
         if cat not in CATEGORY_ORDER:continue
         n=recipe_nutrition(r);tags=frozenset(effective_rule_tags(r));sv=recipe_servings(r).rounded()
-        out.append(Candidate(r.id,r.name,cat,n.kcal_int,tags,tuple((k,sv.get(k,0.0)) for k in GROUP_ORDER)))
+        out.append(Candidate(r.id,r.name,cat,n.kcal_int,tags,tuple((k,sv.get(k,0.0)) for k in GROUP_ORDER),_vegetarian_compatible(r,tags)))
     return out
 
 def _candidate_map(candidates):
     return candidates if isinstance(candidates,dict) else {c.id:c for c in candidates}
+
+def candidate_allowed(candidate,meal_variant):
+    if not candidate:return False
+    if meal_variant=="vegetarian":return candidate.vegetarian_compatible
+    if meal_variant=="regular":return not (candidate.category=="主菜" and candidate.vegetarian_compatible)
+    return True
+
+def variant_violations(assignment,candidates,meal_variant):
+    by_id=_candidate_map(candidates);bad=sorted({by_id[rid].name for rid in assignment.values() if rid in by_id and not candidate_allowed(by_id[rid],meal_variant)})
+    return [f"{('素食' if meal_variant=='vegetarian' else '葷食')}菜單含不相容菜色：{'、'.join(bad)}"] if bad else []
 
 def _week_tag_counts(dates,assignment,candidates):
     by_id=_candidate_map(candidates);counts={d.isocalendar()[:2]:Counter() for d in dates}
@@ -190,15 +207,18 @@ def _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys
                 raise RuleFeasibilityError(f"{y}年第{w}週無法滿足每週至少 {rules.fish_per_week_min} 次魚類；請增加可用魚類菜色、調整每日結構或降低魚類下限。")
             _score,key,candidate_id=best;assignment[key]=candidate_id
 
-def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None):
+def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None,meal_variant="regular"):
     if seed is None:
         seed=secrets.randbits(64)
     rng=random.Random(seed);dates=service_dates(start,end,include_weekends);candidates=load_candidates();by_id={c.id:c for c in candidates};pools=defaultdict(list)
     for c in candidates:
         if rules.exclude_incomplete_nutrition and c.kcal is None:continue
+        if not candidate_allowed(c,meal_variant):continue
         pools[c.category].append(c)
     for p in pools.values():rng.shuffle(p)
     assignment=dict(locked or {});locked_keys=set(assignment.keys());last={};usage=Counter()
+    incompatible=variant_violations(assignment,by_id,meal_variant)
+    if incompatible:raise RuleFeasibilityError("；".join(incompatible))
     cap_errors=_hard_cap_violations(dates,rules,assignment,by_id)
     if cap_errors:raise RuleFeasibilityError("；".join(cap_errors))
     for i,d in enumerate(dates):
@@ -220,7 +240,7 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                     raise RuleFeasibilityError(f"{d:%Y-%m-%d} 的「{c}」沒有符合每週硬限制的可用菜色；請補充菜色或放寬炸物／甜湯上限。")
                 assignment[key]=best.id;day_seen.add(best.id);last[best.id]=i;usage[best.id]+=1
     _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max)
-    violations=hard_rule_violations(dates,rules,assignment,by_id)
+    violations=variant_violations(assignment,by_id,meal_variant)+hard_rule_violations(dates,rules,assignment,by_id)
     if violations:raise RuleFeasibilityError("產生完成後驗證失敗："+"；".join(violations))
     current_penalty,_,_,_=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);movable=[key for key in assignment if key not in locked_keys]
     for _pass in range(2):
@@ -235,18 +255,19 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                 if p+0.01<best_penalty:best_id,best_penalty=cand.id,p
             if best_id!=current:assignment[key]=best_id;current_penalty=best_penalty;improved=True
         if not improved:break
-    violations=hard_rule_violations(dates,rules,assignment,by_id)
+    violations=variant_violations(assignment,by_id,meal_variant)+hard_rule_violations(dates,rules,assignment,by_id)
     if violations:raise RuleFeasibilityError("；".join(violations))
     penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max)
-    return PlanResult(dates,structure,rules,assignment,by_id,penalty,breakdown,days_report,warnings,kcal_min,kcal_max)
+    return PlanResult(dates,structure,rules,assignment,by_id,penalty,breakdown,days_report,warnings,kcal_min,kcal_max,meal_variant)
 
-def rebuild(dates,structure,rules,assignment,kcal_min=None,kcal_max=None):
-    candidates=load_candidates();penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);return PlanResult(dates,structure,rules,assignment,{c.id:c for c in candidates},penalty,breakdown,days_report,warnings,kcal_min,kcal_max)
+def rebuild(dates,structure,rules,assignment,kcal_min=None,kcal_max=None,meal_variant="regular"):
+    candidates=load_candidates();penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);return PlanResult(dates,structure,rules,assignment,{c.id:c for c in candidates},penalty,breakdown,days_report,warnings,kcal_min,kcal_max,meal_variant)
 
 def replacement_options(result,target_key,limit=None):
     i,cat,slot=target_key;same={rid for key,rid in result.assignment.items() if key[0]==i and key!=target_key and rid};current=result.assignment.get(target_key);scored=[]
     for cand in result.candidates.values():
         if cand.category!=cat or cand.id in same or (result.rules.exclude_incomplete_nutrition and cand.kcal is None):continue
+        if not candidate_allowed(cand,result.meal_variant):continue
         trial=dict(result.assignment);trial[target_key]=cand.id
         if hard_rule_violations(result.dates,result.rules,trial,result.candidates):continue
         p,_,_,_=evaluate(result.dates,result.structure,result.rules,trial,list(result.candidates.values()),result.kcal_min,result.kcal_max);scored.append((cand,p,cand.id==current))

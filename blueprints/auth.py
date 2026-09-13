@@ -39,8 +39,8 @@ def _role_configured(role: str, passwords: dict[str, str]) -> bool:
 
 def _password_matches(role: str, password: str, passwords: dict[str, str]) -> bool:
     configured_password = passwords.get(role, "")
-    if configured_password:
-        return compare_digest(password, configured_password)
+    if configured_password and compare_digest(password, configured_password):
+        return True
 
     legacy_hash = LEGACY_PASSWORD_HASHES.get(role, "")
     if not legacy_hash:

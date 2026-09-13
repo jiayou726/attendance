@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import random
 
 from sqlalchemy.orm import joinedload
 
 from models import KitchenRecipe, KitchenRecipeIngredient
-from services.nutrition import recipe_nutrition
+from services.nutrition_sources import STATUS_MATCHED, match_ingredient_name
 
 CATEGORY_ORDER = ("主食", "主菜", "副菜", "青菜", "湯品", "點心")
 DEFAULT_STRUCTURE = {"主食": 1, "主菜": 1, "副菜": 2, "青菜": 1, "湯品": 1, "點心": 0}
@@ -56,6 +57,34 @@ def build_structure(values):
     return result
 
 
+def recipe_kcal(recipe):
+    """依配方即時計算每人熱量；主檔未填時只讀官方 mapping。"""
+    rows=list(recipe.ingredients or ())
+    if not rows:
+        return None
+    total=Decimal("0")
+    for row in rows:
+        ing=row.ingredient
+        if ing is None or row.grams_per_person is None:
+            return None
+        amount=Decimal(str(row.grams_per_person))
+        if (ing.base_unit or "g") == "g":
+            grams=amount
+        else:
+            per_unit=getattr(ing,"edible_grams_per_unit",None)
+            if per_unit is None or Decimal(str(per_unit)) <= 0:
+                return None
+            grams=amount*Decimal(str(per_unit))
+        kcal=getattr(ing,"kcal_per_100g",None)
+        if kcal is None:
+            matched=match_ingredient_name(ing.name)
+            if matched.status != STATUS_MATCHED or matched.food is None:
+                return None
+            kcal=matched.food.kcal_per_100g
+        total += grams/Decimal("100")*Decimal(str(kcal))
+    return int(total.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+
+
 def load_candidates():
     rows=(KitchenRecipe.query
         .options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient), joinedload(KitchenRecipe.tags))
@@ -64,9 +93,8 @@ def load_candidates():
     for recipe in rows:
         category=(recipe.category or "").strip()
         if category not in CATEGORY_ORDER: continue
-        nutrition=recipe_nutrition(recipe)
         tags={tag.tag for tag in (recipe.tags or []) if getattr(tag,"source","manual") == "manual"}
-        candidates.append(Candidate(recipe.id, recipe.name, category, nutrition.kcal_int, tags))
+        candidates.append(Candidate(recipe.id, recipe.name, category, recipe_kcal(recipe), tags))
     return candidates
 
 

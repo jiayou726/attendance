@@ -116,7 +116,10 @@ def _candidate_map(candidates):
 def candidate_allowed(candidate,meal_variant):
     if not candidate:return False
     if meal_variant=="vegetarian":return candidate.vegetarian_compatible
-    if meal_variant=="regular":return not (candidate.category=="主菜" and candidate.vegetarian_compatible)
+    # A safe meat-free dish belongs to the shared pool and may be selected for
+    # the regular menu first.  Keep only explicitly vegetarian main dishes out
+    # of that menu, so items such as 蒸蛋 can be shared while 素魚排 cannot.
+    if meal_variant=="regular":return not (candidate.category=="主菜" and "素" in candidate.name)
     return True
 
 def variant_violations(assignment,candidates,meal_variant):

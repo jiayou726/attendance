@@ -95,6 +95,16 @@ def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypa
     assert vegetarian.recipe_at(0, "主菜", 1).name == "素肉燥"
 
 
+def test_regular_menu_accepts_shared_main_but_rejects_explicit_vegetarian_main():
+    shared = Candidate(1, "番茄炒蛋", "主菜", 180, vegetarian_compatible=True)
+    vegetarian_only = Candidate(2, "素魚排", "主菜", 180, vegetarian_compatible=True)
+
+    assert engine.candidate_allowed(shared, "regular")
+    assert engine.candidate_allowed(shared, "vegetarian")
+    assert not engine.candidate_allowed(vegetarian_only, "regular")
+    assert engine.candidate_allowed(vegetarian_only, "vegetarian")
+
+
 def test_generate_never_exceeds_weekly_sweet_soup_max(monkeypatch):
     candidates = [
         Candidate(1, "紅豆薏仁湯", "湯品", 100, frozenset({"sweet_soup"})),

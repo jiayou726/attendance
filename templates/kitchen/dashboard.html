@@ -2,36 +2,18 @@
 {% block title %}廚房首頁{% endblock %}
 {% block body_class %}dashboard-page{% endblock %}
 {% block content %}
-<section class="home-welcome">
-  <div><span class="eyebrow">今天要排菜嗎？</span><h1>開啟菜單</h1></div>
-  <a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開啟總表</a>
-</section>
-
+<section class="home-welcome"><div><span class="eyebrow">今天要排菜嗎？</span><h1>開啟菜單</h1></div><a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開啟總表</a></section>
 {% if pending_component_count %}<div class="notice warning-home"><b>{{ pending_component_count }} 筆材料克數待確認</b>　材料名稱已匯入；確認克數後才會加入總量，避免叫錯貨。<a href="{{ url_for('order_tool.recipes') }}">去查看</a></div>{% endif %}
-
-<section class="home-section" aria-labelledby="home-functions-title">
-  <div class="home-section-heading">
-    <span class="eyebrow">功能選單</span>
-    <h2 id="home-functions-title">你要處理哪一項？</h2>
-  </div>
-  <div class="home-actions">
-    <a class="home-action summary" href="{{ url_for('order_tool.summary') }}"><span class="home-icon">表</span><span><b>總表</b><small>安排每週菜單，再分配各校菜色與供餐人數。</small></span><i>›</i></a>
-    <a class="home-action recipe" href="{{ url_for('order_tool.recipes') }}"><span class="home-icon">菜</span><span><b>菜色配方</b><small>管理 {{ recipe_count }} 道菜的食材與每人用量。</small></span><i>›</i></a>
-    <a class="home-action ingredient" href="{{ url_for('order_tool.ingredients') }}"><span class="home-icon">材</span><span><b>食材</b><small>整理 {{ ingredient_count }} 項食材、單位與採購資料。</small></span><i>›</i></a>
-    <a class="home-action school" href="{{ url_for('order_tool.schools') }}"><span class="home-icon">校</span><span><b>學校</b><small>管理 {{ school_count }} 間學校與平常供餐人數。</small></span><i>›</i></a>
-    <a class="home-action supplier" href="{{ url_for('order_tool.suppliers') }}"><span class="home-icon">廠</span><span><b>廠商</b><small>查看 {{ supplier_count }} 家廠商的電話與供應品項。</small></span><i>›</i></a>
-    <a class="home-action procurement" href="{{ url_for('order_tool.procurement') }}"><span class="home-icon">購</span><span><b>採購叫貨</b><small>依日期彙整材料需求，填寫廠商、數量與送達時間。</small></span><i>›</i></a>
-    <a class="home-action production" href="{{ url_for('order_tool.production_sheet', date=production_nav_date.isoformat()) }}"><span class="home-icon">量</span><span><b>菜色用量表</b><small>{% if production_nav_available %}查看 {{ production_nav_date.strftime('%Y/%m/%d') }} 每道菜的食材理論用量與採購量。{% else %}依日期查看每道菜的食材用量；需先產生當日採購明細。{% endif %}</small></span><i>›</i></a>
-    <a class="home-action daily-kitchen" href="{{ url_for('order_tool.daily_kitchen_sheet', date=production_nav_date.isoformat()) }}"><span class="home-icon">廚</span><span><b>每日廚房表格</b><small>先在網頁補上食材括號備註，再匯出合菜、便當與小便當表。</small></span><i>›</i></a>
-  </div>
-</section>
-
-<div class="grid home-secondary">
-  <section class="card span-12">
-    <div class="top"><div><h2>最近採購單</h2><div class="muted">已確認資料會保存，不會被新價格或新配方改掉。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>
-    {% if recent_orders %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>狀態</th><th>叫貨進度</th><th>食材項目</th><th class="right">總金額</th><th></th></tr></thead><tbody>
-      {% for o in recent_orders %}{% set ordered_count = o.items|selectattr('ordered')|list|length %}<tr><td>{{ o.service_date }}</td><td><span class="pill {{ 'ok' if o.status == 'confirmed' else ('off' if o.status == 'cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td>{{ ordered_count }} / {{ o.items|length }}</td><td>{{ o.items|length }} 項</td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.purchase_detail', order_id=o.id) }}">開啟</a><form method="post" action="{{ url_for('order_tool.purchase_delete', order_id=o.id) }}" onsubmit="return confirm('確定要永久刪除 {{ o.service_date }} 的採購單嗎？採購品項也會一併刪除，此動作無法復原。')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirm_delete" value="1"><input type="hidden" name="return_to" value="dashboard"><button class="btn danger" type="submit" aria-label="刪除 {{ o.service_date }} 採購單">刪除</button></form></div></td></tr>{% endfor %}
-    </tbody></table></div>{% else %}<div class="empty">尚未建立採購單。</div>{% endif %}
-  </section>
-</div>
+<section class="home-section" aria-labelledby="home-functions-title"><div class="home-section-heading"><span class="eyebrow">功能選單</span><h2 id="home-functions-title">你要處理哪一項？</h2></div><div class="home-actions">
+<a class="home-action summary" href="{{ url_for('order_tool.summary') }}"><span class="home-icon">表</span><span><b>總表</b><small>安排每週菜單，再分配各校菜色與供餐人數。</small></span><i>›</i></a>
+<a class="home-action recipe" href="{{ url_for('order_tool.recipes') }}"><span class="home-icon">菜</span><span><b>菜色配方</b><small>管理 {{ recipe_count }} 道菜的食材與每人用量。</small></span><i>›</i></a>
+<a class="home-action ingredient" href="{{ url_for('order_tool.ingredients') }}"><span class="home-icon">材</span><span><b>食材</b><small>整理 {{ ingredient_count }} 項食材、單位、採購與熱量資料。</small></span><i>›</i></a>
+<a class="home-action school" href="{{ url_for('order_tool.schools') }}"><span class="home-icon">校</span><span><b>學校</b><small>管理 {{ school_count }} 間學校與平常供餐人數。</small></span><i>›</i></a>
+<a class="home-action supplier" href="{{ url_for('order_tool.suppliers') }}"><span class="home-icon">廠</span><span><b>廠商</b><small>查看 {{ supplier_count }} 家廠商的電話與供應品項。</small></span><i>›</i></a>
+<a class="home-action procurement" href="{{ url_for('order_tool.procurement') }}"><span class="home-icon">購</span><span><b>採購叫貨</b><small>依日期彙整材料需求，填寫廠商、數量與送達時間。</small></span><i>›</i></a>
+<a class="home-action production" href="{{ url_for('order_tool.production_sheet',date=production_nav_date.isoformat()) }}"><span class="home-icon">量</span><span><b>菜色用量表</b><small>{% if production_nav_available %}查看 {{ production_nav_date.strftime('%Y/%m/%d') }} 每道菜的食材理論用量與採購量。{% else %}依日期查看每道菜的食材用量；需先產生當日採購明細。{% endif %}</small></span><i>›</i></a>
+<a class="home-action daily-kitchen" href="{{ url_for('order_tool.daily_kitchen_sheet',date=production_nav_date.isoformat()) }}"><span class="home-icon">廚</span><span><b>每日廚房表格</b><small>先在網頁補上食材括號備註，再匯出合菜、便當與小便當表。</small></span><i>›</i></a>
+<a class="home-action ai-menu" href="{{ url_for('order_tool.ai_menu') }}"><span class="home-icon">排</span><span><b>AI 菜單</b><small>依供餐對象、營養、重複與魚類／炸物規則自動排菜，可換菜與鎖定。</small></span><i>›</i></a>
+</div></section>
+<div class="grid home-secondary"><section class="card span-12"><div class="top"><div><h2>最近採購單</h2><div class="muted">已確認資料會保存，不會被新價格或新配方改掉。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>{% if recent_orders %}<div class="table-scroll"><table><thead><tr><th>日期</th><th>狀態</th><th>叫貨進度</th><th>食材項目</th><th class="right">總金額</th><th></th></tr></thead><tbody>{% for o in recent_orders %}{% set ordered_count=o.items|selectattr('ordered')|list|length %}<tr><td>{{ o.service_date }}</td><td><span class="pill {{ 'ok' if o.status=='confirmed' else ('off' if o.status=='cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></td><td>{{ ordered_count }} / {{ o.items|length }}</td><td>{{ o.items|length }} 項</td><td class="right">${{ '%.2f'|format(order_total(o)|float) }}</td><td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.purchase_detail',order_id=o.id) }}">開啟</a><form method="post" action="{{ url_for('order_tool.purchase_delete',order_id=o.id) }}" onsubmit="return confirm('確定永久刪除此採購單嗎？')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirm_delete" value="1"><input type="hidden" name="return_to" value="dashboard"><button class="btn danger">刪除</button></form></div></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">尚未建立採購單。</div>{% endif %}</section></div>
 {% endblock %}

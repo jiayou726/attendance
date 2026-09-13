@@ -1,142 +1,157 @@
-"""不依賴語言模型的團膳自動排菜規則引擎。"""
+"""團膳 AI 菜單規則引擎：排菜、評分、換菜與結果重算。"""
 from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
 import random
-
 from sqlalchemy.orm import joinedload
-
 from models import KitchenRecipe, KitchenRecipeIngredient
-from services.nutrition_sources import match_ingredient_name
+from services.nutrition import recipe_nutrition
 
-CATEGORY_ORDER = ("主食", "主菜", "副菜", "青菜", "湯品", "點心")
-DEFAULT_STRUCTURE = {"主食": 1, "主菜": 1, "副菜": 2, "青菜": 1, "湯品": 1, "點心": 0}
-STRUCTURE_LIMITS = {"主食": 2, "主菜": 2, "副菜": 4, "青菜": 2, "湯品": 2, "點心": 2}
+CATEGORY_ORDER=("主食","主菜","副菜","青菜","湯品","點心")
+DEFAULT_STRUCTURE={"主食":1,"主菜":1,"副菜":2,"青菜":1,"湯品":1,"點心":0}
+STRUCTURE_LIMITS={"主食":2,"主菜":2,"副菜":4,"青菜":2,"湯品":2,"點心":2}
 
 @dataclass
 class Rules:
-    repeat_days: int = 5
-    fish_per_week_min: int = 1
-    fried_per_week_max: int = 1
-    sweet_soup_per_week_max: int = 1
-    exclude_incomplete_nutrition: bool = True
+    recipe_repeat_days:int=5
+    main_repeat_days:int=5
+    fish_per_week_min:int=1
+    fried_per_week_max:int=1
+    sweet_soup_per_week_max:int=1
+    prefer_kcal_in_range:bool=True
+    exclude_incomplete_nutrition:bool=True
+    @classmethod
+    def from_dict(cls,data):
+        data=data or {}; r=cls()
+        legacy=data.get("repeat_days")
+        if legacy is not None:
+            r.recipe_repeat_days=r.main_repeat_days=max(0,int(legacy))
+        for k in ("recipe_repeat_days","main_repeat_days","fish_per_week_min","fried_per_week_max","sweet_soup_per_week_max"):
+            if data.get(k) is not None:
+                try:setattr(r,k,max(0,int(data[k])))
+                except (TypeError,ValueError):pass
+        for k in ("prefer_kcal_in_range","exclude_incomplete_nutrition"):
+            if k in data:setattr(r,k,bool(data[k]))
+        return r
+    def to_dict(self): return dict(self.__dict__)
 
-@dataclass
+@dataclass(frozen=True)
 class Candidate:
-    id: int
-    name: str
-    category: str
-    kcal: int | None
-    tags: set[str] = field(default_factory=set)
+    id:int; name:str; category:str; kcal:int|None; tags:frozenset[str]=frozenset()
 
 @dataclass
 class DayResult:
-    service_date: date
-    items: list[Candidate]
-    kcal: int | None
-    warnings: list[str]
+    service_date:date; kcal:int|None; warnings:list[str]=field(default_factory=list); ok_messages:list[str]=field(default_factory=list)
 
+@dataclass
+class PlanResult:
+    dates:list[date]; structure:dict; rules:Rules; assignment:dict; candidates:dict[int,Candidate]; penalty:float; breakdown:dict[str,float]; days:dict[date,DayResult]; warnings:list[str]; kcal_min:int|None=None; kcal_max:int|None=None
+    def recipe_at(self,day_index,category,slot_index):
+        rid=self.assignment.get((day_index,category,slot_index)); return self.candidates.get(rid) if rid else None
 
-def service_dates(start: date, end: date, include_weekends=False):
-    rows=[]; current=start
-    while current <= end:
-        if include_weekends or current.weekday() < 5:
-            rows.append(current)
-        current += timedelta(days=1)
-    return rows
-
+def service_dates(start,end,include_weekends=False):
+    out=[]; d=start
+    while d<=end:
+        if include_weekends or d.weekday()<5: out.append(d)
+        d+=timedelta(days=1)
+    return out
 
 def build_structure(values):
-    result={}
-    for category in CATEGORY_ORDER:
-        try: count=int(values.get(category, DEFAULT_STRUCTURE[category]))
-        except (TypeError, ValueError): count=DEFAULT_STRUCTURE[category]
-        result[category]=max(0,min(STRUCTURE_LIMITS[category],count))
-    return result
+    values=values or {}; out={}
+    for c in CATEGORY_ORDER:
+        try:n=int(values.get(c,DEFAULT_STRUCTURE[c]))
+        except (TypeError,ValueError):n=DEFAULT_STRUCTURE[c]
+        out[c]=max(0,min(STRUCTURE_LIMITS[c],n))
+    return out
 
-
-def recipe_kcal(recipe):
-    """依配方即時計算每人熱量；主檔未填時讀 TFDA／fallback mapping。"""
-    rows=list(recipe.ingredients or ())
-    if not rows:
-        return None
-    total=Decimal("0")
-    for row in rows:
-        ing=row.ingredient
-        if ing is None or row.grams_per_person is None:
-            return None
-        amount=Decimal(str(row.grams_per_person))
-        if (ing.base_unit or "g") == "g":
-            grams=amount
-        else:
-            per_unit=getattr(ing,"edible_grams_per_unit",None)
-            if per_unit is None or Decimal(str(per_unit)) <= 0:
-                return None
-            grams=amount*Decimal(str(per_unit))
-        kcal=getattr(ing,"kcal_per_100g",None)
-        if kcal is None:
-            kcal=match_ingredient_name(ing.name).kcal_per_100g
-        if kcal is None:
-            return None
-        total += grams/Decimal("100")*Decimal(str(kcal))
-    return int(total.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-
+def describe_rules(r):
+    lines=[f"同一道菜 {r.recipe_repeat_days} 天內不重複",f"主菜 {r.main_repeat_days} 天內不重複",f"每週至少 {r.fish_per_week_min} 次魚類",f"每週最多 {r.fried_per_week_max} 次炸物",f"每週最多 {r.sweet_soup_per_week_max} 次甜湯"]
+    if r.prefer_kcal_in_range:lines.append("每日總熱量盡量落在供餐對象基準區間")
+    if r.exclude_incomplete_nutrition:lines.append("排除營養資料不完整的菜色")
+    return lines
 
 def load_candidates():
-    rows=(KitchenRecipe.query
-        .options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient), joinedload(KitchenRecipe.tags))
-        .filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.name).all())
-    candidates=[]
-    for recipe in rows:
-        category=(recipe.category or "").strip()
-        if category not in CATEGORY_ORDER: continue
-        tags={tag.tag for tag in (recipe.tags or []) if getattr(tag,"source","manual") == "manual"}
-        candidates.append(Candidate(recipe.id, recipe.name, category, recipe_kcal(recipe), tags))
-    return candidates
+    rows=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags)).filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.name).all())
+    out=[]
+    for r in rows:
+        cat=(r.category or "").strip()
+        if cat not in CATEGORY_ORDER:continue
+        n=recipe_nutrition(r); tags=frozenset(t.tag for t in (r.tags or []) if getattr(t,"source","manual")=="manual")
+        out.append(Candidate(r.id,r.name,cat,n.kcal_int,tags))
+    return out
 
+def evaluate(dates,structure,rules,assignment,candidates,kcal_min=None,kcal_max=None):
+    by_id={c.id:c for c in candidates}; breakdown=defaultdict(float); day_results={}; warnings=[]; uses=defaultdict(list); main_uses=defaultdict(list); week_tags=defaultdict(Counter)
+    for i,d in enumerate(dates):
+        total=0; complete=True; wrn=[]; ok=[]; seen=set()
+        for c in CATEGORY_ORDER:
+            for s in range(1,structure.get(c,0)+1):
+                rid=assignment.get((i,c,s)); cand=by_id.get(rid) if rid else None
+                if not cand: complete=False; breakdown["empty"]+=20000; continue
+                if rid in seen: breakdown["duplicate"]+=20000
+                seen.add(rid); uses[rid].append(i)
+                if c=="主菜":main_uses[rid].append(i)
+                if cand.kcal is None: complete=False; wrn.append(f"⚠ {cand.name} 營養資料不完整")
+                else: total+=cand.kcal
+                for tag in cand.tags:week_tags[d.isocalendar()[:2]][tag]+=1
+        kcal=total if complete else None
+        if kcal is not None and kcal_min is not None and kcal_max is not None:
+            if kcal<kcal_min:
+                delta=kcal_min-kcal; breakdown["kcal"]+=min(10000,delta*25); wrn.append(f"⚠ 熱量 {kcal} kcal 低於基準 {kcal_min}～{kcal_max} kcal")
+            elif kcal>kcal_max:
+                delta=kcal-kcal_max; breakdown["kcal"]+=min(10000,delta*25); wrn.append(f"⚠ 熱量 {kcal} kcal 高於基準 {kcal_min}～{kcal_max} kcal")
+            else: ok.append(f"✅ 熱量 {kcal} kcal 符合基準")
+        elif kcal is None:wrn.append("⚠ 無法計算當日總熱量")
+        else:ok.append(f"總熱量 {kcal} kcal")
+        day_results[d]=DayResult(d,kcal,wrn,ok)
+    for rid,days_used in uses.items():
+        for a,b in zip(days_used,days_used[1:]):
+            if rules.recipe_repeat_days and b-a<rules.recipe_repeat_days:breakdown["recipe_repeat"]+=6000
+        breakdown["variety"]+=max(0,len(days_used)-1)*60
+    for rid,days_used in main_uses.items():
+        for a,b in zip(days_used,days_used[1:]):
+            if rules.main_repeat_days and b-a<rules.main_repeat_days:breakdown["main_repeat"]+=4000
+    for week,cnt in week_tags.items():
+        if cnt["fish"]<rules.fish_per_week_min:breakdown["fish"]+=(rules.fish_per_week_min-cnt["fish"])*2500; warnings.append(f"⚠ {week[0]}年第{week[1]}週：魚類 {cnt['fish']} 次，未達 {rules.fish_per_week_min} 次")
+        if cnt["fried"]>rules.fried_per_week_max:breakdown["fried"]+=(cnt["fried"]-rules.fried_per_week_max)*1500
+        if cnt["sweet_soup"]>rules.sweet_soup_per_week_max:breakdown["sweet_soup"]+=(cnt["sweet_soup"]-rules.sweet_soup_per_week_max)*800
+    return sum(breakdown.values()),dict(breakdown),day_results,warnings
 
-def generate(start, end, structure, rules, kcal_min=None, kcal_max=None, include_weekends=False, seed=20260913):
-    rng=random.Random(seed)
-    candidates=load_candidates()
-    pools=defaultdict(list)
+def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=20260913,locked=None):
+    rng=random.Random(seed); dates=service_dates(start,end,include_weekends); candidates=load_candidates(); by_id={c.id:c for c in candidates}; pools=defaultdict(list)
     for c in candidates:
-        if rules.exclude_incomplete_nutrition and c.kcal is None: continue
+        if rules.exclude_incomplete_nutrition and c.kcal is None:continue
         pools[c.category].append(c)
-    for bucket in pools.values(): rng.shuffle(bucket)
-    dates=service_dates(start,end,include_weekends)
-    last_used={}; usage=Counter(); week_counts=defaultdict(Counter); results=[]
-    for day_index,d in enumerate(dates):
-        chosen=[]; warnings=[]; week=d.isocalendar()[:2]
-        for category in CATEGORY_ORDER:
-            for _slot in range(structure.get(category,0)):
-                pool=pools.get(category,[])
-                if not pool:
-                    warnings.append(f"{category} 沒有可用菜色"); continue
-                same={x.id for x in chosen}
-                scored=[]
-                for c in pool:
-                    if c.id in same: continue
-                    gap=day_index-last_used.get(c.id,-999)
-                    penalty=usage[c.id]*5
-                    if gap < rules.repeat_days: penalty += (rules.repeat_days-gap)*100
-                    if "fried" in c.tags and week_counts[week]["fried"] >= rules.fried_per_week_max: penalty += 50
-                    if "sweet_soup" in c.tags and week_counts[week]["sweet_soup"] >= rules.sweet_soup_per_week_max: penalty += 50
-                    scored.append((penalty,rng.random(),c))
-                if not scored: continue
-                c=min(scored,key=lambda x:(x[0],x[1]))[2]
-                chosen.append(c); usage[c.id]+=1; last_used[c.id]=day_index
-                for tag in c.tags: week_counts[week][tag]+=1
-        kcal=None if any(c.kcal is None for c in chosen) else sum(c.kcal or 0 for c in chosen)
-        if kcal is None: warnings.append("營養資料不完整，無法計算當日總熱量")
-        elif kcal_min is not None and kcal < kcal_min: warnings.append(f"熱量 {kcal} kcal 低於基準 {kcal_min}～{kcal_max} kcal")
-        elif kcal_max is not None and kcal > kcal_max: warnings.append(f"熱量 {kcal} kcal 高於基準 {kcal_min}～{kcal_max} kcal")
-        results.append(DayResult(d,chosen,kcal,warnings))
-    for week,cnt in week_counts.items():
-        if cnt["fish"] < rules.fish_per_week_min:
-            for row in results:
-                if row.service_date.isocalendar()[:2] == week:
-                    row.warnings.append(f"本週魚類 {cnt['fish']} 次，未達 {rules.fish_per_week_min} 次")
-                    break
-    return results
+    for p in pools.values():rng.shuffle(p)
+    assignment=dict(locked or {}); last={}; usage=Counter()
+    for i,d in enumerate(dates):
+        day_seen={assignment[k] for k in assignment if k[0]==i and assignment[k]}
+        for c in CATEGORY_ORDER:
+            for s in range(1,structure.get(c,0)+1):
+                key=(i,c,s)
+                if key in assignment and assignment[key]:continue
+                best=None; bestscore=None
+                for cand in pools.get(c,[]):
+                    if cand.id in day_seen:continue
+                    gap=i-last.get(cand.id,-999); score=usage[cand.id]*60+rng.random()
+                    if gap<rules.recipe_repeat_days:score+=6000
+                    if c=="主菜" and gap<rules.main_repeat_days:score+=4000
+                    if bestscore is None or score<bestscore:best,bestscore=cand,score
+                assignment[key]=best.id if best else None
+                if best:day_seen.add(best.id);last[best.id]=i;usage[best.id]+=1
+    penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max)
+    return PlanResult(dates,structure,rules,assignment,by_id,penalty,breakdown,days_report,warnings,kcal_min,kcal_max)
+
+def rebuild(dates,structure,rules,assignment,kcal_min=None,kcal_max=None):
+    candidates=load_candidates(); penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max)
+    return PlanResult(dates,structure,rules,assignment,{c.id:c for c in candidates},penalty,breakdown,days_report,warnings,kcal_min,kcal_max)
+
+def replacement_options(result,target_key,limit=40):
+    i,cat,slot=target_key; same={rid for key,rid in result.assignment.items() if key[0]==i and key!=target_key and rid}; current=result.assignment.get(target_key); scored=[]
+    for cand in result.candidates.values():
+        if cand.category!=cat or cand.id in same or (result.rules.exclude_incomplete_nutrition and cand.kcal is None):continue
+        trial=dict(result.assignment);trial[target_key]=cand.id
+        p,_,_,_=evaluate(result.dates,result.structure,result.rules,trial,list(result.candidates.values()),result.kcal_min,result.kcal_max)
+        scored.append((cand,p,cand.id==current))
+    scored.sort(key=lambda x:(x[1],x[0].name));return scored[:limit]

@@ -1,26 +1,38 @@
 {% extends 'kitchen/base.html' %}
-{% block title %}{{ '練習排菜' if practice else 'AI 菜單' }}{% endblock %}
-{% block head %}<style>.ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.ai-box{padding:14px;border:1px solid #d7dedb;border-radius:12px;background:#fff}.ai-banner{padding:14px;border-radius:12px;background:#eef8f3;margin-bottom:16px}.ai-warn{background:#fff4df}.ai-form label{display:block;font-weight:700;margin-bottom:5px}.ai-form input,.ai-form select{width:100%}.ai-actions{display:flex;gap:8px;flex-wrap:wrap}</style>{% endblock %}
+{% block title %}{{ 'AI 菜單｜練習用' if practice else 'AI 菜單' }}{% endblock %}
 {% block content %}
-<div class="top"><div><span class="eyebrow">{{ 'READ ONLY PRACTICE' if practice else 'RULE-BASED MENU PLANNER' }}</span><h1>{{ '練習專用排菜' if practice else 'AI 菜單／自動排菜' }}</h1></div><div class="ai-actions">{% if practice %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.ai_recipe_tags') }}">菜色標記</a><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_login') }}">練習入口</a>{% endif %}</div></div>
-<div class="ai-banner {{ 'ai-warn' if practice else '' }}">{% if practice %}<b>練習模式不會建立草稿、不會寫入正式菜單。</b> 你可以測試日期、規則與熱量結果。{% else %}先產生草稿，確認後才可按「套用正式菜單」。排菜本身不會直接改正式菜單。{% endif %}</div>
-<form class="card ai-form" method="post" action="{{ url_for('order_tool.ai_menu_practice_generate') if practice else url_for('order_tool.ai_menu_generate') }}">
-<input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-{% if not practice %}<div class="field"><label>草稿名稱</label><input name="name" value="AI 自動排菜"></div><br>{% endif %}
-<div class="ai-grid">
-  <div><label>供餐對象</label><select name="profile_code" required><option value="">請選擇</option>{% for p in profiles %}<option value="{{ p.code }}">{{ p.name }}｜{{ p.kcal_label }}</option>{% endfor %}</select></div>
-  <div><label>開始日期</label><input type="date" name="start_date" value="{{ start_default.isoformat() }}" required></div>
-  <div><label>結束日期</label><input type="date" name="end_date" value="{{ end_default.isoformat() }}" required></div>
-  <div><label>週末</label><label><input style="width:auto" type="checkbox" name="include_weekends" value="1"> 也排六日</label></div>
+<div class="grid">
+  <section class="card span-8">
+    <div class="top">
+      <div><span class="eyebrow">{{ '練習用・不會寫入正式資料' if practice else '自動排菜' }}</span><h1>{{ 'AI 菜單（練習用）' if practice else 'AI 菜單' }}</h1><div class="muted">{{ '免帳號、免密碼。這裡只做即時預覽，關掉頁面就不保留結果。' if practice else '依供餐對象、熱量、重複、魚類、炸物與甜湯規則建立可再調整的草稿。' }}</div></div>
+      {% if practice %}<a class="btn secondary" href="{{ url_for('punch.qrcode_view') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.recipe_tags') }}">菜色標記</a>{% endif %}
+    </div>
+    {% if practice %}<div class="notice"><b>練習用：</b>不建立草稿、不套用中央菜單、不修改叫貨資料；產生後會看到菜色、食材、每道熱量、當日總熱量與規則分數。</div><br>{% endif %}
+    <form method="post" action="{{ url_for('order_tool.ai_menu_practice_generate') if practice else url_for('order_tool.ai_menu_generate') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      {% if not practice %}<div class="field"><label>草稿名稱</label><input name="name" placeholder="例如：10 月國小菜單"></div><br>{% endif %}
+      <div class="row">
+        <div class="field"><label>供餐對象</label><select name="profile_id" required><option value="">請選擇</option>{% for p in profiles %}<option value="{{ p.id }}">{{ p.name }}｜{{ p.kcal_label }}</option>{% endfor %}</select></div>
+        <div class="field"><label>開始日期</label><input type="date" name="start_date" value="{{ start_default.isoformat() }}" required></div>
+        <div class="field"><label>結束日期</label><input type="date" name="end_date" value="{{ end_default.isoformat() }}" required></div>
+      </div><br>
+      <label class="inline-check"><input type="checkbox" name="include_weekends" value="1"> 週六、週日也排菜</label>
+      <hr><h3>每天菜色結構</h3><div class="ai-structure-grid">{% for category in categories %}<div class="field"><label>{{ category }}</label><input type="number" name="structure_{{ category }}" min="0" max="{{ structure_limits[category] }}" value="{{ default_structure[category] }}"></div>{% endfor %}</div>
+      <hr><h3>排菜規則</h3><div class="ai-structure-grid">
+        <div class="field"><label>同一道菜間隔</label><input type="number" name="recipe_repeat_days" min="0" max="30" value="{{ default_rules.recipe_repeat_days }}"><div class="muted">供餐日</div></div>
+        <div class="field"><label>主菜間隔</label><input type="number" name="main_repeat_days" min="0" max="30" value="{{ default_rules.main_repeat_days }}"><div class="muted">供餐日</div></div>
+        <div class="field"><label>每週魚類至少</label><input type="number" name="fish_per_week_min" min="0" max="10" value="{{ default_rules.fish_per_week_min }}"></div>
+        <div class="field"><label>每週炸物最多</label><input type="number" name="fried_per_week_max" min="0" max="10" value="{{ default_rules.fried_per_week_max }}"></div>
+        <div class="field"><label>每週甜湯最多</label><input type="number" name="sweet_soup_per_week_max" min="0" max="10" value="{{ default_rules.sweet_soup_per_week_max }}"></div>
+      </div><br>
+      <label class="inline-check"><input type="checkbox" name="prefer_kcal_in_range" value="1" checked> 排菜時把每日總熱量納入規則分數</label><br>
+      <label class="inline-check"><input type="checkbox" name="exclude_incomplete_nutrition" value="1" checked> 優先排除營養資料不完整的菜</label><br><br>
+      <button class="btn" type="submit">{{ '產生練習菜單' if practice else '產生 AI 菜單草稿' }}</button>
+    </form>
+  </section>
+  <section class="card span-4">
+    {% if practice %}<h2>練習總覽</h2><p><b>這是練習用入口。</b></p><ul><li>不用帳號、密碼</li><li>不會保存練習結果</li><li>不會寫入正式中央菜單</li><li>不會建立採購單</li><li>可以直接測試排菜與熱量</li></ul>{% else %}<h2>排菜流程</h2><ol><li>選供餐對象與日期</li><li>依規則自動產生草稿</li><li>看菜名、食材、熱量與規則分數</li><li>可逐道換菜或鎖定</li><li>確認後才套用正式菜單</li></ol><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice') }}">開啟免登入練習模式</a>{% endif %}
+  </section>
+  {% if not practice %}<section class="card span-12"><h2>最近草稿</h2>{% if drafts %}<div class="table-scroll"><table><thead><tr><th>名稱</th><th>供餐對象</th><th>日期</th><th>狀態</th><th></th></tr></thead><tbody>{% for d in drafts %}<tr><td>{{ d.name }}</td><td>{{ d.profile.name if d.profile else '—' }}</td><td>{{ d.start_date }} ～ {{ d.end_date }}</td><td>{{ d.status }}</td><td><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_draft',draft_id=d.id) }}">開啟</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">尚無 AI 菜單草稿。</div>{% endif %}</section>{% endif %}
 </div>
-<h3>每天菜色結構</h3><div class="ai-grid">{% for c in categories %}<div><label>{{ c }}</label><input type="number" min="0" max="4" name="structure_{{ c }}" value="{{ defaults[c] }}"></div>{% endfor %}</div>
-<h3>排菜規則</h3><div class="ai-grid">
-<div><label>同菜至少間隔供餐日</label><input type="number" min="0" max="20" name="repeat_days" value="5"></div>
-<div><label>每週魚類至少</label><input type="number" min="0" max="10" name="fish_per_week_min" value="1"></div>
-<div><label>每週炸物最多</label><input type="number" min="0" max="10" name="fried_per_week_max" value="1"></div>
-<div><label>每週甜湯最多</label><input type="number" min="0" max="10" name="sweet_soup_per_week_max" value="1"></div>
-</div><br><label><input style="width:auto" type="checkbox" name="exclude_incomplete_nutrition" value="1" checked> 排除無法確認熱量的菜色</label><br><br>
-<button class="btn" type="submit">{{ '產生練習結果' if practice else '產生 AI 菜單草稿' }}</button>
-</form>
-{% if not practice %}<section class="card"><h2>最近草稿</h2>{% if drafts %}<div class="table-scroll"><table><thead><tr><th>名稱</th><th>日期</th><th>狀態</th><th></th></tr></thead><tbody>{% for d in drafts %}<tr><td>{{ d.name }}</td><td>{{ d.start_date }} ～ {{ d.end_date }}</td><td>{{ d.status }}</td><td><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_draft',draft_id=d.id) }}">開啟</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">尚無草稿。</div>{% endif %}</section>{% endif %}
 {% endblock %}

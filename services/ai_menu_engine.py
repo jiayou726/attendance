@@ -84,8 +84,17 @@ def _vegetarian_compatible(recipe,tags):
     names=[recipe.name or ""]+[row.ingredient.name or "" for row in recipe.ingredients or () if row.ingredient]
     text=" ".join(names)
     for phrase in ("素肉","素魚","素排","素雞","素火腿","素黑輪","素鍋貼","素燒賣","素水餃","素甜不辣"):text=text.replace(phrase," ")
-    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","火腿","培根","貢丸","肉羹","黑輪","鍋貼","燒賣","水餃","甜不辣","熱狗","香腸")
-    return not any(term in text for term in animal_terms)
+    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","大骨","骨湯","火腿","培根","貢丸","肉羹","黑輪","鍋貼","燒賣","水餃","甜不辣","熱狗","香腸","米血","血糕","獅子頭","福州丸","龍鳳腿","翅腿","翅小腿","腿排")
+    if any(term in text for term in animal_terms):return False
+    # 主食與青菜本來就會和葷食菜單共用；其餘料理必須由菜名明確標示「素」。
+    category=(getattr(recipe,"category","") or "").strip()
+    return category in {"主食","青菜"} or "素" in (recipe.name or "")
+
+def _vegetarian_pair_score(candidate,reference):
+    if not reference:return 0
+    if candidate.id==reference.id:return -10000
+    normalize=lambda name:(name or "").replace("(素)","").replace("（素）","").replace("素食","").strip()
+    return -9000 if normalize(candidate.name)==normalize(reference.name) else 0
 
 def load_candidates():
     rows=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags)).filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.name).all())
@@ -207,7 +216,7 @@ def _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys
                 raise RuleFeasibilityError(f"{y}年第{w}週無法滿足每週至少 {rules.fish_per_week_min} 次魚類；請增加可用魚類菜色、調整每日結構或降低魚類下限。")
             _score,key,candidate_id=best;assignment[key]=candidate_id
 
-def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None,meal_variant="regular"):
+def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None,meal_variant="regular",reference_assignment=None):
     if seed is None:
         seed=secrets.randbits(64)
     rng=random.Random(seed);dates=service_dates(start,end,include_weekends);candidates=load_candidates();by_id={c.id:c for c in candidates};pools=defaultdict(list)
@@ -232,7 +241,7 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                     if cand.id in day_seen:continue
                     trial=dict(assignment);trial[key]=cand.id
                     if _hard_cap_violations(dates,rules,trial,by_id):continue
-                    gap=i-last.get(cand.id,-999);score=usage[cand.id]*60+rng.random()
+                    gap=i-last.get(cand.id,-999);reference=by_id.get((reference_assignment or {}).get(key));score=usage[cand.id]*60+rng.random()+_vegetarian_pair_score(cand,reference)
                     if gap<rules.recipe_repeat_days:score+=6000
                     if c=="主菜" and gap<rules.main_repeat_days:score+=4000
                     if bestscore is None or score<bestscore:best,bestscore=cand,score
@@ -242,7 +251,8 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
     _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max)
     violations=variant_violations(assignment,by_id,meal_variant)+hard_rule_violations(dates,rules,assignment,by_id)
     if violations:raise RuleFeasibilityError("產生完成後驗證失敗："+"；".join(violations))
-    current_penalty,_,_,_=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);movable=[key for key in assignment if key not in locked_keys]
+    pair_penalty=lambda values:sum(_vegetarian_pair_score(by_id.get(rid),by_id.get((reference_assignment or {}).get(key))) for key,rid in values.items() if by_id.get(rid))
+    current_penalty,_,_,_=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);current_penalty+=pair_penalty(assignment);movable=[key for key in assignment if key not in locked_keys]
     for _pass in range(2):
         improved=False;rng.shuffle(movable)
         for key in movable:
@@ -251,7 +261,7 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                 if cand.id==current:continue
                 trial=dict(assignment);trial[key]=cand.id
                 if hard_rule_violations(dates,rules,trial,by_id):continue
-                p,_,_,_=evaluate(dates,structure,rules,trial,candidates,kcal_min,kcal_max)
+                p,_,_,_=evaluate(dates,structure,rules,trial,candidates,kcal_min,kcal_max);p+=pair_penalty(trial)
                 if p+0.01<best_penalty:best_id,best_penalty=cand.id,p
             if best_id!=current:assignment[key]=best_id;current_penalty=best_penalty;improved=True
         if not improved:break

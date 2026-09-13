@@ -120,7 +120,7 @@ def ai_menu_generate():
     vegetarian_rules=Rules.from_dict(rules.to_dict());vegetarian_rules.fish_per_week_min=0
     try:
         regular_result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="regular")
-        vegetarian_result=generate(start,end,structure,vegetarian_rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="vegetarian")
+        vegetarian_result=generate(start,end,structure,vegetarian_rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="vegetarian",reference_assignment=regular_result.assignment)
     except RuleFeasibilityError as exc:
         flash(f"無法產生符合硬限制的菜單：{exc}","error");return redirect(url_for("order_tool.ai_menu"))
     base_name=(request.form.get("name") or "").strip() or f"{profile.name} {start:%Y/%m}";pair_key=secrets.token_hex(12);drafts=[]
@@ -145,7 +145,8 @@ def ai_menu_regenerate(draft_id):
         for x in draft.items:
             if x.locked and x.service_date in index:locked[(index[x.service_date],x.category,x.slot_index)]=x.recipe_id
     p=draft.profile
-    try:new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked,meal_variant=old.meal_variant)
+    paired=_paired_draft(draft);reference=_draft_result(paired).assignment if old.meal_variant=="vegetarian" and paired else None
+    try:new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked,meal_variant=old.meal_variant,reference_assignment=reference)
     except RuleFeasibilityError as exc:
         flash(f"無法重新排菜：{exc}","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     _save_result(draft,new,keep_locked=True);return _commit("已重新排菜；鎖定菜色保持不變。","order_tool.ai_menu_draft",draft_id=draft.id)

@@ -11,6 +11,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
 from extensions import db, migrate
 
+# AI 菜單採 additive model extension，不改掉既有團膳 model 語意。
+import ai_models
+
 # 藍圖
 from blueprints.auth import auth_bp
 from blueprints.punch import punch_bp
@@ -19,13 +22,20 @@ from blueprints.records import rec_bp
 from blueprints.export import exp_bp
 from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
+# AI 菜單路由直接掛在 order_bp 上，必須在 register_blueprint 前載入。
+import blueprints.ai_menu  # noqa: F401
 from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
 from blueprints.nonregistered_menu_format import install_nonregistered_menu_export_format_fix
 
 
 def _ensure_kitchen_schema_compatibility(app: Flask):
-    """Apply only the additive kitchen fix needed when deploys skip Alembic."""
+    """Apply only additive kitchen compatibility fixes when deploys skip Alembic.
+
+    只讀工具可用 KITCHEN_SCHEMA_COMPAT=False 建立 app，避免光是載入程式就改 schema。
+    """
+    if not app.config.get("KITCHEN_SCHEMA_COMPAT", True):
+        return
 
     with app.app_context():
         from models import KitchenDailyDishNote
@@ -67,6 +77,9 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                     "ALTER TABLE kitchen_daily_dish_note "
                     "ADD COLUMN school_class_counts TEXT NOT NULL DEFAULT '{}'"
                 ))
+
+        # AI 菜單只增加營養欄位與自己的草稿表；全部 checkfirst / 欄位存在檢查。
+        ai_models.ensure_schema(db.engine)
 
         # Historical supplier prices already live in production.  Apply the
         # conservative, idempotent unit conversion after each deploy so a

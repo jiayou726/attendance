@@ -11,12 +11,28 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _database_url() -> str:
-    url = os.getenv("DATABASE_URL", "").strip()
+def _normalize_database_url(url: str) -> str:
+    url = (url or "").strip()
     # 部分平台仍可能給 postgres://；SQLAlchemy/psycopg2 使用 postgresql://。
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+def _database_url() -> str:
+    url = _normalize_database_url(os.getenv("DATABASE_URL", ""))
     return url or f"sqlite:///{os.path.join(BASE, 'attendance.db')}"
+
+
+def _practice_database_url() -> str:
+    """Dedicated sandbox database used by the kitchen practice account.
+
+    A separate PRACTICE_DATABASE_URL is recommended in production.  When it
+    is omitted we still fail safe by using a separate local SQLite file, never
+    the formal database URL.
+    """
+    url = _normalize_database_url(os.getenv("PRACTICE_DATABASE_URL", ""))
+    return url or f"sqlite:///{os.path.join(BASE, 'practice.db')}"
 
 
 class Config:
@@ -26,6 +42,7 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY") or os.urandom(32)
 
     SQLALCHEMY_DATABASE_URI = _database_url()
+    SQLALCHEMY_BINDS = {"practice": _practice_database_url()}
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,

@@ -9,7 +9,7 @@ import random
 from sqlalchemy.orm import joinedload
 
 from models import KitchenRecipe, KitchenRecipeIngredient
-from services.nutrition_sources import STATUS_MATCHED, match_ingredient_name
+from services.nutrition_sources import match_ingredient_name
 
 CATEGORY_ORDER = ("主食", "主菜", "副菜", "青菜", "湯品", "點心")
 DEFAULT_STRUCTURE = {"主食": 1, "主菜": 1, "副菜": 2, "青菜": 1, "湯品": 1, "點心": 0}
@@ -58,7 +58,7 @@ def build_structure(values):
 
 
 def recipe_kcal(recipe):
-    """依配方即時計算每人熱量；主檔未填時只讀官方 mapping。"""
+    """依配方即時計算每人熱量；主檔未填時讀 TFDA／fallback mapping。"""
     rows=list(recipe.ingredients or ())
     if not rows:
         return None
@@ -77,10 +77,9 @@ def recipe_kcal(recipe):
             grams=amount*Decimal(str(per_unit))
         kcal=getattr(ing,"kcal_per_100g",None)
         if kcal is None:
-            matched=match_ingredient_name(ing.name)
-            if matched.status != STATUS_MATCHED or matched.food is None:
-                return None
-            kcal=matched.food.kcal_per_100g
+            kcal=match_ingredient_name(ing.name).kcal_per_100g
+        if kcal is None:
+            return None
         total += grams/Decimal("100")*Decimal(str(kcal))
     return int(total.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 

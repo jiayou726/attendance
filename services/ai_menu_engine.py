@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 import random
+import re
 import secrets
 from sqlalchemy.orm import joinedload
 from models import KitchenRecipe, KitchenRecipeIngredient
@@ -116,10 +117,9 @@ def _candidate_map(candidates):
 def candidate_allowed(candidate,meal_variant):
     if not candidate:return False
     if meal_variant=="vegetarian":return candidate.vegetarian_compatible
-    # A safe meat-free dish belongs to the shared pool and may be selected for
-    # the regular menu first.  Keep only explicitly vegetarian main dishes out
-    # of that menu, so items such as 蒸蛋 can be shared while 素魚排 cannot.
-    if meal_variant=="regular":return not (candidate.category=="主菜" and "素" in candidate.name)
+    # A labelled recipe stays vegetarian-facing; regular menus use its
+    # unlabelled twin with the same BOM.
+    if meal_variant=="regular":return not bool(re.search(r"[（(]素[）)]\s*$",candidate.name or ""))
     return True
 
 def variant_violations(assignment,candidates,meal_variant):

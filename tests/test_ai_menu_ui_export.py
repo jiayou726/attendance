@@ -86,8 +86,38 @@ def test_ai_menu_uses_searchable_swap_and_only_daily_lock(app, client):
     assert 'class="dish-search-input"' in swap_page
     assert 'data-search-mode="select"' in swap_page
     assert 'id="recipe-search-data"' in swap_page
+    assert 'id="ingredient-search-data"' in swap_page
+    assert "新增並換成這道" in swap_page
+    assert "/swap/new" in swap_page
+    assert "target=\"_blank\"" not in swap_page
     assert '"id": 2' in swap_page
     assert "ai-swap-table" not in swap_page
+
+
+def test_swap_page_can_create_recipe_with_bom_and_replace_slot(app, client):
+    draft_id, _recipe_id = _seed_draft(app)
+    with app.app_context():
+        ingredient_id = KitchenIngredient.query.filter_by(name="白米").one().id
+
+    response = client.post(
+        f"/admin/order-tool/ai-menu/drafts/{draft_id}/swap/new",
+        data={
+            "date": "2026-06-01",
+            "category": "主菜",
+            "slot": "1",
+            "name": "新建豆腐主菜",
+            "ingredient_id": [str(ingredient_id), "", "", ""],
+            "grams_per_person": ["60", "", "", ""],
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        recipe = KitchenRecipe.query.filter_by(name="新建豆腐主菜").one()
+        assert recipe.ingredients[0].grams_per_person == Decimal("60")
+        item = KitchenMenuDraftItem.query.filter_by(draft_id=draft_id).one()
+        assert item.recipe_id == recipe.id
 
 
 def test_public_excel_matches_simple_two_row_menu_format(app, client):

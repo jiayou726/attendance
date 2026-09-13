@@ -79,7 +79,7 @@ def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypa
     candidates = [
         Candidate(1, "白飯", "主食", 300, vegetarian_compatible=True),
         Candidate(2, "滷雞腿", "主菜", 200, vegetarian_compatible=False),
-        Candidate(3, "素肉燥", "主菜", 180, frozenset({"vegetarian"}), vegetarian_compatible=True),
+        Candidate(3, "素肉燥(素)", "主菜", 180, frozenset({"vegetarian"}), vegetarian_compatible=True),
     ]
     monkeypatch.setattr(engine, "load_candidates", lambda: candidates)
     rules = Rules(recipe_repeat_days=0, main_repeat_days=0, fish_per_week_min=0,
@@ -92,17 +92,19 @@ def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypa
                                  _structure(主食=1, 主菜=1), rules, meal_variant="vegetarian")
 
     assert regular.recipe_at(0, "主菜", 1).name == "滷雞腿"
-    assert vegetarian.recipe_at(0, "主菜", 1).name == "素肉燥"
+    assert vegetarian.recipe_at(0, "主菜", 1).name == "素肉燥(素)"
 
 
 def test_regular_menu_accepts_shared_main_but_rejects_explicit_vegetarian_main():
     shared = Candidate(1, "番茄炒蛋", "主菜", 180, vegetarian_compatible=True)
-    vegetarian_only = Candidate(2, "素魚排", "主菜", 180, vegetarian_compatible=True)
+    labelled = Candidate(2, "素魚排(素)", "主菜", 180, vegetarian_compatible=True)
+    regular_copy = Candidate(3, "素魚排", "主菜", 180, vegetarian_compatible=True)
 
     assert engine.candidate_allowed(shared, "regular")
     assert engine.candidate_allowed(shared, "vegetarian")
-    assert not engine.candidate_allowed(vegetarian_only, "regular")
-    assert engine.candidate_allowed(vegetarian_only, "vegetarian")
+    assert not engine.candidate_allowed(labelled, "regular")
+    assert engine.candidate_allowed(labelled, "vegetarian")
+    assert engine.candidate_allowed(regular_copy, "regular")
 
 
 def test_generate_never_exceeds_weekly_sweet_soup_max(monkeypatch):

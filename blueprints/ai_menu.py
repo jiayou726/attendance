@@ -9,7 +9,7 @@ from flask import abort,current_app,flash,redirect,render_template,request,send_
 from openpyxl import Workbook
 from openpyxl.styles import Alignment,Font
 from sqlalchemy.orm import joinedload
-from blueprints.order_tool import _commit,_date,_int,order_bp
+from blueprints.order_tool import _commit,_date,_decimal,_int,order_bp
 from extensions import db
 from models import KitchenIngredient,KitchenMenuPlan,KitchenMenuPlanItem,KitchenRecipe,KitchenRecipeIngredient
 from ai_models import KitchenMealProfile,KitchenMenuDraft,KitchenMenuDraftItem
@@ -157,7 +157,43 @@ def ai_menu_swap(draft_id):
     if not draft:abort(404)
     d=_date(request.args.get("date"));cat=(request.args.get("category") or "").strip();slot=_int(request.args.get("slot"),default=1);result=_draft_result(draft)
     if d not in result.dates or cat not in CATEGORY_ORDER:abort(404)
-    key=(result.dates.index(d),cat,slot);options=replacement_options(result,key);return render_template("kitchen/ai_menu_swap.html",draft=draft,result=result,service_date=d,weekday=WEEKDAY[d.weekday()],category=cat,slot_index=slot,options=options,current_id=result.assignment.get(key),day_report=result.days[d],recipe_options=[{"id":candidate.id,"name":candidate.name,"category":candidate.category} for candidate,_penalty,_current in options])
+    key=(result.dates.index(d),cat,slot);options=replacement_options(result,key)
+    ingredients=KitchenIngredient.query.filter_by(active=True).order_by(KitchenIngredient.name).all()
+    return render_template("kitchen/ai_menu_swap.html",draft=draft,result=result,service_date=d,weekday=WEEKDAY[d.weekday()],category=cat,slot_index=slot,options=options,current_id=result.assignment.get(key),day_report=result.days[d],recipe_options=[{"id":candidate.id,"name":candidate.name,"category":candidate.category} for candidate,_penalty,_current in options],ingredient_options=[{"id":ingredient.id,"name":ingredient.name,"base_unit":ingredient.base_unit or "g","purchase_unit":ingredient.purchase_unit} for ingredient in ingredients])
+
+@order_bp.post("/ai-menu/drafts/<int:draft_id>/swap/new")
+def ai_menu_swap_new(draft_id):
+    draft=db.session.get(KitchenMenuDraft,draft_id)
+    if not draft:abort(404)
+    d=_date(request.form.get("date"));cat=(request.form.get("category") or "").strip();slot=_int(request.form.get("slot"),default=1)
+    name=(request.form.get("name") or "").strip()
+    result=_draft_result(draft)
+    if d not in result.dates or cat not in CATEGORY_ORDER:abort(404)
+    redirect_args={"draft_id":draft.id,"date":d.isoformat(),"category":cat,"slot":slot}
+    if not name:
+        flash("請輸入新菜色名稱。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
+    if KitchenRecipe.query.filter_by(name=name).first():
+        flash("菜色名稱已存在，請直接在上方搜尋。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
+    components={}
+    for raw_id,raw_amount in zip(request.form.getlist("ingredient_id"),request.form.getlist("grams_per_person")):
+        ingredient_id=_int(raw_id,default=0);amount=_decimal(raw_amount,default=None)
+        ingredient=db.session.get(KitchenIngredient,ingredient_id) if ingredient_id else None
+        if ingredient and ingredient.active and amount is not None and amount>0:components[ingredient.id]=amount
+    if not components:
+        flash("至少要選一項食材並填寫正確的每人用量。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
+    recipe=KitchenRecipe(name=name,category=cat,active=True,note="從 AI 換菜頁新增")
+    db.session.add(recipe);db.session.flush()
+    for ingredient_id,amount in components.items():
+        db.session.add(KitchenRecipeIngredient(recipe_id=recipe.id,ingredient_id=ingredient_id,grams_per_person=amount,quantity_status="manual",source_note="人工確認"))
+    db.session.flush()
+    updated=_draft_result(draft);key=(updated.dates.index(d),cat,slot);trial=dict(updated.assignment);trial[key]=recipe.id
+    candidate=updated.candidates.get(recipe.id)
+    violations=variant_violations(trial,updated.candidates,updated.meal_variant)+hard_rule_violations(updated.dates,updated.rules,trial,updated.candidates)
+    if not candidate_allowed(candidate,updated.meal_variant) or violations:
+        db.session.rollback();flash("這道菜不符合目前葷／素分類或整週硬限制，因此沒有新增。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
+    item=next((x for x in draft.items if x.service_date==d and x.category==cat and x.slot_index==slot),None)
+    if not item:db.session.rollback();abort(404)
+    item.recipe_id=recipe.id;db.session.commit();flash("新菜色與配方已建立，並已換入菜單。","success");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/swap")
 def ai_menu_swap_apply(draft_id):

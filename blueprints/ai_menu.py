@@ -1,11 +1,11 @@
-"""AI 菜單：正式草稿、換菜/鎖定/分數、公版 Excel，以及免登入練習模式。"""
+"""AI 菜單：正式草稿、換菜/鎖定/分數、公版 Excel，以及完整練習沙盒。"""
 from __future__ import annotations
-import json,re
+import json,os,re
 from collections import defaultdict
 from datetime import date,datetime,timedelta
 from io import BytesIO
 from types import SimpleNamespace
-from flask import abort,flash,redirect,render_template,request,send_file,url_for
+from flask import abort,current_app,flash,redirect,render_template,request,send_file,session,url_for
 from openpyxl import Workbook
 from openpyxl.styles import Alignment,Font
 from sqlalchemy.orm import joinedload
@@ -17,7 +17,12 @@ from services import meal_profiles as profile_service, recipe_tags as tag_servic
 from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,Rules,build_structure,describe_rules,generate,rebuild,replacement_options,service_dates
 from services.nutrition import recipe_nutrition
 from services.nutrition_sources import STATUS_ESTIMATED,STATUS_MATCHED,match_ingredient_name
+from services.practice_database import ensure_practice_database
 WEEKDAY="一二三四五六日"
+PRACTICE_USER="practice"
+
+def _practice_ok():
+    return bool(session.get("kitchen_practice"))
 
 def _default_range():
     today=date.today(); start=(today.replace(day=1)+timedelta(days=32)).replace(day=1); end=(start+timedelta(days=32)).replace(day=1)-timedelta(days=1); return start,end
@@ -93,7 +98,7 @@ def _settings(form,profile):
 @order_bp.get("/ai-menu")
 def ai_menu():
     _seed_profiles();start,end=_default_range();drafts=KitchenMenuDraft.query.options(joinedload(KitchenMenuDraft.profile)).order_by(KitchenMenuDraft.id.desc()).limit(20).all()
-    return render_template("kitchen/ai_menu.html",profiles=profile_service.active_profiles(),drafts=drafts,categories=CATEGORY_ORDER,default_structure=DEFAULT_STRUCTURE,structure_limits=STRUCTURE_LIMITS,default_rules=Rules(),start_default=start,end_default=end,tagged_recipe_count=0,practice=False)
+    return render_template("kitchen/ai_menu.html",profiles=profile_service.active_profiles(),drafts=drafts,categories=CATEGORY_ORDER,default_structure=DEFAULT_STRUCTURE,structure_limits=STRUCTURE_LIMITS,default_rules=Rules(),start_default=start,end_default=end,tagged_recipe_count=0,practice=_practice_ok())
 
 @order_bp.post("/ai-menu/generate")
 def ai_menu_generate():
@@ -106,7 +111,7 @@ def ai_menu_generate():
 def ai_menu_draft(draft_id):
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if not draft:abort(404)
-    result=_draft_result(draft);return render_template("kitchen/ai_menu_result.html",draft=draft,result=result,rows=_view_rows(result,draft),headers=_headers(result.structure),rule_lines=describe_rules(result.rules),tag_label=tag_service.tag_label)
+    result=_draft_result(draft);return render_template("kitchen/ai_menu_result.html",draft=draft,result=result,rows=_view_rows(result,draft),headers=_headers(result.structure),rule_lines=describe_rules(result.rules),tag_label=tag_service.tag_label,practice=_practice_ok())
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/regenerate")
 def ai_menu_regenerate(draft_id):
@@ -164,7 +169,8 @@ def ai_menu_apply(draft_id):
         if not plan:plan=KitchenMenuPlan(service_date=d,meal_type=draft.meal_type,name="中央菜單",status="draft");db.session.add(plan);db.session.flush()
         KitchenMenuPlanItem.query.filter_by(plan_id=plan.id).delete(synchronize_session=False)
         for i,x in enumerate(sorted(items,key=lambda z:z.sort_order),1):db.session.add(KitchenMenuPlanItem(plan_id=plan.id,recipe_id=x.recipe_id,sort_order=i))
-    draft.status="applied";draft.applied_at=datetime.utcnow();return _commit(f"已套用 {len(grouped)} 個供餐日到正式中央菜單。","order_tool.ai_menu_draft",draft_id=draft.id)
+    draft.status="applied";draft.applied_at=datetime.utcnow()
+    return _commit(f"已套用 {len(grouped)} 個供餐日到練習中央菜單；正式資料不受影響。" if _practice_ok() else f"已套用 {len(grouped)} 個供餐日到正式中央菜單。","order_tool.ai_menu_draft",draft_id=draft.id)
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/delete")
 def ai_menu_delete(draft_id):
@@ -190,18 +196,38 @@ def ai_menu_public_excel(draft_id):
         for c in rr:c.alignment=Alignment(vertical="top",wrap_text=True)
     out=BytesIO();wb.save(out);out.seek(0);return send_file(out,as_attachment=True,download_name=_safe_name(request.args.get("filename"),f"公版菜單_{draft.start_date}_{draft.end_date}"),mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-@order_bp.get("/ai-menu/practice/login")
-def ai_menu_practice_login():return redirect(url_for("order_tool.ai_menu_practice"))
+@order_bp.route("/ai-menu/practice/login",methods=["GET","POST"])
+def ai_menu_practice_login():
+    configured=current_app.config.get("KITCHEN_PRACTICE_PASSWORD") or os.environ.get("KITCHEN_PRACTICE_PASSWORD","")
+    error=""
+    if request.method=="POST":
+        if configured and request.form.get("user")==PRACTICE_USER and request.form.get("password")==configured:
+            try:
+                ensure_practice_database()
+            except Exception:
+                current_app.logger.exception("Failed to initialize kitchen practice database")
+                error="練習資料庫初始化失敗，請確認 PRACTICE_DATABASE_URL 或部署儲存空間設定。"
+            else:
+                db.session.remove();session["kitchen_practice"]=True
+                return redirect(url_for("order_tool.index"))
+        elif not error:
+            error="練習帳號或密碼錯誤。" if configured else "尚未設定 KITCHEN_PRACTICE_PASSWORD。"
+    return render_template("kitchen/ai_menu_practice_login.html",error=error,configured=bool(configured),practice_user=PRACTICE_USER)
+
+@order_bp.get("/ai-menu/practice/logout")
+def ai_menu_practice_logout():
+    db.session.remove();session.pop("kitchen_practice",None)
+    return redirect(url_for("order_tool.ai_menu_practice_login"))
 
 @order_bp.get("/ai-menu/practice")
 def ai_menu_practice():
-    start,end=_default_range();return render_template("kitchen/ai_menu.html",profiles=_readonly_profiles(),drafts=[],categories=CATEGORY_ORDER,default_structure=DEFAULT_STRUCTURE,structure_limits=STRUCTURE_LIMITS,default_rules=Rules(),start_default=start,end_default=end,tagged_recipe_count=0,practice=True,practice_mode=True)
+    if not _practice_ok():return redirect(url_for("order_tool.ai_menu_practice_login"))
+    return redirect(url_for("order_tool.index"))
 
 @order_bp.post("/ai-menu/practice/generate")
 def ai_menu_practice_generate():
-    profile=_practice_profile((request.form.get("profile_id") or "").strip());settings,error=_settings(request.form,profile)
-    if error:flash(error,"error");return redirect(url_for("order_tool.ai_menu_practice"))
-    start,end,structure,rules,weekends=settings;result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends);return render_template("kitchen/ai_menu_practice_result.html",practice=True,practice_mode=True,profile=profile,start=start,end=end,result=result,rows=_view_rows(result),headers=_headers(structure),rule_lines=describe_rules(rules),tag_label=tag_service.tag_label)
+    if not _practice_ok():return redirect(url_for("order_tool.ai_menu_practice_login"))
+    return ai_menu_generate()
 
 def _nutrition_view(ing):
     if ing.kcal_per_100g is not None:return {"kcal":ing.kcal_per_100g,"source":ing.nutrition_source or "人工輸入","food_name":ing.nutrition_food_name or "","code":ing.nutrition_code or "","status":"人工確認" if ing.nutrition_verified else "已設定","note":ing.nutrition_note or ""}

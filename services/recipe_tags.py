@@ -1,8 +1,9 @@
 """菜色標記（排菜規則用）。
 
-標記一律人工勾選。這裡另外提供一個純關鍵字的「建議標記」工具，
+人工標記仍是菜色分類的主要來源；另外提供純關鍵字的建議標記工具，
 只看菜名與配方原料名稱，不呼叫任何語言模型。
-建議標記只是畫面上的提示，排菜規則只採用人工確認過的標記。
+為避免「甜湯最多一次」等規則因漏勾標記而失效，魚類、炸物、甜湯
+三個排菜規則會自動採用關鍵字建議；其餘分類仍只採人工確認標記。
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 
 SOURCE_MANUAL = "manual"
 SOURCE_SUGGESTED = "suggested"
+AUTO_RULE_TAGS = frozenset({"fish", "fried", "sweet_soup"})
 
 @dataclass(frozen=True)
 class TagDef:
@@ -19,7 +21,7 @@ class TagDef:
     hint: str = ""
 
 TAG_DEFS: tuple[TagDef, ...] = (
-    TagDef("fish", "魚類", ("魚", "鮭", "鯖", "鱈", "旗", "虱目", "鯛", "柳葉", "鯊", "鮪", "花枝", "魷", "蝦", "小卷", "海鮮"), "含魚類或海鮮，用於每週魚類規則"),
+    TagDef("fish", "魚類", ("魚", "鮭", "鯖", "鱈", "旗魚", "虱目", "鯛", "柳葉", "鯊", "鮪"), "實際魚類，用於每週魚類規則；蝦、魷魚、花枝、小卷等海鮮不計入"),
     TagDef("chicken", "雞肉", ("雞", "翅", "棒棒腿", "骨腿", "清腿", "翅腿"), "主要蛋白質為雞肉"),
     TagDef("pork", "豬肉", ("豬", "肉絲", "肉片", "肉丁", "絞肉", "排骨", "梅花", "五花", "里肌", "貢丸", "肉羹", "熱狗", "火腿", "培根"), "主要蛋白質為豬肉"),
     TagDef("beef", "牛肉", ("牛",), "主要蛋白質為牛肉"),
@@ -50,6 +52,16 @@ def suggest_tags(recipe) -> set[str]:
     if "vegetarian" in suggested and suggested & {"chicken", "pork", "beef", "fish"}:
         suggested.discard("vegetarian")
     return suggested
+
+def effective_rule_tags(recipe) -> set[str]:
+    """Tags used by the planner.
+
+    Manual tags are always honored. Fish/fried/sweet-soup tags additionally
+    use deterministic keyword detection so hard weekly rules cannot silently
+    fail only because an operator forgot to tick a checkbox.
+    """
+    manual = {row.tag for row in recipe.tags or () if row.source == SOURCE_MANUAL}
+    return manual | (suggest_tags(recipe) & AUTO_RULE_TAGS)
 
 def set_manual_tags(session, recipe, keys) -> bool:
     from models import KitchenRecipeTag

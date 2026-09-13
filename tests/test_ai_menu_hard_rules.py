@@ -14,15 +14,44 @@ def _structure(**overrides):
     return result
 
 
+def test_each_generation_requests_a_fresh_random_seed(monkeypatch):
+    candidates = [Candidate(1, "白米飯", "主食", 200)]
+    seeds = iter((101, 202))
+    seen = []
+    original_random = engine.random.Random
+
+    monkeypatch.setattr(engine, "load_candidates", lambda: candidates)
+    monkeypatch.setattr(engine.secrets, "randbits", lambda _bits: next(seeds))
+    monkeypatch.setattr(engine.random, "Random", lambda seed: (seen.append(seed), original_random(seed))[1])
+    rules = Rules(fish_per_week_min=0, fried_per_week_max=9, sweet_soup_per_week_max=9,
+                  prefer_kcal_in_range=False, exclude_incomplete_nutrition=False)
+
+    for _ in range(2):
+        engine.generate(date(2026, 9, 14), date(2026, 9, 14), _structure(主食=1), rules)
+
+    assert seen == [101, 202]
+
+
 def test_keyword_rules_detect_sweet_soups_and_exclude_non_fish_seafood():
-    def recipe(name):
-        return SimpleNamespace(name=name, ingredients=[])
+    def recipe(name, category=""):
+        return SimpleNamespace(name=name, category=category, ingredients=[])
 
     assert "sweet_soup" in suggest_tags(recipe("紅豆薏仁湯"))
     assert "sweet_soup" in suggest_tags(recipe("地瓜芋圓湯"))
+    assert "sweet_soup" in suggest_tags(recipe("紅豆紫米湯", "湯品"))
+    assert "sweet_soup" not in suggest_tags(recipe("*麥片飯", "主食"))
     assert "fish" in suggest_tags(recipe("香煎鯖魚"))
+    assert "fish" not in suggest_tags(recipe("魚香紫茄"))
+    assert "fish" not in suggest_tags(recipe("素魚排"))
+    assert "fish" not in suggest_tags(recipe("柴魚蒸蛋"))
+    assert "fish" not in suggest_tags(recipe("蘿蔔燉煮"))
     assert "fish" not in suggest_tags(recipe("魷魚羹"))
     assert "fish" not in suggest_tags(recipe("花枝丸"))
+    assert "fried" in suggest_tags(recipe("芝麻球"))
+    assert "sweet_soup" not in suggest_tags(recipe("冬瓜排骨湯", "湯品"))
+    assert "sweet_soup" not in suggest_tags(recipe("銀芽豆包", "點心"))
+    assert "fried" not in suggest_tags(recipe("綜合滷味"))
+    assert "fried" not in suggest_tags(recipe("敏豆甜不辣"))
 
 
 def test_generate_never_exceeds_weekly_sweet_soup_max(monkeypatch):

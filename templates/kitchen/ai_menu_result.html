@@ -5,12 +5,11 @@
   {% set cell = matches[0] if matches else none %}
   <td class="ai-public-dish">
     {% if cell and cell.recipe_id %}
-      <b>{% if cell.locked %}🔒 {% endif %}{{ cell.name }}</b>
+      <b><a href="{{ url_for('order_tool.recipe_detail',recipe_id=cell.recipe_id) }}">{{ cell.name }}</a></b>
       <small>{{ cell.ingredients }}</small>
       <span>{% if cell.kcal is not none %}{{ cell.kcal }} kcal/人{% else %}營養待確認{% endif %}</span>
       <div class="ai-inline-actions">
         <a class="btn secondary" href="{{ url_for('order_tool.ai_menu_swap',draft_id=draft.id,date=row.service_date.isoformat(),category=cell.category,slot=cell.slot_index) }}">換菜</a>
-        <form method="post" action="{{ url_for('order_tool.ai_menu_lock_item',draft_id=draft.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="date" value="{{ row.service_date.isoformat() }}"><input type="hidden" name="category" value="{{ cell.category }}"><input type="hidden" name="slot" value="{{ cell.slot_index }}"><button class="btn {{ 'ok' if cell.locked else 'secondary' }}">{{ '已鎖' if cell.locked else '鎖定' }}</button></form>
       </div>
     {% else %}<span class="muted">—</span>{% endif %}
   </td>

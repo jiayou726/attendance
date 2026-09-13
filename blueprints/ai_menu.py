@@ -137,7 +137,7 @@ def ai_menu_swap(draft_id):
     if not draft:abort(404)
     d=_date(request.args.get("date"));cat=(request.args.get("category") or "").strip();slot=_int(request.args.get("slot"),default=1);result=_draft_result(draft)
     if d not in result.dates or cat not in CATEGORY_ORDER:abort(404)
-    key=(result.dates.index(d),cat,slot);options=replacement_options(result,key);return render_template("kitchen/ai_menu_swap.html",draft=draft,result=result,service_date=d,weekday=WEEKDAY[d.weekday()],category=cat,slot_index=slot,options=options,best_penalty=options[0][1] if options else 0,current_id=result.assignment.get(key),day_report=result.days[d],tag_label=tag_service.tag_label)
+    key=(result.dates.index(d),cat,slot);options=replacement_options(result,key);return render_template("kitchen/ai_menu_swap.html",draft=draft,result=result,service_date=d,weekday=WEEKDAY[d.weekday()],category=cat,slot_index=slot,options=options,current_id=result.assignment.get(key),day_report=result.days[d],recipe_options=[{"id":candidate.id,"name":candidate.name,"category":candidate.category} for candidate,_penalty,_current in options])
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/swap")
 def ai_menu_swap_apply(draft_id):

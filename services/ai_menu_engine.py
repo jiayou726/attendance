@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 import random
+import secrets
 from sqlalchemy.orm import joinedload
 from models import KitchenRecipe, KitchenRecipeIngredient
 from services.nutrition import recipe_nutrition
@@ -189,7 +190,9 @@ def _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys
                 raise RuleFeasibilityError(f"{y}年第{w}週無法滿足每週至少 {rules.fish_per_week_min} 次魚類；請增加可用魚類菜色、調整每日結構或降低魚類下限。")
             _score,key,candidate_id=best;assignment[key]=candidate_id
 
-def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=20260913,locked=None):
+def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None):
+    if seed is None:
+        seed=secrets.randbits(64)
     rng=random.Random(seed);dates=service_dates(start,end,include_weekends);candidates=load_candidates();by_id={c.id:c for c in candidates};pools=defaultdict(list)
     for c in candidates:
         if rules.exclude_incomplete_nutrition and c.kcal is None:continue
@@ -218,7 +221,7 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                 assignment[key]=best.id;day_seen.add(best.id);last[best.id]=i;usage[best.id]+=1
     _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max)
     violations=hard_rule_violations(dates,rules,assignment,by_id)
-    if violations:raise RuleFeasibilityError("；".join(violations))
+    if violations:raise RuleFeasibilityError("產生完成後驗證失敗："+"；".join(violations))
     current_penalty,_,_,_=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);movable=[key for key in assignment if key not in locked_keys]
     for _pass in range(2):
         improved=False;rng.shuffle(movable)
@@ -240,11 +243,11 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
 def rebuild(dates,structure,rules,assignment,kcal_min=None,kcal_max=None):
     candidates=load_candidates();penalty,breakdown,days_report,warnings=evaluate(dates,structure,rules,assignment,candidates,kcal_min,kcal_max);return PlanResult(dates,structure,rules,assignment,{c.id:c for c in candidates},penalty,breakdown,days_report,warnings,kcal_min,kcal_max)
 
-def replacement_options(result,target_key,limit=40):
+def replacement_options(result,target_key,limit=None):
     i,cat,slot=target_key;same={rid for key,rid in result.assignment.items() if key[0]==i and key!=target_key and rid};current=result.assignment.get(target_key);scored=[]
     for cand in result.candidates.values():
         if cand.category!=cat or cand.id in same or (result.rules.exclude_incomplete_nutrition and cand.kcal is None):continue
         trial=dict(result.assignment);trial[target_key]=cand.id
         if hard_rule_violations(result.dates,result.rules,trial,result.candidates):continue
         p,_,_,_=evaluate(result.dates,result.structure,result.rules,trial,list(result.candidates.values()),result.kcal_min,result.kcal_max);scored.append((cand,p,cand.id==current))
-    scored.sort(key=lambda x:(x[1],x[0].name));return scored[:limit]
+    scored.sort(key=lambda x:(x[1],x[0].name));return scored if limit is None else scored[:limit]

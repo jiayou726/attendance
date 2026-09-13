@@ -13,6 +13,10 @@ SOURCE_MANUAL = "manual"
 SOURCE_SUGGESTED = "suggested"
 AUTO_RULE_TAGS = frozenset({"fish", "fried", "sweet_soup"})
 NON_FISH_SEAFOOD = ("魷魚", "章魚", "墨魚", "花枝", "蝦", "小卷", "海鮮")
+NON_FISH_PHRASES = NON_FISH_SEAFOOD + ("魚香", "魚丸", "魚板", "魚豆腐", "魚餃", "魚卵", "素魚", "柴魚")
+FISH_TERMS = ("鮭", "鯖", "鱈", "旗魚", "虱目", "鯛", "柳葉魚", "鯊", "鮪", "魚排", "魚丁", "魚片", "魚塊", "魚干", "魚乾")
+SWEET_SOUP_TERMS = ("甜湯", "紅豆", "綠豆", "薏仁", "花生湯", "西米露", "芋圓", "粉圓", "山粉圓", "銀耳", "蓮子", "湯圓", "紫米湯")
+FRIED_TERMS = ("炸", "酥", "天婦羅", "椒鹽甜不辣", "薯條", "薯餅", "雞塊", "可樂餅", "春捲", "芝麻球", "炸物")
 
 @dataclass(frozen=True)
 class TagDef:
@@ -42,19 +46,31 @@ def tag_label(key: str) -> str:
     return definition.label if definition else key
 
 def suggest_tags(recipe) -> set[str]:
-    haystack = recipe.name or ""
+    name = recipe.name or ""
+    ingredient_names = []
     for row in recipe.ingredients or ():
         if row.ingredient is not None:
-            haystack += " " + (row.ingredient.name or "")
+            ingredient_names.append(row.ingredient.name or "")
+    haystack = " ".join([name, *ingredient_names])
     suggested = set()
     for definition in TAG_DEFS:
+        if definition.key in AUTO_RULE_TAGS:
+            continue
         target = haystack
-        if definition.key == "fish":
-            # 「魷魚／章魚／墨魚」字面含「魚」，但不應拿來充每週魚類次數。
-            for token in NON_FISH_SEAFOOD:
-                target = target.replace(token, " ")
         if any(keyword in target for keyword in definition.keywords):
             suggested.add(definition.key)
+    fish_text = haystack
+    for phrase in NON_FISH_PHRASES:
+        fish_text = fish_text.replace(phrase, " ")
+    if any(term in fish_text for term in FISH_TERMS):
+        suggested.add("fish")
+    category = (getattr(recipe, "category", "") or "").strip()
+    sweet_context = category in {"湯品", "點心"} or any(marker in name for marker in ("湯", "露", "芋圓", "粉圓", "湯圓"))
+    if sweet_context and any(term in name for term in SWEET_SOUP_TERMS):
+        suggested.add("sweet_soup")
+    explicitly_fried_ingredient = any("炸" in ingredient_name for ingredient_name in ingredient_names)
+    if any(term in name for term in FRIED_TERMS) or explicitly_fried_ingredient:
+        suggested.add("fried")
     if "vegetarian" in suggested and suggested & {"chicken", "pork", "beef", "fish"}:
         suggested.discard("vegetarian")
     return suggested

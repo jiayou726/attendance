@@ -108,9 +108,13 @@ def create_app(config_overrides=None) -> Flask:
         app.config.update(config_overrides)
 
     # Existing tests should never touch the default local practice.db unless a
-    # test explicitly supplies a practice bind of its own.
+    # test explicitly supplies a practice bind of its own. Keep the bind
+    # available, however, because Flask-SQLAlchemy retains bind metadata across
+    # app instances and drop_all() expects an engine for every known bind.
     if app.config.get("TESTING") and (not config_overrides or "SQLALCHEMY_BINDS" not in config_overrides):
-        app.config["SQLALCHEMY_BINDS"] = {}
+        app.config["SQLALCHEMY_BINDS"] = {
+            "practice": app.config["SQLALCHEMY_DATABASE_URI"],
+        }
 
     # 正式環境 fail closed：少了秘密或管理密碼就不要假裝安全上線。
     if app.config.get("PRODUCTION", False):

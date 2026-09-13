@@ -107,6 +107,11 @@ def create_app(config_overrides=None) -> Flask:
     if config_overrides:
         app.config.update(config_overrides)
 
+    # Existing tests should never touch the default local practice.db unless a
+    # test explicitly supplies a practice bind of its own.
+    if app.config.get("TESTING") and (not config_overrides or "SQLALCHEMY_BINDS" not in config_overrides):
+        app.config["SQLALCHEMY_BINDS"] = {}
+
     # 正式環境 fail closed：少了秘密或管理密碼就不要假裝安全上線。
     if app.config.get("PRODUCTION", False):
         if not app.config.get("SECRET_KEY_CONFIGURED", False):
@@ -152,11 +157,11 @@ def create_app(config_overrides=None) -> Flask:
     def home():
         return redirect(url_for("punch.qrcode_view"))
 
-    # 本機 SQLite / 明確指定的測試環境可自動建表。
-    # 正式 Supabase/PostgreSQL 預設關閉，應由 migration 管理 schema。
+    # 本機 SQLite / 明確指定的測試環境可自動建正式資料表。
+    # 練習 bind 一律在練習帳號第一次登入時才建立，避免啟動或測試誤碰沙盒。
     if app.config.get("AUTO_CREATE_DB", False):
         with app.app_context():
-            db.create_all()
+            db.create_all(bind_key=None)
     _ensure_kitchen_schema_compatibility(app)
 
     return app

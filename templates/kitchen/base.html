@@ -26,6 +26,13 @@
     </nav>
   </div>
 
+  {% if session.get('kitchen_practice') %}
+    <div class="flash warning no-print" role="status">
+      <b>練習模式：</b>目前團膳頁面的新增、修改、刪除、套用與採購操作都只寫入練習資料庫，不會影響正式資料。
+      <a href="{{ url_for('order_tool.ai_menu_practice_logout') }}" style="margin-left:8px">離開練習</a>
+    </div>
+  {% endif %}
+
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
       <div class="flash {{ category }}" role="status">{{ message }}</div>

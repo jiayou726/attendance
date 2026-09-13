@@ -1,8 +1,9 @@
-"""官方營養資料的讀取與食材對應。
+"""官方營養資料與團膳食材對應。
 
-熱量數值一律來自衛福部食藥署「臺灣食品營養成分資料庫」開放資料，
-存放在 data/nutrition/tfda_food_energy.csv（見 docs/nutrition_sources.md）。
-本模組不會自行推估任何熱量；對不上官方樣品的食材一律標記為待人工確認。
+優先使用衛福部食藥署「臺灣食品營養成分資料庫」樣品。
+若食材名稱無法唯一對應官方樣品，mapping 可提供明確標示的 low-confidence
+fallback_kcal；fallback 必須在 note 說明採用的代表品、區間或估值依據，
+不可冒充為 TFDA 精確樣品。
 """
 
 from __future__ import annotations
@@ -20,17 +21,18 @@ ENERGY_CSV = DATA_DIR / "tfda_food_energy.csv"
 INGREDIENT_MAP_CSV = DATA_DIR / "ingredient_tfda_map.csv"
 
 SOURCE_LABEL = "衛福部食藥署 臺灣食品營養成分資料庫"
+FALLBACK_SOURCE_LABEL = "團膳熱量預設值（TFDA 近似樣品／官方區間／產品估值）"
 
 STATUS_MATCHED = "matched"
+STATUS_ESTIMATED = "estimated"
 STATUS_PENDING = "pending"
 STATUS_VERIFIED = "verified"
 
-PENDING_NOTE = "名稱無法明確對應官方樣品，待人工確認"
+PENDING_NOTE = "名稱無法明確對應官方樣品，且尚未提供 fallback_kcal"
 
 
 @dataclass(frozen=True)
 class OfficialFood:
-    """官方資料庫的一筆樣品。"""
     code: str
     name: str
     alias: str
@@ -47,8 +49,8 @@ def normalize_name(value: str) -> str:
     return "".join(text.split())
 
 
-def _decimal(value: str) -> Decimal | None:
-    value = (value or "").strip()
+def _decimal(value) -> Decimal | None:
+    value = str(value or "").strip()
     if not value:
         return None
     try:
@@ -65,10 +67,8 @@ def official_foods() -> dict[str, OfficialFood]:
     with ENERGY_CSV.open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
             kcal = _decimal(row.get("kcal_per_100g", ""))
-            if kcal is None:
-                continue
             code = (row.get("tfda_code") or "").strip()
-            if not code:
+            if kcal is None or not code:
                 continue
             foods[code] = OfficialFood(
                 code=code,
@@ -87,6 +87,7 @@ class MapEntry:
     code: str
     confidence: str
     note: str
+    fallback_kcal: Decimal | None = None
 
 
 @lru_cache(maxsize=1)
@@ -103,6 +104,7 @@ def ingredient_code_map() -> dict[str, MapEntry]:
                 code=(row.get("tfda_code") or "").strip(),
                 confidence=(row.get("confidence") or "").strip(),
                 note=(row.get("note") or "").strip(),
+                fallback_kcal=_decimal(row.get("fallback_kcal")),
             )
     return mapping
 
@@ -111,8 +113,23 @@ def ingredient_code_map() -> dict[str, MapEntry]:
 class MatchResult:
     status: str
     food: OfficialFood | None = None
+    fallback_kcal: Decimal | None = None
     confidence: str = ""
     note: str = ""
+
+    @property
+    def kcal_per_100g(self) -> Decimal | None:
+        if self.food is not None:
+            return self.food.kcal_per_100g
+        return self.fallback_kcal
+
+    @property
+    def source_label(self) -> str:
+        if self.status == STATUS_MATCHED:
+            return SOURCE_LABEL
+        if self.status == STATUS_ESTIMATED:
+            return FALLBACK_SOURCE_LABEL
+        return ""
 
 
 def match_ingredient_name(name: str) -> MatchResult:
@@ -120,30 +137,53 @@ def match_ingredient_name(name: str) -> MatchResult:
     entry = ingredient_code_map().get(key)
     if entry is None:
         return MatchResult(status=STATUS_PENDING, note=PENDING_NOTE)
-    if not entry.code:
-        return MatchResult(status=STATUS_PENDING, note=entry.note or PENDING_NOTE)
-    food = official_foods().get(entry.code)
-    if food is None:
-        return MatchResult(status=STATUS_PENDING, note=f"對應編號 {entry.code} 不在官方資料檔中，待人工確認")
-    return MatchResult(status=STATUS_MATCHED, food=food, confidence=entry.confidence or "medium", note=entry.note)
+
+    if entry.code:
+        food = official_foods().get(entry.code)
+        if food is not None:
+            return MatchResult(
+                status=STATUS_MATCHED,
+                food=food,
+                confidence=entry.confidence or "medium",
+                note=entry.note,
+            )
+        if entry.fallback_kcal is None:
+            return MatchResult(
+                status=STATUS_PENDING,
+                note=f"對應編號 {entry.code} 不在本專案官方資料檔中，且無 fallback_kcal",
+            )
+
+    if entry.fallback_kcal is not None:
+        return MatchResult(
+            status=STATUS_ESTIMATED,
+            fallback_kcal=entry.fallback_kcal,
+            confidence=entry.confidence or "low",
+            note=entry.note,
+        )
+
+    return MatchResult(status=STATUS_PENDING, note=entry.note or PENDING_NOTE)
 
 
 def apply_match(ingredient, result: MatchResult) -> bool:
+    """把 match 寫到食材主檔；人工 verified 的值永遠不覆蓋。"""
     if ingredient.nutrition_verified:
         return False
+
     before = (
         ingredient.kcal_per_100g, ingredient.nutrition_source,
         ingredient.nutrition_food_name, ingredient.nutrition_code,
         ingredient.nutrition_confidence, ingredient.nutrition_status,
         ingredient.nutrition_note,
     )
-    if result.status == STATUS_MATCHED and result.food is not None:
-        ingredient.kcal_per_100g = result.food.kcal_per_100g
-        ingredient.nutrition_source = SOURCE_LABEL
-        ingredient.nutrition_food_name = result.food.name
-        ingredient.nutrition_code = result.food.code
-        ingredient.nutrition_confidence = result.confidence
-        ingredient.nutrition_status = STATUS_MATCHED
+
+    kcal = result.kcal_per_100g
+    if kcal is not None:
+        ingredient.kcal_per_100g = kcal
+        ingredient.nutrition_source = result.source_label
+        ingredient.nutrition_food_name = result.food.name if result.food else "團膳預設代表值"
+        ingredient.nutrition_code = result.food.code if result.food else None
+        ingredient.nutrition_confidence = result.confidence or ("high" if result.food else "low")
+        ingredient.nutrition_status = result.status
         ingredient.nutrition_note = result.note or None
     else:
         ingredient.kcal_per_100g = None
@@ -153,6 +193,7 @@ def apply_match(ingredient, result: MatchResult) -> bool:
         ingredient.nutrition_confidence = None
         ingredient.nutrition_status = STATUS_PENDING
         ingredient.nutrition_note = result.note or PENDING_NOTE
+
     after = (
         ingredient.kcal_per_100g, ingredient.nutrition_source,
         ingredient.nutrition_food_name, ingredient.nutrition_code,

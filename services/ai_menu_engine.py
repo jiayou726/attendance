@@ -81,14 +81,18 @@ def describe_rules(r):
     return lines
 
 def _vegetarian_compatible(recipe,tags):
-    names=[recipe.name or ""]+[row.ingredient.name or "" for row in recipe.ingredients or () if row.ingredient]
-    text=" ".join(names)
-    for phrase in ("素肉","素魚","素排","素雞","素火腿","素黑輪","素鍋貼","素燒賣","素水餃","素甜不辣"):text=text.replace(phrase," ")
-    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","大骨","骨湯","火腿","培根","貢丸","肉羹","黑輪","鍋貼","燒賣","水餃","甜不辣","熱狗","香腸","米血","血糕","獅子頭","福州丸","龍鳳腿","翅腿","翅小腿","腿排")
+    ingredient_names=[row.ingredient.name or "" for row in recipe.ingredients or () if row.ingredient]
+    if not ingredient_names:return False
+    names=[recipe.name or ""]+ingredient_names
+    text=" ".join(names).replace("雞蛋","蛋")
+    for phrase in ("素魚排","素雞排","素肉排","素火腿","素黑輪","素鍋貼","素燒賣","素水餃","素甜不辣","素肉","素魚","素排","素雞"):text=text.replace(phrase," ")
+    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","大骨","骨湯","火腿","培根","貢丸","肉羹","魚羹","黑輪","鍋貼","燒賣","水餃","甜不辣","熱狗","香腸","米血","血糕")
+    ambiguous_terms=("丸","排","腿","翅","捲","卷","堡","羹","獅子頭","滷味","關東煮","沙茶","柴魚","蠔油")
     if any(term in text for term in animal_terms):return False
-    # 主食與青菜本來就會和葷食菜單共用；其餘料理必須由菜名明確標示「素」。
-    category=(getattr(recipe,"category","") or "").strip()
-    return category in {"主食","青菜"} or "素" in (recipe.name or "")
+    if any(term in text for term in ambiguous_terms):return False
+    # 這四道正式配方雖未列肉類，但實際作業不是素食，不進共用池。
+    if (recipe.name or "").strip() in {"羅宋湯","玉米濃湯","酸辣湯","招牌炒飯"}:return False
+    return True
 
 def _vegetarian_pair_score(candidate,reference):
     if not reference:return 0

@@ -61,7 +61,7 @@ def test_vegetarian_compatibility_checks_recipe_ingredients_not_only_name():
             ingredients=[SimpleNamespace(ingredient=SimpleNamespace(name=item)) for item in ingredients],
         )
 
-    assert not _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "素肉"]), set())
+    assert _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "素肉"]), set())
     assert _vegetarian_compatible(recipe("麻婆豆腐(素)", ["豆腐", "素肉"]), set())
     assert _vegetarian_compatible(recipe("素魚排", ["素魚排"]), set())
     assert not _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "豬絞肉"]), {"vegetarian"})
@@ -70,6 +70,9 @@ def test_vegetarian_compatibility_checks_recipe_ingredients_not_only_name():
     assert not _vegetarian_compatible(recipe("遊龍鍋貼", ["鍋貼"]), set())
     assert _vegetarian_compatible(recipe("素鍋貼", ["素鍋貼"]), set())
     assert not _vegetarian_compatible(recipe("冬瓜大骨湯", ["冬瓜", "大骨"]), set())
+    assert _vegetarian_compatible(recipe("番茄炒蛋", ["番茄", "雞蛋"]), set())
+    assert not _vegetarian_compatible(recipe("福州丸", ["福州丸"]), set())
+    assert not _vegetarian_compatible(recipe("羅宋湯", ["番茄", "洋芋"]), set())
 
 
 def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypatch):

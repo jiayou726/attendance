@@ -785,7 +785,9 @@ def recipes():
         query = query.filter(KitchenRecipe.name.ilike(f"%{q}%"))
     rows = query.order_by(KitchenRecipe.active.desc(), KitchenRecipe.category, KitchenRecipe.name).all()
     edit_row = db.session.get(KitchenRecipe, _int(request.args.get("edit"), default=0)) if request.args.get("edit") else None
-    return render_template("kitchen/recipes.html", rows=rows, edit_row=edit_row, categories=CATEGORIES, q=q)
+    new_name=request.args.get("new_name","").strip();new_category=request.args.get("new_category","主菜").strip()
+    if new_category not in CATEGORIES:new_category="主菜"
+    return render_template("kitchen/recipes.html", rows=rows, edit_row=edit_row, categories=CATEGORIES, q=q,new_name=new_name,new_category=new_category)
 
 
 @order_bp.post("/recipes/<int:recipe_id>/update")

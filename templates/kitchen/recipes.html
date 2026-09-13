@@ -6,8 +6,8 @@
     <h2>{{ '編輯菜色' if edit_row else '新增菜色' }}</h2>
     <form class="main-form" method="post" action="{{ url_for('order_tool.recipe_update', recipe_id=edit_row.id) if edit_row else url_for('order_tool.recipes') }}">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <div class="field"><label>菜色名稱</label><input name="name" required value="{{ edit_row.name if edit_row else '' }}" placeholder="南洋綠咖哩雞"></div><br>
-      <div class="field"><label>分類</label><select name="category">{% for c in categories %}<option value="{{ c }}" {% if (edit_row.category if edit_row else '主菜') == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></div><br>
+      <div class="field"><label>菜色名稱</label><input name="name" required value="{{ edit_row.name if edit_row else new_name }}" placeholder="南洋綠咖哩雞"></div><br>
+      <div class="field"><label>分類</label><select name="category">{% for c in categories %}<option value="{{ c }}" {% if (edit_row.category if edit_row else new_category) == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></div><br>
       <div class="field"><label>預計打菜量 g / 人（可空白）</label><input name="serving_output_g" type="number" step="0.01" min="0" value="{{ edit_row.serving_output_g if edit_row and edit_row.serving_output_g is not none else '' }}" placeholder="95"><div class="muted">這是成品分餐量，不參與 AP 食材採購計算。</div></div><br>
       <div class="field"><label>備註</label><textarea name="note">{{ edit_row.note if edit_row and edit_row.note else '' }}</textarea></div><br>
       <button class="btn">{{ '儲存修改' if edit_row else '建立後設定配方' }}</button>

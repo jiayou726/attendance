@@ -14,7 +14,7 @@ from extensions import db
 from models import KitchenIngredient,KitchenMenuPlan,KitchenMenuPlanItem,KitchenRecipe,KitchenRecipeIngredient
 from ai_models import KitchenMealProfile,KitchenMenuDraft,KitchenMenuDraftItem
 from services import meal_profiles as profile_service, recipe_tags as tag_service
-from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,Rules,build_structure,describe_rules,generate,rebuild,replacement_options,service_dates
+from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates
 from services.nutrition import recipe_nutrition
 from services.nutrition_sources import STATUS_ESTIMATED,STATUS_MATCHED,match_ingredient_name
 from services.practice_database import ensure_practice_database
@@ -104,7 +104,10 @@ def ai_menu():
 def ai_menu_generate():
     pid=_int(request.form.get("profile_id"),default=0);profile=db.session.get(KitchenMealProfile,pid) if pid else None; settings,error=_settings(request.form,profile)
     if error:flash(error,"error");return redirect(url_for("order_tool.ai_menu"))
-    start,end,structure,rules,weekends=settings; result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends)
+    start,end,structure,rules,weekends=settings
+    try:result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends)
+    except RuleFeasibilityError as exc:
+        flash(f"無法產生符合硬限制的菜單：{exc}","error");return redirect(url_for("order_tool.ai_menu"))
     draft=KitchenMenuDraft(name=(request.form.get("name") or "").strip() or f"{profile.name} {start:%Y/%m}",profile_id=profile.id,start_date=start,end_date=end,include_weekends=weekends,meal_type="午餐",structure_json=json.dumps(structure,ensure_ascii=False),rules_json=json.dumps(rules.to_dict(),ensure_ascii=False),status="draft");db.session.add(draft);db.session.flush();_save_result(draft,result);db.session.commit();return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
 
 @order_bp.get("/ai-menu/drafts/<int:draft_id>")
@@ -122,7 +125,11 @@ def ai_menu_regenerate(draft_id):
         index={d:i for i,d in enumerate(old.dates)}
         for x in draft.items:
             if x.locked and x.service_date in index:locked[(index[x.service_date],x.category,x.slot_index)]=x.recipe_id
-    p=draft.profile;new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked);_save_result(draft,new,keep_locked=True);return _commit("已重新排菜；鎖定菜色保持不變。","order_tool.ai_menu_draft",draft_id=draft.id)
+    p=draft.profile
+    try:new=generate(draft.start_date,draft.end_date,old.structure,old.rules,int(p.kcal_min),int(p.kcal_max),draft.include_weekends,locked=locked)
+    except RuleFeasibilityError as exc:
+        flash(f"無法重新排菜：{exc}","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
+    _save_result(draft,new,keep_locked=True);return _commit("已重新排菜；鎖定菜色保持不變。","order_tool.ai_menu_draft",draft_id=draft.id)
 
 @order_bp.get("/ai-menu/drafts/<int:draft_id>/swap")
 def ai_menu_swap(draft_id):
@@ -140,6 +147,12 @@ def ai_menu_swap_apply(draft_id):
     item=next((x for x in draft.items if x.service_date==d and x.category==cat and x.slot_index==slot),None)
     if not item:abort(404)
     if rid and any(x.service_date==d and x.recipe_id==rid and x.id!=item.id for x in draft.items):flash("同一天不能重複同一道菜。","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
+    result=_draft_result(draft)
+    if d not in result.dates:abort(404)
+    key=(result.dates.index(d),cat,slot);trial=dict(result.assignment);trial[key]=rid
+    violations=hard_rule_violations(result.dates,result.rules,trial,result.candidates)
+    if violations:
+        flash("不能換成這道菜："+"；".join(violations),"error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     item.recipe_id=rid;return _commit("已換菜，熱量與規則分數已重新計算。","order_tool.ai_menu_draft",draft_id=draft.id)
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/lock-item")
@@ -161,6 +174,9 @@ def ai_menu_apply(draft_id):
     if request.form.get("confirm_apply")!="YES":flash("未套用：請先確認。","error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft_id))
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if not draft:abort(404)
+    result=_draft_result(draft);violations=hard_rule_violations(result.dates,result.rules,result.assignment,result.candidates)
+    if violations:
+        flash("無法套用：目前菜單違反硬限制："+"；".join(violations),"error");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
     grouped=defaultdict(list)
     for x in draft.items:
         if x.recipe_id:grouped[x.service_date].append(x)

@@ -1,12 +1,12 @@
 {% extends 'kitchen/base.html' %}
-{% block title %}{{ '練習排菜' if practice else 'AI 菜單' }}{% endblock %}
+{% block title %}{{ 'AI 菜單（練習）' if practice else 'AI 菜單' }}{% endblock %}
 {% block head %}<style>.ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.ai-box{padding:14px;border:1px solid #d7dedb;border-radius:12px;background:#fff}.ai-banner{padding:14px;border-radius:12px;background:#eef8f3;margin-bottom:16px}.ai-warn{background:#fff4df}.ai-form label{display:block;font-weight:700;margin-bottom:5px}.ai-form input,.ai-form select{width:100%}.ai-actions{display:flex;gap:8px;flex-wrap:wrap}</style>{% endblock %}
 {% block content %}
-<div class="top"><div><span class="eyebrow">{{ 'READ ONLY PRACTICE' if practice else 'RULE-BASED MENU PLANNER' }}</span><h1>{{ '練習專用排菜' if practice else 'AI 菜單／自動排菜' }}</h1></div><div class="ai-actions">{% if practice %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.ai_recipe_tags') }}">菜色標記</a><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_login') }}">練習入口</a>{% endif %}</div></div>
-<div class="ai-banner {{ 'ai-warn' if practice else '' }}">{% if practice %}<b>練習模式不會建立草稿、不會寫入正式菜單。</b> 你可以測試日期、規則與熱量結果。{% else %}先產生草稿，確認後才可按「套用正式菜單」。排菜本身不會直接改正式菜單。{% endif %}</div>
-<form class="card ai-form" method="post" action="{{ url_for('order_tool.ai_menu_practice_generate') if practice else url_for('order_tool.ai_menu_generate') }}">
+<div class="top"><div><span class="eyebrow">{{ 'PRACTICE SANDBOX' if practice else 'RULE-BASED MENU PLANNER' }}</span><h1>{{ 'AI 菜單／練習模式' if practice else 'AI 菜單／自動排菜' }}</h1></div><div class="ai-actions"><a class="btn secondary" href="{{ url_for('order_tool.ai_recipe_tags') }}">菜色標記</a>{% if practice %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_login') }}">練習入口</a>{% endif %}</div></div>
+<div class="ai-banner {{ 'ai-warn' if practice else '' }}">{% if practice %}<b>目前是完整練習沙盒。</b> 你可以建立草稿、修改主檔、套用菜單、產生採購與刪除資料；所有寫入都只進練習資料庫，不會影響正式資料。{% else %}先產生草稿，確認後才可按「套用正式菜單」。排菜本身不會直接改正式菜單。{% endif %}</div>
+<form class="card ai-form" method="post" action="{{ url_for('order_tool.ai_menu_generate') }}">
 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-{% if not practice %}<div class="field"><label>草稿名稱</label><input name="name" value="AI 自動排菜"></div><br>{% endif %}
+<div class="field"><label>草稿名稱</label><input name="name" value="{{ '練習 AI 自動排菜' if practice else 'AI 自動排菜' }}"></div><br>
 <div class="ai-grid">
   <div><label>供餐對象</label><select name="profile_code" required><option value="">請選擇</option>{% for p in profiles %}<option value="{{ p.code }}">{{ p.name }}｜{{ p.kcal_label }}</option>{% endfor %}</select></div>
   <div><label>開始日期</label><input type="date" name="start_date" value="{{ start_default.isoformat() }}" required></div>
@@ -20,7 +20,7 @@
 <div><label>每週炸物最多</label><input type="number" min="0" max="10" name="fried_per_week_max" value="1"></div>
 <div><label>每週甜湯最多</label><input type="number" min="0" max="10" name="sweet_soup_per_week_max" value="1"></div>
 </div><br><label><input style="width:auto" type="checkbox" name="exclude_incomplete_nutrition" value="1" checked> 排除無法確認熱量的菜色</label><br><br>
-<button class="btn" type="submit">{{ '產生練習結果' if practice else '產生 AI 菜單草稿' }}</button>
+<button class="btn" type="submit">{{ '產生練習草稿' if practice else '產生 AI 菜單草稿' }}</button>
 </form>
-{% if not practice %}<section class="card"><h2>最近草稿</h2>{% if drafts %}<div class="table-scroll"><table><thead><tr><th>名稱</th><th>日期</th><th>狀態</th><th></th></tr></thead><tbody>{% for d in drafts %}<tr><td>{{ d.name }}</td><td>{{ d.start_date }} ～ {{ d.end_date }}</td><td>{{ d.status }}</td><td><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_draft',draft_id=d.id) }}">開啟</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">尚無草稿。</div>{% endif %}</section>{% endif %}
+<section class="card"><h2>{{ '練習草稿' if practice else '最近草稿' }}</h2>{% if drafts %}<div class="table-scroll"><table><thead><tr><th>名稱</th><th>日期</th><th>狀態</th><th></th></tr></thead><tbody>{% for d in drafts %}<tr><td>{{ d.name }}</td><td>{{ d.start_date }} ～ {{ d.end_date }}</td><td>{{ d.status }}</td><td><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_draft',draft_id=d.id) }}">開啟</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">尚無草稿。</div>{% endif %}</section>
 {% endblock %}

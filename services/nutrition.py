@@ -26,7 +26,6 @@ class RecipeNutrition:
     recipe_id: int
     kcal_per_person: Decimal | None
     missing_ingredients: list[str] = field(default_factory=list)
-    # 有 BOM 但完全沒有原料列時另外說明，避免和「缺熱量」混在一起。
     has_ingredients: bool = True
 
     @property
@@ -41,8 +40,6 @@ class RecipeNutrition:
 
     @property
     def reason(self) -> str:
-        """畫面上要顯示的不完整原因；資料完整時回傳空字串。"""
-
         if self.complete:
             return ""
         if not self.has_ingredients:
@@ -59,20 +56,13 @@ class RecipeNutrition:
 
 
 def ingredient_grams(ingredient, amount_per_person) -> Decimal | None:
-    """把每人用量換算成公克。無法換算時回傳 None。
-
-    base_unit=g  ── 用量本身就是公克。
-    base_unit=個 ── 需要食材的 edible_grams_per_unit（1 個等於多少公克）；
-                    沒有這個換算資料就不猜，直接回傳 None。
-    """
-
     if amount_per_person is None:
         return None
     amount = Decimal(str(amount_per_person))
     base_unit = (ingredient.base_unit or "g").strip() or "g"
     if base_unit == "g":
         return amount
-    per_unit = ingredient.edible_grams_per_unit
+    per_unit = getattr(ingredient, "edible_grams_per_unit", None)
     if per_unit is None:
         return None
     per_unit = Decimal(str(per_unit))
@@ -81,16 +71,21 @@ def ingredient_grams(ingredient, amount_per_person) -> Decimal | None:
     return amount * per_unit
 
 
-def recipe_nutrition(recipe) -> RecipeNutrition:
-    """算出一道菜的每人熱量。recipe.ingredients 需已載入。"""
+def _ingredient_kcal(ingredient) -> Decimal | None:
+    kcal = getattr(ingredient, "kcal_per_100g", None)
+    if kcal is not None:
+        return Decimal(str(kcal))
+    from services.nutrition_sources import STATUS_MATCHED, match_ingredient_name
+    matched = match_ingredient_name(ingredient.name)
+    if matched.status == STATUS_MATCHED and matched.food is not None:
+        return Decimal(str(matched.food.kcal_per_100g))
+    return None
 
+
+def recipe_nutrition(recipe) -> RecipeNutrition:
     rows = list(recipe.ingredients or ())
     if not rows:
-        return RecipeNutrition(
-            recipe_id=recipe.id,
-            kcal_per_person=None,
-            has_ingredients=False,
-        )
+        return RecipeNutrition(recipe_id=recipe.id, kcal_per_person=None, has_ingredients=False)
 
     total = Decimal("0")
     missing: list[str] = []
@@ -100,30 +95,22 @@ def recipe_nutrition(recipe) -> RecipeNutrition:
             missing.append("未知食材")
             continue
         grams = ingredient_grams(ingredient, row.grams_per_person)
-        kcal_per_100g = ingredient.kcal_per_100g
+        kcal_per_100g = _ingredient_kcal(ingredient)
         if grams is None or kcal_per_100g is None:
             missing.append(ingredient.name)
             continue
-        total += grams / HUNDRED * Decimal(str(kcal_per_100g))
+        total += grams / HUNDRED * kcal_per_100g
 
     if missing:
-        return RecipeNutrition(
-            recipe_id=recipe.id,
-            kcal_per_person=None,
-            missing_ingredients=missing,
-        )
+        return RecipeNutrition(recipe_id=recipe.id, kcal_per_person=None, missing_ingredients=missing)
     return RecipeNutrition(recipe_id=recipe.id, kcal_per_person=total)
 
 
 def bulk_recipe_nutrition(recipes) -> dict[int, RecipeNutrition]:
-    """一次算多道菜，回傳 recipe_id → 結果。"""
-
     return {recipe.id: recipe_nutrition(recipe) for recipe in recipes}
 
 
 def day_kcal(nutritions) -> tuple[int | None, list[str]]:
-    """一天的總熱量。任何一道菜資料不完整就回傳 (None, 不完整的菜名)。"""
-
     total = Decimal("0")
     incomplete: list[str] = []
     for name, nutrition in nutritions:

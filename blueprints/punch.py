@@ -179,11 +179,16 @@ def _nearest_distance_m(lat: float, lon: float, points: list[tuple[float, float]
         return None
     return min(_haversine_m(lat, lon, p_lat, p_lon) for p_lat, p_lon in points)
 
+@punch_bp.route("/kitchen", methods=["GET"])
+def kitchen_formal_entry():
+    session.pop("kitchen_practice", None)
+    return redirect(url_for("order_tool.index"))
+
 # ????????????????????????  QR Code ?Ｙ??? ????????????????????????
 @punch_bp.route("/qrcode", methods=["GET", "POST"])
 def qrcode_view():
     qr_text = url_for('punch.form', _external=True)
-    order_tool_url = url_for('order_tool.index')
+    order_tool_url = url_for('punch.kitchen_formal_entry')
 
     qr_auto = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_H,
                             box_size=10, border=2)
@@ -273,7 +278,6 @@ def qrcode_view():
         '</html>'
     ])
 
-
     return render_template_string(tpl, HEAD=HEAD, b64=b64, qr_text=qr_text, order_tool_url=order_tool_url)
 
 # ????????????????????????  ?亙嚗? QR ???圈ㄐ嚗?甈∠? token 銝血???/use嚗?????????????????????????
@@ -289,7 +293,7 @@ def form():
             "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
-    tok = _new_token()  # 瘥活???賜? token
+    tok = _new_token()
     return redirect(url_for(".use", tk=tok["value"]))
 
 # ????????????????????????  憿舐內銵典嚗?亙????Ｙ???token嚗?????????????????????????
@@ -305,7 +309,6 @@ def use():
             "<p><a href='/admin/login'>管理登入</a></p></body></html>"
         )
 
-    # gate 敹?隞???& IP ?芾?嚗oken 敹?隞???
     gate = session.get("punch_gate")
     now = int(time.time())
     ok_gate = gate and gate.get("bind") == _bind_fingerprint() and now <= int(gate.get("exp", 0))
@@ -324,7 +327,6 @@ def use():
     require_accuracy_m = float(current_app.config.get("PUNCH_REQUIRE_ACCURACY_M", 150))
     points = _geofence_points()
 
-    # 憿舐內銵典嚗idden 撣?token嚗?? left 蝘??寧 f-string嚗?? % ?澆???
     return render_template_string(
         f"<!doctype html><html><head>{HEAD}</head><body>"
         "<h2>線上打卡</h2>"
@@ -435,17 +437,14 @@ def punch():
     if typ not in {"am-in", "am-out", "pm-in", "pm-out", "ot-in", "ot-out"}:
         return redirect(url_for(".card", eid=eid, st="error", msg="請選擇打卡時段。"))
 
-    # gate 敹?隞???IP ?芾?銝??嚗?
     gate = session.get("punch_gate")
     now = int(time.time())
     if not gate or gate.get("bind") != _bind_fingerprint() or now > int(gate.get("exp", 0)):
         return redirect(url_for(".form", err="連線已失效，請重新掃描 QR Code。"))
 
-    # token ?格活撽?
     if not _consume_token(token):
         return redirect(url_for(".form", err="Token 已失效，請重新掃描 QR Code。"))
 
-    # 位置圍欄後端二次驗證
     if current_app.config.get("PUNCH_GEOFENCE_ENABLED", False):
         try:
             lat = float((request.form.get("lat") or "").strip())
@@ -467,7 +466,6 @@ def punch():
         if nearest_m is None or nearest_m > allow_radius_m:
             return redirect(url_for(".card", eid=eid, st="error", msg="不在打卡範圍內。"))
 
-    # ???瘚?
     now_dt = datetime.now()
     wd = now_dt.date().isoformat()
     ts = now_dt.isoformat(timespec="seconds")
@@ -559,4 +557,3 @@ def card(eid: str):
         f"<p><a href='{url_for('.form')}'>返回線上打卡</a></p>"
         "</body></html>"
     )
-

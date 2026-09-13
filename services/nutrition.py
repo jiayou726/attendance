@@ -1,13 +1,11 @@
 """菜色熱量計算。
 
-熱量一律即時由 Recipe BOM 算出，不另外存一份快取欄位，
-所以食材熱量或每人用量一改，畫面上的數字就跟著變。
-
-計算方式（依需求規格）：
+熱量即時由 Recipe BOM 算出：
     每人熱量 = Σ（每人用量換算成公克 ÷ 100 × 食材 kcal/100g）
 
-缺少任何一項食材的官方熱量時，整道菜視為「營養資料不完整」，
-不會用 0 代替，也不會只算得到的部分當成正確值。
+優先使用食材主檔人工確認值；主檔未填時再讀 nutrition mapping。
+Mapping 可是 TFDA 精確樣品，也可以是已明確標示 low-confidence 的團膳 fallback。
+只有兩者都不存在時，才把整道菜標成營養資料不完整。
 """
 
 from __future__ import annotations
@@ -15,14 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
+from services.nutrition_sources import match_ingredient_name
+
 HUNDRED = Decimal("100")
 KCAL_QUANTUM = Decimal("1")
 
 
 @dataclass
 class RecipeNutrition:
-    """一道菜的每人熱量結果。"""
-
     recipe_id: int
     kcal_per_person: Decimal | None
     missing_ingredients: list[str] = field(default_factory=list)
@@ -75,11 +73,8 @@ def _ingredient_kcal(ingredient) -> Decimal | None:
     kcal = getattr(ingredient, "kcal_per_100g", None)
     if kcal is not None:
         return Decimal(str(kcal))
-    from services.nutrition_sources import STATUS_MATCHED, match_ingredient_name
     matched = match_ingredient_name(ingredient.name)
-    if matched.status == STATUS_MATCHED and matched.food is not None:
-        return Decimal(str(matched.food.kcal_per_100g))
-    return None
+    return matched.kcal_per_100g
 
 
 def recipe_nutrition(recipe) -> RecipeNutrition:

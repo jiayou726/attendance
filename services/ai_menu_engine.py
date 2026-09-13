@@ -83,8 +83,8 @@ def describe_rules(r):
 def _vegetarian_compatible(recipe,tags):
     names=[recipe.name or ""]+[row.ingredient.name or "" for row in recipe.ingredients or () if row.ingredient]
     text=" ".join(names)
-    for phrase in ("素肉","素魚","素排","素雞","素火腿"):text=text.replace(phrase," ")
-    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","火腿","培根","貢丸","肉羹")
+    for phrase in ("素肉","素魚","素排","素雞","素火腿","素黑輪","素鍋貼","素燒賣","素水餃","素甜不辣"):text=text.replace(phrase," ")
+    animal_terms=("豬","牛","羊","雞","鴨","鵝","魚","蝦","蟹","蛤","貝","蚵","魷","花枝","小卷","海鮮","肉","排骨","火腿","培根","貢丸","肉羹","黑輪","鍋貼","燒賣","水餃","甜不辣","熱狗","香腸")
     return not any(term in text for term in animal_terms)
 
 def load_candidates():

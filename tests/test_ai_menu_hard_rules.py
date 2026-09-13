@@ -65,6 +65,9 @@ def test_vegetarian_compatibility_checks_recipe_ingredients_not_only_name():
     assert _vegetarian_compatible(recipe("素魚排", ["素魚排"]), set())
     assert not _vegetarian_compatible(recipe("麻婆豆腐", ["豆腐", "豬絞肉"]), {"vegetarian"})
     assert not _vegetarian_compatible(recipe("白菜羹", ["白菜", "肉羹"]), set())
+    assert not _vegetarian_compatible(recipe("蒲瓜黑輪", ["蒲瓜", "黑輪"]), set())
+    assert not _vegetarian_compatible(recipe("遊龍鍋貼", ["鍋貼"]), set())
+    assert _vegetarian_compatible(recipe("素鍋貼", ["素鍋貼"]), set())
 
 
 def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypatch):

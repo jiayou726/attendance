@@ -46,6 +46,18 @@ def _trim(value):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _production_nav_state():
+    """Provide the shared kitchen base template with a safe production-sheet target."""
+    latest = (
+        KitchenPurchaseOrder.query.filter(KitchenPurchaseOrder.status != "cancelled")
+        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
+        .first()
+    )
+    if latest:
+        return latest.service_date, True
+    return date.today(), False
+
+
 def _expected_sources(week_start, week_end):
     """Rebuild demand from the current school menu and current recipe BOM."""
     assignments = (
@@ -187,6 +199,7 @@ def weekly_procurement():
     orders, vendors, anomalies = _weekly_data(week_start, week_end)
     total_items = sum(len(order.items) for order in orders)
     ordered_items = sum(1 for order in orders for item in order.items if item.ordered)
+    production_nav_date, production_nav_available = _production_nav_state()
     return render_template(
         "kitchen/weekly_procurement.html",
         week_start=week_start,
@@ -198,6 +211,8 @@ def weekly_procurement():
         total_items=total_items,
         ordered_items=ordered_items,
         trim_decimal=_trim,
+        production_nav_date=production_nav_date,
+        production_nav_available=production_nav_available,
     )
 
 

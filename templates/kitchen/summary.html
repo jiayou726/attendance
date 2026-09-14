@@ -10,9 +10,8 @@
 {% block content %}
 <section class="summary-week-head">
   <div>
-    <div class="eyebrow">KITCHEN V2</div>
     <h1>每週菜單總表</h1>
-    <div class="muted">{{ week_start.strftime('%Y/%m/%d') }} — {{ week_end.strftime('%Y/%m/%d') }}　直接在每天欄位新增菜色。</div>
+    <div class="muted">先排出每天要供應的菜；排好後再去各校勾選菜色與填人數。</div>
   </div>
   <nav class="week-switcher" aria-label="切換週次">
     <a class="btn secondary" href="{{ url_for('order_tool.summary', week=previous_week.isoformat()) }}">← 上一週</a>

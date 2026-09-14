@@ -231,6 +231,8 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "每週菜單總表" in page
+    assert "KITCHEN V2" not in page
+    assert "先排出每天要供應的菜" in page
     assert all(label in page for label in ("週一", "週二", "週三", "週四", "週五", "週六", "週日"))
     assert "08/10" in page and "08/16" in page
     assert "搜尋或輸入新菜色" in page

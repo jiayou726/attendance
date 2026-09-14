@@ -201,6 +201,39 @@ def weekly_procurement():
     )
 
 
+@weekly_procurement_bp.get("/weekly-procurement/summary.json")
+def weekly_procurement_summary():
+    """Small dashboard payload so the home page can show exactly one selected week."""
+    selected = _as_date(request.args.get("week"))
+    week_start, week_end = _week_bounds(selected)
+    orders = (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date.between(week_start, week_end),
+        )
+        .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.id)
+        .all()
+    )
+    rows = []
+    for order in orders:
+        item_count = len(order.items)
+        rows.append({
+            "id": order.id,
+            "date": order.service_date.isoformat(),
+            "status": order.status or "draft",
+            "status_label": {"draft": "草稿", "confirmed": "已確認", "cancelled": "已取消"}.get(order.status, order.status or "-"),
+            "ordered_count": sum(1 for item in order.items if item.ordered),
+            "item_count": item_count,
+            "total": _trim(sum((_d(item.amount) for item in order.items), Decimal("0"))),
+        })
+    return {
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "previous_week": (week_start - timedelta(days=7)).isoformat(),
+        "next_week": (week_start + timedelta(days=7)).isoformat(),
+        "orders": rows,
+    }
+
+
 def _safe_sheet_name(name, used):
     base = re.sub(r"[\\/*?:\[\]]", "_", name or "未指定廠商")[:31] or "採購單"
     candidate = base

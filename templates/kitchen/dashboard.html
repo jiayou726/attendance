@@ -2,7 +2,7 @@
 {% block title %}廚房首頁{% endblock %}
 {% block body_class %}dashboard-page{% endblock %}
 {% block content %}
-<section class="home-welcome"><div><span class="eyebrow">今天要排菜嗎？</span><h1>開啟菜單</h1></div><a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開啟總表</a></section>
+<section class="home-welcome"><div><h1>開始叫菜</h1></div><a class="btn home-primary" href="{{ url_for('order_tool.summary') }}">開啟總表</a></section>
 {% if pending_component_count %}<div class="notice warning-home"><b>{{ pending_component_count }} 筆材料克數待確認</b>　材料名稱已匯入；確認克數後才會加入總量，避免叫錯貨。<a href="{{ url_for('order_tool.recipes') }}">去查看</a></div>{% endif %}
 <section class="home-section" aria-labelledby="home-functions-title"><div class="home-section-heading"><span class="eyebrow">功能選單</span><h2 id="home-functions-title">你要處理哪一項？</h2></div><div class="home-actions">
 <a class="home-action summary" href="{{ url_for('order_tool.summary') }}"><span class="home-icon">表</span><span><b>總表</b><small>安排每週菜單，再分配各校菜色與供餐人數。</small></span><i>›</i></a>

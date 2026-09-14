@@ -132,7 +132,8 @@ def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     response = client.get("/admin/order-tool/", follow_redirects=False)
     assert response.status_code == 200
     page = response.get_data(as_text=True)
-    assert "開啟菜單" in page
+    assert "開始叫菜" in page
+    assert "開啟總表" in page
     assert all(label in page for label in (
         "總表", "菜色配方", "食材", "學校", "廠商", "採購叫貨",
         "菜色用量表", "每日廚房表格",

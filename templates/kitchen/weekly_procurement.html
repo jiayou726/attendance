@@ -1,0 +1,52 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}週採購單{% endblock %}
+{% block content %}
+<style>
+.week-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.week-nav{display:flex;gap:8px;flex-wrap:wrap}.audit-summary{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.audit-box{padding:12px 16px;border:1px solid #dfe4ea;border-radius:12px;background:#fff}.audit-ok{border-color:#b7dfc5;background:#f4fbf6}.audit-warn{border-color:#f1d39a;background:#fff9ec}.issue-list{display:grid;gap:8px;margin-top:12px}.issue{padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #efcf91}.vendor{margin-top:18px}.delivery{margin-top:12px;border-top:1px solid #e7eaee;padding-top:12px}.purchase-row{padding:14px 0;border-bottom:1px solid #edf0f2}.purchase-main{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.source-list{margin:8px 0 0 18px;padding:0}.source-list li{margin:7px 0}.school-list{color:#667085;font-size:.92em}.qty{font-weight:700;white-space:nowrap}@media(max-width:720px){.week-nav .btn{flex:1}.purchase-main{display:block}.qty{margin-top:4px}.source-list{margin-left:16px}}
+</style>
+<section class="card span-12">
+  <div class="week-head">
+    <div><h2>週採購單</h2><div class="muted">{{ week_start.strftime('%Y/%m/%d') }} ～ {{ week_end.strftime('%Y/%m/%d') }}｜依廠商與交貨日期整理</div></div>
+    <div class="week-nav">
+      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=previous_week.isoformat()) }}">上一週</a>
+      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=next_week.isoformat()) }}">下一週</a>
+      <a class="btn" href="{{ url_for('weekly_procurement.weekly_procurement_export',week=week_start.isoformat()) }}">匯出廠商版</a>
+    </div>
+  </div>
+  <div class="audit-summary">
+    <div class="audit-box {{ 'audit-ok' if not anomalies else 'audit-warn' }}"><b>自動核對</b><br>{% if anomalies %}{{ anomalies|length }} 筆需確認{% else %}目前未發現異常{% endif %}</div>
+    <div class="audit-box"><b>叫貨進度</b><br>{{ ordered_items }} / {{ total_items }}</div>
+    <div class="audit-box"><b>檢查方式</b><br>菜單 → 配方 → 食材，並反向檢查採購品項是否仍有來源</div>
+  </div>
+  {% if anomalies %}
+  <details open><summary><b>只看異常（{{ anomalies|length }}）</b></summary><div class="issue-list">
+    {% for issue in anomalies %}<div class="issue"><b>{{ issue.date.strftime('%m/%d') }}｜{{ issue.ingredient }}</b><div>{{ issue.message }}</div></div>{% endfor %}
+  </div></details>
+  {% endif %}
+</section>
+
+{% if vendors %}
+  {% for vendor in vendors %}
+  <section class="card span-12 vendor">
+    <h2>{{ vendor.name }}</h2>
+    {% for delivery in vendor.deliveries %}
+    <div class="delivery"><h3>{{ delivery.date.strftime('%m/%d') }} 交貨</h3>
+      {% for row in delivery.rows %}{% set item=row.item %}
+      <div class="purchase-row">
+        <div class="purchase-main"><div><b>{{ item.ingredient_name_snapshot }}</b><div class="muted">供餐日 {{ row.order.service_date.strftime('%m/%d') }}</div></div><div class="qty">實際採購 {{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</div></div>
+        {% if row.sources %}<ul class="source-list">
+          {% for source in row.sources %}
+          <li><b>{{ row.order.service_date.strftime('%m/%d') }} {{ source.recipe_name }}</b> → {{ source.schools|sum(attribute='headcount') }} 人
+            <div class="school-list">{% for school in source.schools %}{{ school.name }} {{ school.headcount }} 人{% if not loop.last %}｜{% endif %}{% endfor %}</div>
+            <div>→ 實際採購量（按需求比例） {{ trim_decimal(source.allocated_actual_qty) }} {{ item.purchase_unit_snapshot }}</div>
+          </li>
+          {% endfor %}
+        </ul>{% else %}<div class="issue" style="margin-top:8px">目前菜單找不到這筆採購的來源。</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+{% else %}<section class="card span-12"><div class="empty">本週尚未建立採購單。</div></section>{% endif %}
+{% endblock %}

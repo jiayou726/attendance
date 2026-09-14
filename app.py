@@ -27,6 +27,7 @@ import blueprints.ai_menu  # noqa: F401
 from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
 from blueprints.nonregistered_menu_format import install_nonregistered_menu_export_format_fix
+from blueprints.weekly_procurement import weekly_procurement_bp
 
 
 def _ensure_kitchen_schema_compatibility(app: Flask):
@@ -136,6 +137,7 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(exp_bp, url_prefix="/admin")
     app.register_blueprint(import_bp, url_prefix="/admin")
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
+    app.register_blueprint(weekly_procurement_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(punch_bp)
 

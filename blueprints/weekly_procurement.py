@@ -10,13 +10,17 @@ import re
 from flask import Blueprint, render_template, request, send_file
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from sqlalchemy.orm import selectinload
 
 from extensions import db
 from models import (
     KitchenIngredient,
     KitchenMenuAssignment,
     KitchenMenuPlan,
+    KitchenMenuPlanItem,
     KitchenPurchaseOrder,
+    KitchenPurchaseOrderItem,
+    KitchenRecipe,
 )
 
 weekly_procurement_bp = Blueprint("weekly_procurement", __name__)
@@ -46,26 +50,26 @@ def _trim(value):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def _production_nav_state():
-    """Provide the shared kitchen base template with a safe production-sheet target."""
-    latest = (
-        KitchenPurchaseOrder.query.filter(KitchenPurchaseOrder.status != "cancelled")
-        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
-        .first()
-    )
-    if latest:
-        return latest.service_date, True
-    return date.today(), False
-
-
 def _expected_sources(week_start, week_end):
-    """Rebuild demand from the current school menu and current recipe BOM."""
+    """Rebuild demand from the current school menu and current recipe BOM.
+
+    All relationships needed by the calculation are eagerly loaded in batches.
+    This avoids the old N+1 pattern where each assignment / plan / recipe caused
+    another round trip to Supabase.
+    """
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
             KitchenMenuPlan.service_date.between(week_start, week_end),
             KitchenMenuAssignment.service_status == "serving",
             KitchenMenuAssignment.headcount > 0,
+        )
+        .options(
+            selectinload(KitchenMenuAssignment.school),
+            selectinload(KitchenMenuAssignment.plan)
+            .selectinload(KitchenMenuPlan.items)
+            .selectinload(KitchenMenuPlanItem.recipe)
+            .selectinload(KitchenRecipe.ingredients),
         )
         .all()
     )
@@ -109,6 +113,10 @@ def _orders_for_week(week_start, week_end):
         KitchenPurchaseOrder.query.filter(
             KitchenPurchaseOrder.service_date.between(week_start, week_end),
             KitchenPurchaseOrder.status != "cancelled",
+        )
+        .options(
+            selectinload(KitchenPurchaseOrder.items)
+            .selectinload(KitchenPurchaseOrderItem.supplier)
         )
         .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.id)
         .all()
@@ -192,6 +200,28 @@ def _weekly_data(week_start, week_end):
     return orders, vendors, anomalies
 
 
+def _production_nav_state():
+    today = date.today()
+    order = (
+        KitchenPurchaseOrder.query.filter(KitchenPurchaseOrder.service_date <= today)
+        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
+        .first()
+        or KitchenPurchaseOrder.query.order_by(
+            KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc()
+        ).first()
+    )
+    return (order.service_date, True) if order else (today, False)
+
+
+@weekly_procurement_bp.app_context_processor
+def _weekly_template_helpers():
+    production_nav_date, production_nav_available = _production_nav_state()
+    return {
+        "production_nav_date": production_nav_date,
+        "production_nav_available": production_nav_available,
+    }
+
+
 @weekly_procurement_bp.get("/weekly-procurement")
 def weekly_procurement():
     selected = _as_date(request.args.get("week"))
@@ -199,7 +229,6 @@ def weekly_procurement():
     orders, vendors, anomalies = _weekly_data(week_start, week_end)
     total_items = sum(len(order.items) for order in orders)
     ordered_items = sum(1 for order in orders for item in order.items if item.ordered)
-    production_nav_date, production_nav_available = _production_nav_state()
     return render_template(
         "kitchen/weekly_procurement.html",
         week_start=week_start,
@@ -211,8 +240,6 @@ def weekly_procurement():
         total_items=total_items,
         ordered_items=ordered_items,
         trim_decimal=_trim,
-        production_nav_date=production_nav_date,
-        production_nav_available=production_nav_available,
     )
 
 
@@ -225,6 +252,7 @@ def weekly_procurement_summary():
         KitchenPurchaseOrder.query.filter(
             KitchenPurchaseOrder.service_date.between(week_start, week_end),
         )
+        .options(selectinload(KitchenPurchaseOrder.items))
         .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.id)
         .all()
     )

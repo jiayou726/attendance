@@ -2,17 +2,18 @@
 {% block title %}週採購單{% endblock %}
 {% block content %}
 <style>
-.week-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.week-nav{display:flex;gap:8px;flex-wrap:wrap}.audit-summary{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.audit-box{padding:12px 16px;border:1px solid #dfe4ea;border-radius:12px;background:#fff}.audit-ok{border-color:#b7dfc5;background:#f4fbf6}.audit-warn{border-color:#f1d39a;background:#fff9ec}.issue-list{display:grid;gap:8px;margin-top:12px}.issue{padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #efcf91}.vendor{margin-top:18px}.delivery{margin-top:12px;border-top:1px solid #e7eaee;padding-top:12px}.purchase-row{padding:14px 0;border-bottom:1px solid #edf0f2}.purchase-main{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.source-list{margin:8px 0 0 18px;padding:0}.source-list li{margin:7px 0}.school-list{color:#667085;font-size:.92em}.qty{font-weight:700;white-space:nowrap}@media(max-width:720px){.week-nav .btn{flex:1}.purchase-main{display:block}.qty{margin-top:4px}.source-list{margin-left:16px}}
+.week-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.week-nav{display:grid;grid-template-columns:auto auto auto;gap:8px;align-items:center}.week-picker{display:flex;gap:8px;align-items:end;margin-top:12px}.week-picker label{display:grid;gap:4px}.audit-summary{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.audit-box{padding:12px 16px;border:1px solid #dfe4ea;border-radius:12px;background:#fff}.audit-ok{border-color:#b7dfc5;background:#f4fbf6}.audit-warn{border-color:#f1d39a;background:#fff9ec}.issue-list{display:grid;gap:8px;margin-top:12px}.issue{padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #efcf91}.vendor{margin-top:18px}.delivery{margin-top:12px;border-top:1px solid #e7eaee;padding-top:12px}.purchase-row{padding:14px 0;border-bottom:1px solid #edf0f2}.purchase-main{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.source-list{margin:8px 0 0 18px;padding:0}.source-list li{margin:7px 0}.school-list{color:#667085;font-size:.92em}.qty{font-weight:700;white-space:nowrap}@media(max-width:720px){.week-head{display:block}.week-nav{grid-template-columns:1fr 1fr;margin-top:12px}.week-nav .export{grid-column:1/-1}.week-picker{display:grid;grid-template-columns:1fr auto}.week-picker label{width:100%}.week-picker input{width:100%;box-sizing:border-box}.purchase-main{display:block}.qty{margin-top:4px}.source-list{margin-left:16px}}
 </style>
 <section class="card span-12">
   <div class="week-head">
     <div><h2>週採購單</h2><div class="muted">{{ week_start.strftime('%Y/%m/%d') }} ～ {{ week_end.strftime('%Y/%m/%d') }}｜依廠商與交貨日期整理</div></div>
     <div class="week-nav">
-      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=previous_week.isoformat()) }}">上一週</a>
-      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=next_week.isoformat()) }}">下一週</a>
-      <a class="btn" href="{{ url_for('weekly_procurement.weekly_procurement_export',week=week_start.isoformat()) }}">匯出廠商版</a>
+      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=previous_week.isoformat()) }}">‹ 上一週</a>
+      <a class="btn secondary" href="{{ url_for('weekly_procurement.weekly_procurement',week=next_week.isoformat()) }}">下一週 ›</a>
+      <a class="btn export" href="{{ url_for('weekly_procurement.weekly_procurement_export',week=week_start.isoformat()) }}">匯出廠商版</a>
     </div>
   </div>
+  <form class="week-picker" method="get" action="{{ url_for('weekly_procurement.weekly_procurement') }}"><label>選擇週次<input type="date" name="week" value="{{ week_start.isoformat() }}"></label><button class="btn secondary" type="submit">切換</button></form>
   <div class="audit-summary">
     <div class="audit-box {{ 'audit-ok' if not anomalies else 'audit-warn' }}"><b>自動核對</b><br>{% if anomalies %}{{ anomalies|length }} 筆需確認{% else %}目前未發現異常{% endif %}</div>
     <div class="audit-box"><b>叫貨進度</b><br>{{ ordered_items }} / {{ total_items }}</div>

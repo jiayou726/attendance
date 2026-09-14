@@ -15,6 +15,7 @@ from extensions import db
 from models import (
     KitchenIngredient,
     KitchenMenuAssignment,
+    KitchenMenuPlan,
     KitchenPurchaseOrder,
 )
 
@@ -46,20 +47,16 @@ def _trim(value):
 
 
 def _expected_sources(week_start, week_end):
-    """Rebuild demand from the current school menu and current recipe BOM.
-
-    Keep the query deliberately simple and let SQLAlchemy relationships lazy-load;
-    this avoids loader-path failures when production contains older relationship data.
-    """
+    """Rebuild demand from the current school menu and current recipe BOM."""
     assignments = (
-        KitchenMenuAssignment.query.join(KitchenMenuAssignment.plan)
+        KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
-            KitchenMenuAssignment.plan.has(service_date__ge=week_start),
+            KitchenMenuPlan.service_date.between(week_start, week_end),
+            KitchenMenuAssignment.service_status == "serving",
+            KitchenMenuAssignment.headcount > 0,
         )
         .all()
     )
-    # The expression above is not portable across SQLAlchemy versions; use the
-    # relationship values for the final range/status filter below.
     sources = defaultdict(lambda: defaultdict(lambda: {
         "required": Decimal("0"),
         "schools": [],
@@ -70,9 +67,7 @@ def _expected_sources(week_start, week_end):
     totals = defaultdict(lambda: Decimal("0"))
     for assignment in assignments:
         plan = assignment.plan
-        if not plan or not (week_start <= plan.service_date <= week_end):
-            continue
-        if assignment.service_status != "serving" or (assignment.headcount or 0) <= 0:
+        if not plan:
             continue
         school_name = assignment.school.name if assignment.school else f"學校 #{assignment.school_id}"
         for plan_item in plan.items:

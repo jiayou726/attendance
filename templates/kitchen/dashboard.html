@@ -15,7 +15,70 @@
 <a class="home-action daily-kitchen" href="{{ url_for('order_tool.daily_kitchen_sheet',date=production_nav_date.isoformat()) }}"><span class="home-icon">廚</span><span><b>每日廚房表格</b><small>先在網頁補上食材括號備註，再匯出合菜、便當與小便當表。</small></span><i>›</i></a>
 <a class="home-action ai-menu" href="{{ url_for('order_tool.ai_menu') }}"><span class="home-icon">排</span><span><b>AI 菜單</b><small>依供餐對象、營養、重複與魚類／炸物規則自動排菜，可換菜與鎖定。</small></span><i>›</i></a>
 </div></section>
-<style>.purchase-week{border:1px solid #e1e6eb;border-radius:14px;margin-top:14px;overflow:hidden}.purchase-week-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;background:#f6f8fa;flex-wrap:wrap}.purchase-day-row{display:grid;grid-template-columns:1.2fr .8fr .8fr auto;gap:10px;align-items:center;padding:13px 16px;border-top:1px solid #edf0f2}.purchase-day-row:first-child{border-top:0}.purchase-day-actions{display:flex;gap:6px;flex-wrap:wrap}@media(max-width:720px){.purchase-day-row{grid-template-columns:1fr 1fr}.purchase-day-actions{grid-column:1/-1}.purchase-week-head .btn{width:100%}}</style>
-<div class="grid home-secondary"><section class="card span-12"><div class="top"><div><h2>最近採購單</h2><div class="muted">已確認資料會保存，不會被新價格或新配方改掉。最近資料改為依週整理。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>
-{% if recent_orders %}{% set ns=namespace(last_week='') %}{% for o in recent_orders %}{% set week_key=o.service_date.strftime('%G-W%V') %}{% if week_key != ns.last_week %}{% if ns.last_week %}</div></div>{% endif %}<div class="purchase-week"><div class="purchase-week-head"><div><b>{{ o.service_date.strftime('%G') }} 年第 {{ o.service_date.strftime('%V') }} 週</b><div class="muted">以週查看廠商、交貨日、來源核對與匯出</div></div><a class="btn" href="{{ url_for('weekly_procurement.weekly_procurement',week=o.service_date.isoformat()) }}">查看週採購單</a></div><div>{% set ns.last_week=week_key %}{% endif %}{% set ordered_count=o.items|selectattr('ordered')|list|length %}<div class="purchase-day-row"><div><b>{{ o.service_date.strftime('%Y-%m-%d') }}</b><br><span class="pill {{ 'ok' if o.status=='confirmed' else ('off' if o.status=='cancelled' else 'warn') }}">{{ status_label(o.status) }}</span></div><div>叫貨 {{ ordered_count }} / {{ o.items|length }}</div><div>{{ o.items|length }} 項</div><div class="purchase-day-actions"><a class="btn secondary" href="{{ url_for('order_tool.purchase_detail',order_id=o.id) }}">開啟</a><form method="post" action="{{ url_for('order_tool.purchase_delete',order_id=o.id) }}" onsubmit="return confirm('確定永久刪除此採購單嗎？採購品項也會一併刪除，此動作無法復原。')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirm_delete" value="1"><input type="hidden" name="return_to" value="dashboard"><button class="btn danger">刪除</button></form></div></div>{% endfor %}</div></div>{% else %}<div class="empty">尚未建立採購單。</div>{% endif %}</section></div>
+<style>
+.purchase-week-panel{border:1px solid #e1e6eb;border-radius:14px;margin-top:14px;overflow:hidden}
+.purchase-week-nav{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:14px;background:#f6f8fa}
+.purchase-week-title{text-align:center}.purchase-week-title b{display:block;font-size:1.08rem}.purchase-week-tools{display:flex;gap:8px;align-items:end;justify-content:space-between;flex-wrap:wrap;padding:12px 14px;border-top:1px solid #e9edf1}.purchase-week-picker{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.purchase-week-picker label{display:grid;gap:4px;font-size:.9rem}.purchase-week-picker input{min-height:40px}.purchase-day-row{display:grid;grid-template-columns:1.2fr .85fr .7fr .8fr auto;gap:10px;align-items:center;padding:13px 16px;border-top:1px solid #edf0f2}.purchase-day-actions{display:flex;gap:6px;flex-wrap:wrap}.week-arrow{min-width:44px}.week-loading{padding:20px;text-align:center;color:#667085}
+@media(max-width:720px){.purchase-week-nav{grid-template-columns:44px 1fr 44px;padding:10px}.purchase-week-title{font-size:.92rem}.purchase-week-tools{display:grid;grid-template-columns:1fr}.purchase-week-picker{display:grid;grid-template-columns:1fr auto}.purchase-week-picker label{width:100%}.purchase-week-picker input{width:100%;box-sizing:border-box}.purchase-week-tools>.btn{width:100%}.purchase-day-row{grid-template-columns:1fr 1fr}.purchase-day-row .purchase-money{text-align:right}.purchase-day-actions{grid-column:1/-1}.purchase-day-actions .btn{width:100%}}
+</style>
+<div class="grid home-secondary"><section class="card span-12">
+  <div class="top"><div><h2>最近採購單</h2><div class="muted">一次只顯示一週；用左右按鈕或日期直接切換週次。已確認資料仍會保存。</div></div><a class="btn secondary" href="{{ url_for('order_tool.purchases') }}">採購歷史</a></div>
+  <div class="purchase-week-panel">
+    <div class="purchase-week-nav">
+      <button class="btn secondary week-arrow" id="purchase-week-prev" type="button" aria-label="上一週">‹</button>
+      <div class="purchase-week-title"><b id="purchase-week-range">讀取中…</b><span class="muted" id="purchase-week-label">本週採購</span></div>
+      <button class="btn secondary week-arrow" id="purchase-week-next" type="button" aria-label="下一週">›</button>
+    </div>
+    <div class="purchase-week-tools">
+      <div class="purchase-week-picker"><label>選擇週次<input type="date" id="purchase-week-picker"></label><button class="btn secondary" id="purchase-week-go" type="button">切換</button></div>
+      <a class="btn" id="purchase-week-detail" href="{{ url_for('weekly_procurement.weekly_procurement') }}">查看週採購單</a>
+    </div>
+    <div id="purchase-week-days"><div class="week-loading">讀取本週採購資料…</div></div>
+  </div>
+</section></div>
+<script>
+(function(){
+  const summaryUrl={{ url_for('weekly_procurement.weekly_procurement_summary')|tojson }};
+  const detailUrl={{ url_for('weekly_procurement.weekly_procurement')|tojson }};
+  const purchaseUrlTemplate={{ url_for('order_tool.purchase_detail',order_id=0)|tojson }};
+  const range=document.getElementById('purchase-week-range');
+  const label=document.getElementById('purchase-week-label');
+  const days=document.getElementById('purchase-week-days');
+  const picker=document.getElementById('purchase-week-picker');
+  const detail=document.getElementById('purchase-week-detail');
+  const prev=document.getElementById('purchase-week-prev');
+  const next=document.getElementById('purchase-week-next');
+  let current=null;
+
+  function shortDate(value){const parts=value.split('-');return parts[1]+'/'+parts[2]}
+  function statusClass(status){return status==='confirmed'?'ok':(status==='cancelled'?'off':'warn')}
+  function setQuery(week){const url=new URL(window.location.href);url.searchParams.set('purchase_week',week);history.replaceState(null,'',url)}
+  function renderOrders(orders){
+    days.replaceChildren();
+    if(!orders.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='這一週尚未建立採購單。';days.appendChild(empty);return}
+    orders.forEach(order=>{
+      const row=document.createElement('div');row.className='purchase-day-row';
+      const d=document.createElement('div');const b=document.createElement('b');b.textContent=order.date;d.appendChild(b);d.appendChild(document.createElement('br'));const pill=document.createElement('span');pill.className='pill '+statusClass(order.status);pill.textContent=order.status_label;d.appendChild(pill);
+      const progress=document.createElement('div');progress.textContent='叫貨 '+order.ordered_count+' / '+order.item_count;
+      const count=document.createElement('div');count.textContent=order.item_count+' 項';
+      const money=document.createElement('div');money.className='purchase-money';money.textContent='$'+order.total;
+      const actions=document.createElement('div');actions.className='purchase-day-actions';const open=document.createElement('a');open.className='btn secondary';open.textContent='開啟';open.href=purchaseUrlTemplate.replace(/0$/,String(order.id));actions.appendChild(open);
+      row.append(d,progress,count,money,actions);days.appendChild(row);
+    });
+  }
+  async function loadWeek(week){
+    days.replaceChildren();const loading=document.createElement('div');loading.className='week-loading';loading.textContent='讀取中…';days.appendChild(loading);
+    try{
+      const url=new URL(summaryUrl,window.location.origin);if(week)url.searchParams.set('week',week);
+      const response=await fetch(url,{headers:{'Accept':'application/json'}});if(!response.ok)throw new Error('HTTP '+response.status);
+      const data=await response.json();current=data;picker.value=data.week_start;range.textContent=shortDate(data.week_start)+' ～ '+shortDate(data.week_end);label.textContent='本週採購';detail.href=detailUrl+'?week='+encodeURIComponent(data.week_start);setQuery(data.week_start);renderOrders(data.orders);
+    }catch(error){days.replaceChildren();const fail=document.createElement('div');fail.className='empty';fail.textContent='週採購資料讀取失敗，請重新整理。';days.appendChild(fail);}
+  }
+  prev.addEventListener('click',()=>{if(current)loadWeek(current.previous_week)});
+  next.addEventListener('click',()=>{if(current)loadWeek(current.next_week)});
+  document.getElementById('purchase-week-go').addEventListener('click',()=>{if(picker.value)loadWeek(picker.value)});
+  picker.addEventListener('change',()=>{if(picker.value)loadWeek(picker.value)});
+  const initial=new URL(window.location.href).searchParams.get('purchase_week');loadWeek(initial);
+})();
+</script>
 {% endblock %}

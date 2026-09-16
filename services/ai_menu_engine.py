@@ -14,6 +14,11 @@ from services.nutrition_sources import match_ingredient_name
 CATEGORY_ORDER = ("主食", "主菜", "副菜", "青菜", "湯品", "點心")
 DEFAULT_STRUCTURE = {"主食": 1, "主菜": 1, "副菜": 2, "青菜": 1, "湯品": 1, "點心": 0}
 STRUCTURE_LIMITS = {"主食": 2, "主菜": 2, "副菜": 4, "青菜": 2, "湯品": 2, "點心": 2}
+DIET_ALLOWED = {
+    "regular": {"meat", "shared"},
+    "vegetarian": {"vegetarian", "shared"},
+    "all": {"meat", "vegetarian", "shared"},
+}
 
 @dataclass
 class Rules:
@@ -29,6 +34,7 @@ class Candidate:
     name: str
     category: str
     kcal: int | None
+    diet_type: str
     tags: set[str] = field(default_factory=set)
 
 @dataclass
@@ -91,18 +97,34 @@ def load_candidates():
     candidates=[]
     for recipe in rows:
         category=(recipe.category or "").strip()
-        if category not in CATEGORY_ORDER: continue
+        diet_type=(getattr(recipe,"diet_type",None) or "").strip()
+        if category not in CATEGORY_ORDER or diet_type not in DIET_ALLOWED["all"]:
+            continue
         tags={tag.tag for tag in (recipe.tags or []) if getattr(tag,"source","manual") == "manual"}
-        candidates.append(Candidate(recipe.id, recipe.name, category, recipe_kcal(recipe), tags))
+        candidates.append(Candidate(recipe.id, recipe.name, category, recipe_kcal(recipe), diet_type, tags))
     return candidates
 
 
-def generate(start, end, structure, rules, kcal_min=None, kcal_max=None, include_weekends=False, seed=20260913):
+def generate(start, end, structure, rules, kcal_min=None, kcal_max=None, include_weekends=False,
+             seed=20260913, diet_mode="regular"):
+    """依已確認 diet_type 排菜。
+
+    regular：只可用 meat + shared。
+    vegetarian：只可用 vegetarian + shared。
+    all：僅供中央候選池／管理用途，不應直接當單一葷或素材單。
+    """
+    if diet_mode not in DIET_ALLOWED:
+        raise ValueError("diet_mode must be regular, vegetarian or all")
+
     rng=random.Random(seed)
     candidates=load_candidates()
+    allowed=DIET_ALLOWED[diet_mode]
     pools=defaultdict(list)
     for c in candidates:
-        if rules.exclude_incomplete_nutrition and c.kcal is None: continue
+        if c.diet_type not in allowed:
+            continue
+        if rules.exclude_incomplete_nutrition and c.kcal is None:
+            continue
         pools[c.category].append(c)
     for bucket in pools.values(): rng.shuffle(bucket)
     dates=service_dates(start,end,include_weekends)
@@ -113,7 +135,7 @@ def generate(start, end, structure, rules, kcal_min=None, kcal_max=None, include
             for _slot in range(structure.get(category,0)):
                 pool=pools.get(category,[])
                 if not pool:
-                    warnings.append(f"{category} 沒有可用菜色"); continue
+                    warnings.append(f"{category} 沒有符合葷素分類與營養條件的可用菜色"); continue
                 same={x.id for x in chosen}
                 scored=[]
                 for c in pool:
@@ -133,10 +155,12 @@ def generate(start, end, structure, rules, kcal_min=None, kcal_max=None, include
         elif kcal_min is not None and kcal < kcal_min: warnings.append(f"熱量 {kcal} kcal 低於基準 {kcal_min}～{kcal_max} kcal")
         elif kcal_max is not None and kcal > kcal_max: warnings.append(f"熱量 {kcal} kcal 高於基準 {kcal_min}～{kcal_max} kcal")
         results.append(DayResult(d,chosen,kcal,warnings))
-    for week,cnt in week_counts.items():
-        if cnt["fish"] < rules.fish_per_week_min:
-            for row in results:
-                if row.service_date.isocalendar()[:2] == week:
-                    row.warnings.append(f"本週魚類 {cnt['fish']} 次，未達 {rules.fish_per_week_min} 次")
-                    break
+    # 素食菜單不要求魚類；葷食／all 才檢查每週魚類下限。
+    if diet_mode != "vegetarian":
+        for week,cnt in week_counts.items():
+            if cnt["fish"] < rules.fish_per_week_min:
+                for row in results:
+                    if row.service_date.isocalendar()[:2] == week:
+                        row.warnings.append(f"本週魚類 {cnt['fish']} 次，未達 {rules.fish_per_week_min} 次")
+                        break
     return results

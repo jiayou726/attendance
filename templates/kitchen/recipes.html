@@ -17,10 +17,21 @@
 
   <section class="card span-7">
     <div class="top"><h2>菜色清單</h2><form method="get" class="search-form"><input name="q" value="{{ q }}" placeholder="搜尋菜色，例如茄汁豬柳"><button class="btn secondary">搜尋</button></form></div>
+    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:10px 0 4px">
+      <div class="field" style="min-width:200px">
+        <label for="recipe-category-filter">依類別篩選</label>
+        <select id="recipe-category-filter">
+          <option value="">全部類別</option>
+          {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          <option value="其他">其他／未分類</option>
+        </select>
+      </div>
+      <div id="recipe-filter-count" class="muted" style="padding-bottom:8px"></div>
+    </div>
     <div class="muted">這裡的生料合計只加總 g 類食材；「個/人」食材請點進配方查看。</div><br>
     {% if rows %}<div class="table-scroll"><table>
       <thead><tr><th>分類</th><th>菜色</th><th class="right">g 類 AP 生料</th><th class="right">打菜量</th><th>狀態</th><th>操作</th></tr></thead>
-      <tbody>{% for r in rows %}<tr>
+      <tbody>{% for r in rows %}<tr class="recipe-row" data-category="{{ r.category or '其他' }}">
         <td><span class="pill">{{ r.category or '未分類' }}</span></td><td>{{ r.name }}</td><td class="right">{{ '%.1f'|format(recipe_total_g(r)|float) }} g/人</td><td class="right">{{ ('%.1f'|format(r.serving_output_g|float) ~ ' g') if r.serving_output_g is not none else '-' }}</td>
         <td><span class="pill {{ 'ok' if r.active else 'off' }}">{{ '啟用' if r.active else '停用' }}</span></td>
         <td><div class="actions"><a class="btn secondary" href="{{ url_for('order_tool.recipe_detail', recipe_id=r.id) }}">配方</a><a class="btn secondary" href="{{ url_for('order_tool.recipes', edit=r.id) }}">編輯</a><form method="post" action="{{ url_for('order_tool.recipe_toggle', recipe_id=r.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn {{ 'danger' if r.active else 'ok' }}">{{ '停用' if r.active else '恢復' }}</button></form></div></td>
@@ -28,4 +39,24 @@
     </table></div>{% else %}<div class="empty">先建立第一道菜。</div>{% endif %}
   </section>
 </div>
+<script>
+(function () {
+  const select = document.getElementById('recipe-category-filter');
+  const rows = Array.from(document.querySelectorAll('.recipe-row'));
+  const count = document.getElementById('recipe-filter-count');
+  if (!select) return;
+  function applyFilter() {
+    const category = select.value;
+    let visible = 0;
+    rows.forEach((row) => {
+      const show = !category || row.dataset.category === category;
+      row.style.display = show ? '' : 'none';
+      if (show) visible += 1;
+    });
+    count.textContent = `目前顯示 ${visible} 道菜`;
+  }
+  select.addEventListener('change', applyFilter);
+  applyFilter();
+})();
+</script>
 {% endblock %}

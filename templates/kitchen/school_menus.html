@@ -57,7 +57,7 @@
     <button type="button" class="active" data-meal-variant="regular">葷食 {{ selected_school.default_headcount }} 人</button>
     <button type="button" data-meal-variant="vegetarian">素食 {{ selected_school.default_vegetarian_headcount }} 人</button>
   </div>
-  <p class="meal-variant-hint">目前正在勾選：<b data-current-meal-label>葷食菜單</b>。切換後會保留另一邊已勾選的菜色。</p>
+  <p class="meal-variant-hint">目前正在勾選：<b data-current-meal-label>葷食菜單</b>。葷食只顯示「葷＋葷素共用」；素食只顯示「素＋葷素共用」。</p>
 
   <section class="school-week-grid" aria-label="{{ selected_school.name }} 週一到週日菜單">
     {% for day in days %}
@@ -83,16 +83,20 @@
       <div class="school-dish-list">
         {% if day.source_items %}
           {% for item in day.source_items %}
+          {% if item.recipe.diet_type in ['meat','shared'] %}
           <label class="school-dish-check{% if item.recipe_id in day.selected_ids.regular %} selected{% endif %}" data-variant-panel="regular">
             <input data-menu-variant="regular" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.regular %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
             <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
+          {% endif %}
+          {% if item.recipe.diet_type in ['vegetarian','shared'] %}
           <label class="school-dish-check vegetarian{% if item.recipe_id in day.selected_ids.vegetarian %} selected{% endif %}" data-variant-panel="vegetarian" hidden>
             <input data-menu-variant="vegetarian" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.vegetarian %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
             <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
+          {% endif %}
           {% endfor %}
         {% else %}
           <div class="day-empty small">總表這天還沒有菜色</div>

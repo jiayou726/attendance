@@ -1,1 +1,33 @@
-{% extends 'kitchen/base.html' %}{% block title %}菜色標記{% endblock %}{% block content %}<div class="top"><div><span class="eyebrow">AI MENU RULES</span><h1>菜色標記</h1><div class="muted">魚類、炸物、甜湯等規則只採用人工勾選標記；「建議」只依菜名／食材關鍵字顯示。</div></div><a class="btn secondary" href="{{ url_for('order_tool.ai_menu_index') }}">回 AI 菜單</a></div>{% for row in rows %}<form class="card" method="post"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="recipe_id" value="{{ row.recipe.id }}"><h3>{{ row.recipe.name }} <span class="muted">{{ row.recipe.category or '未分類' }}</span></h3><div class="actions">{% for tag in tag_defs %}<label class="pill"><input type="checkbox" name="tags" value="{{ tag.key }}" {% if tag.key in row.manual %}checked{% endif %}> {{ tag.label }}{% if tag.key in row.suggested %} ★建議{% endif %}</label>{% endfor %}</div><br><button class="btn secondary">儲存這道菜</button></form>{% endfor %}{% endblock %}
+{% extends 'kitchen/base.html' %}
+{% block title %}菜色分類與標記{% endblock %}
+{% block content %}
+<div class="top">
+  <div>
+    <span class="eyebrow">AI MENU RULES</span>
+    <h1>菜色分類與標記</h1>
+    <div class="muted">葷／素／葷素共用是互斥主分類，直接看已確認配方，不再因菜名有「素」就自動判定。魚類、炸物、甜湯等仍是次要規則標記。</div>
+  </div>
+  <a class="btn secondary" href="{{ url_for('order_tool.ai_menu_index') }}">回 AI 菜單</a>
+</div>
+{% for row in rows %}
+<form class="card" method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="recipe_id" value="{{ row.recipe.id }}">
+  <h3>{{ row.recipe.name }} <span class="muted">{{ row.recipe.category or '未分類' }}</span></h3>
+  <div class="muted" style="margin-bottom:10px">配方：{% if row.recipe.ingredients %}{% for component in row.recipe.ingredients %}{{ component.ingredient.name }}{% if not loop.last %}、{% endif %}{% endfor %}{% else %}無配方{% endif %}</div>
+  <div class="field" style="max-width:320px">
+    <label>葷素主分類</label>
+    <select name="diet_type" required>
+      {% for key in diet_types %}<option value="{{ key }}"{% if row.recipe.diet_type == key %} selected{% endif %}>{{ diet_labels[key] }}</option>{% endfor %}
+    </select>
+  </div>
+  <br>
+  <div class="actions">
+    {% for tag in tag_defs %}
+    <label class="pill"><input type="checkbox" name="tags" value="{{ tag.key }}" {% if tag.key in row.manual %}checked{% endif %}> {{ tag.label }}{% if tag.key in row.suggested %} ★建議{% endif %}</label>
+    {% endfor %}
+  </div>
+  <br><button class="btn secondary">儲存這道菜</button>
+</form>
+{% endfor %}
+{% endblock %}

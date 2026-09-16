@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, MetaData, String, Table, func, inspect, select, text
+from sqlalchemy import Column, DateTime, MetaData, String, Table, delete, func, inspect, select, text, update
 
 import ai_models
 from extensions import db
 
 
-# Copy only reusable master/catalog data.  Operational records such as menu
+# Copy only reusable master/catalog data. Operational records such as menu
 # plans, purchase orders, AI drafts and daily notes intentionally start empty,
 # so the practice account behaves like a fresh workspace rather than a mirror
 # of production activity.
@@ -33,6 +33,8 @@ _PRACTICE_META = Table(
     Column("updated_at", DateTime, nullable=False, default=datetime.utcnow),
 )
 _SEED_KEY = "master_seed_v1"
+_DIET_SYNC_KEY = "recipe_diet_type_v1"
+_DIET_TAGS = ("meat", "vegetarian", "shared")
 
 
 def _database_identity(engine) -> str:
@@ -125,11 +127,57 @@ def _seed_master_data(main_engine, practice_engine) -> None:
     _advance_postgres_sequences(practice_engine)
 
 
+def _sync_recipe_diet_types_once(main_engine, practice_engine) -> None:
+    """Upgrade an already-seeded sandbox to the explicit diet classification once.
+
+    This is intentionally one-shot: after the upgrade, edits made inside the
+    practice sandbox remain sandbox edits and are not overwritten on each login.
+    """
+    _PRACTICE_META.create(bind=practice_engine, checkfirst=True)
+    with practice_engine.connect() as connection:
+        done = connection.execute(
+            select(_PRACTICE_META.c.key).where(_PRACTICE_META.c.key == _DIET_SYNC_KEY)
+        ).first()
+    if done:
+        return
+
+    recipe = db.metadata.tables.get("kitchen_recipe")
+    tag = db.metadata.tables.get("kitchen_recipe_tag")
+    if recipe is None or tag is None or "diet_type" not in recipe.c:
+        return
+
+    practice_tables = set(inspect(practice_engine).get_table_names())
+    if "kitchen_recipe" not in practice_tables or "kitchen_recipe_tag" not in practice_tables:
+        return
+
+    with main_engine.connect() as source:
+        recipe_rows = source.execute(
+            select(recipe.c.id, recipe.c.diet_type).where(recipe.c.diet_type.in_(_DIET_TAGS))
+        ).mappings().all()
+        diet_tags = source.execute(
+            select(tag).where(tag.c.tag.in_(_DIET_TAGS))
+        ).mappings().all()
+
+    with practice_engine.begin() as target:
+        for row in recipe_rows:
+            target.execute(
+                update(recipe).where(recipe.c.id == row["id"]).values(diet_type=row["diet_type"])
+            )
+        target.execute(delete(tag).where(tag.c.tag.in_(_DIET_TAGS)))
+        if diet_tags:
+            target.execute(tag.insert(), [dict(row) for row in diet_tags])
+        target.execute(_PRACTICE_META.insert().values(
+            key=_DIET_SYNC_KEY,
+            value="Synced explicit meat/vegetarian/shared recipe classification",
+            updated_at=datetime.utcnow(),
+        ))
+
+
 def ensure_practice_database() -> None:
     """Create/upgrade the sandbox and seed reusable master data once.
 
     The function is called before the practice session flag is enabled, so the
-    source engine is always the formal database.  It fails closed if both binds
+    source engine is always the formal database. It fails closed if both binds
     accidentally point at the same database.
     """
     practice_engine = db.engines.get("practice")
@@ -143,3 +191,4 @@ def ensure_practice_database() -> None:
     db.metadata.create_all(bind=practice_engine)
     _ensure_additive_compatibility(practice_engine)
     _seed_master_data(main_engine, practice_engine)
+    _sync_recipe_diet_types_once(main_engine, practice_engine)

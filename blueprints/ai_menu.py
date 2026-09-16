@@ -25,6 +25,7 @@ from services.practice_database import ensure_practice_database
 
 WEEKDAY = "一二三四五六日"
 PRACTICE_USER = "practice"
+MENU_VARIANTS = {"regular": "葷食", "vegetarian": "素食"}
 
 
 def _seed_profiles():
@@ -75,8 +76,11 @@ def _parse_rules(form):
 def _parse_request(read_only=False):
     profile=_profile_by_code((request.form.get("profile_code") or "").strip(), read_only=read_only)
     start=_date(request.form.get("start_date")); end=_date(request.form.get("end_date"))
+    menu_variant=(request.form.get("menu_variant") or "regular").strip()
     if profile is None:
         return None,"請選擇供餐對象。"
+    if menu_variant not in MENU_VARIANTS:
+        return None,"請選擇葷食或素食菜單。"
     if start is None or end is None or end < start:
         return None,"請填寫正確的排菜日期。"
     if (end-start).days > 62:
@@ -88,9 +92,9 @@ def _parse_request(read_only=False):
     include_weekends=request.form.get("include_weekends") == "1"
     kcal_min=int(profile.kcal_min) if profile.kcal_min is not None else None
     kcal_max=int(profile.kcal_max) if profile.kcal_max is not None else None
-    rows=generate(start,end,structure,rules,kcal_min,kcal_max,include_weekends)
+    rows=generate(start,end,structure,rules,kcal_min,kcal_max,include_weekends,diet_mode=menu_variant)
     return dict(profile=profile,start=start,end=end,structure=structure,rules=rules,
-                include_weekends=include_weekends,rows=rows),None
+                menu_variant=menu_variant,include_weekends=include_weekends,rows=rows),None
 
 
 def _group_draft(draft):
@@ -113,6 +117,15 @@ def _practice_ok():
     return bool(session.get("kitchen_practice"))
 
 
+def _draft_menu_variant(draft):
+    try:
+        payload=json.loads(draft.rules_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload={}
+    value=payload.get("menu_variant","regular")
+    return value if value in MENU_VARIANTS else "regular"
+
+
 @order_bp.get("/ai-menu")
 def ai_menu_index():
     _seed_profiles()
@@ -120,7 +133,8 @@ def ai_menu_index():
     drafts=KitchenMenuDraft.query.order_by(KitchenMenuDraft.id.desc()).limit(20).all()
     return render_template("kitchen/ai_menu.html", profiles=_profiles(), start_default=start,
         end_default=end, categories=CATEGORY_ORDER, defaults=DEFAULT_STRUCTURE,
-        drafts=drafts, practice=_practice_ok(), practice_user=PRACTICE_USER)
+        drafts=drafts, practice=_practice_ok(), practice_user=PRACTICE_USER,
+        menu_variants=MENU_VARIANTS)
 
 
 @order_bp.post("/ai-menu/generate")
@@ -128,11 +142,13 @@ def ai_menu_generate():
     payload,error=_parse_request(read_only=False)
     if error:
         flash(error,"error"); return redirect(url_for("order_tool.ai_menu_index"))
+    stored_rules=dict(payload["rules"].__dict__)
+    stored_rules["menu_variant"]=payload["menu_variant"]
     draft=KitchenMenuDraft(
         name=(request.form.get("name") or "AI 自動排菜").strip()[:120],
         profile_id=payload["profile"].id, start_date=payload["start"], end_date=payload["end"],
         include_weekends=payload["include_weekends"], structure_json=json.dumps(payload["structure"],ensure_ascii=False),
-        rules_json=json.dumps(payload["rules"].__dict__,ensure_ascii=False), status="draft")
+        rules_json=json.dumps(stored_rules,ensure_ascii=False), status="draft")
     db.session.add(draft); db.session.flush()
     for row in payload["rows"]:
         counts=defaultdict(int)
@@ -150,7 +166,8 @@ def ai_menu_draft(draft_id):
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if draft is None: return ("Not found",404)
     return render_template("kitchen/ai_menu_result.html", draft=draft, grouped=_group_draft(draft),
-                           weekday=WEEKDAY, practice=_practice_ok())
+                           weekday=WEEKDAY, practice=_practice_ok(),
+                           menu_variant=_draft_menu_variant(draft), menu_variants=MENU_VARIANTS)
 
 
 @order_bp.get("/ai-menu/drafts/<int:draft_id>/public.xlsx")
@@ -180,20 +197,24 @@ def ai_menu_apply(draft_id):
         flash("未套用：請勾選確認後再執行。","error"); return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft_id))
     draft=db.session.get(KitchenMenuDraft,draft_id)
     if draft is None: return ("Not found",404)
+    menu_variant=_draft_menu_variant(draft)
+    target_name="中央素食菜單" if menu_variant == "vegetarian" else "中央菜單"
     grouped=defaultdict(list)
     for item in KitchenMenuDraftItem.query.filter_by(draft_id=draft.id).order_by(KitchenMenuDraftItem.service_date,KitchenMenuDraftItem.sort_order).all():
         grouped[item.service_date].append(item)
     for service_date,items in grouped.items():
-        plan=KitchenMenuPlan.query.filter_by(service_date=service_date,meal_type=draft.meal_type,name="中央菜單").one_or_none()
+        plan=KitchenMenuPlan.query.filter_by(service_date=service_date,meal_type=draft.meal_type,name=target_name).one_or_none()
         if plan is None:
-            plan=KitchenMenuPlan(service_date=service_date,meal_type=draft.meal_type,name="中央菜單",status="draft")
+            plan=KitchenMenuPlan(service_date=service_date,meal_type=draft.meal_type,name=target_name,status="draft")
             db.session.add(plan); db.session.flush()
         KitchenMenuPlanItem.query.filter_by(plan_id=plan.id).delete(synchronize_session=False)
         for index,item in enumerate(items,1):
             if item.recipe_id:
                 db.session.add(KitchenMenuPlanItem(plan_id=plan.id,recipe_id=item.recipe_id,sort_order=index))
     draft.status="applied"; draft.applied_at=datetime.utcnow(); db.session.commit()
-    flash("已套用到練習中央菜單；正式資料不受影響。" if _practice_ok() else "已套用到正式中央菜單；學校人數與採購仍沿用原本流程。","success")
+    label=MENU_VARIANTS[menu_variant]
+    flash((f"已套用到練習{label}中央菜單；正式資料不受影響。" if _practice_ok()
+           else f"已套用到{label}中央菜單；學校人數與採購仍沿用原本流程。"),"success")
     return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
 
 
@@ -249,8 +270,9 @@ def ai_menu_practice_generate():
 def ai_recipe_tags():
     recipes=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags))
              .filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.category,KitchenRecipe.name).all())
-    rows=[dict(recipe=r,suggested=tag_service.suggest_tags(r),manual={t.tag for t in r.tags if t.source=="manual"}) for r in recipes]
-    return render_template("kitchen/recipe_tags.html",rows=rows,tag_defs=tag_service.TAG_DEFS)
+    rows=[dict(recipe=r,suggested=tag_service.suggest_tags(r),manual={t.tag for t in r.tags if t.source=="manual" and t.tag not in tag_service.DIET_TAG_KEYS}) for r in recipes]
+    return render_template("kitchen/recipe_tags.html",rows=rows,tag_defs=tag_service.TAG_DEFS,
+                           diet_types=tag_service.DIET_TYPES,diet_labels=tag_service.DIET_LABELS)
 
 
 @order_bp.post("/recipe-tags")
@@ -258,6 +280,11 @@ def ai_recipe_tags_save():
     recipe_id=_int(request.form.get("recipe_id"),default=0)
     recipe=db.session.get(KitchenRecipe,recipe_id) if recipe_id else None
     if recipe is None: return ("Not found",404)
+    diet_type=(request.form.get("diet_type") or "").strip()
+    if diet_type not in tag_service.DIET_TYPES:
+        flash("請選擇葷、素或葷素共用。","error")
+        return redirect(url_for("order_tool.ai_recipe_tags"))
+    tag_service.set_diet_type(db.session,recipe,diet_type)
     tag_service.set_manual_tags(db.session,recipe,request.form.getlist("tags")); db.session.commit()
-    flash("菜色標記已儲存。","success")
+    flash("菜色分類與標記已儲存。","success")
     return redirect(url_for("order_tool.ai_recipe_tags"))

@@ -19,6 +19,10 @@ _attach_column(core.KitchenIngredient, "nutrition_status", db.Column(db.String(2
 _attach_column(core.KitchenIngredient, "nutrition_verified", db.Column(db.Boolean, nullable=False, default=False))
 _attach_column(core.KitchenIngredient, "nutrition_note", db.Column(db.String(255), nullable=True))
 
+# 葷素主分類是菜色主檔的一部分，不再靠菜名「(素)」或關鍵字推測。
+# meat：葷食專用；vegetarian：素食專用；shared：葷素共用。
+_attach_column(core.KitchenRecipe, "diet_type", db.Column(db.String(20), nullable=True))
+
 
 def _has_kcal(self):
     if self.kcal_per_100g is None:
@@ -117,6 +121,10 @@ NUTRITION_COLUMNS = {
     "nutrition_note": "VARCHAR(255)",
 }
 
+RECIPE_COLUMNS = {
+    "diet_type": "VARCHAR(20)",
+}
+
 def ensure_schema(engine):
     inspector = inspect(engine)
     if inspector.has_table("kitchen_ingredient"):
@@ -125,5 +133,11 @@ def ensure_schema(engine):
             for name, definition in NUTRITION_COLUMNS.items():
                 if name not in existing:
                     connection.execute(text(f"ALTER TABLE kitchen_ingredient ADD COLUMN {name} {definition}"))
+    if inspector.has_table("kitchen_recipe"):
+        existing = {c["name"] for c in inspector.get_columns("kitchen_recipe")}
+        with engine.begin() as connection:
+            for name, definition in RECIPE_COLUMNS.items():
+                if name not in existing:
+                    connection.execute(text(f"ALTER TABLE kitchen_recipe ADD COLUMN {name} {definition}"))
     for model in (KitchenRecipeTag, KitchenMealProfile, KitchenMenuDraft, KitchenMenuDraftItem):
         model.__table__.create(bind=engine, checkfirst=True)

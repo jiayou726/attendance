@@ -1,14 +1,15 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}{{ 'AI 菜單（練習）' if practice else 'AI 菜單' }}{% endblock %}
-{% block head %}<style>.ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.ai-box{padding:14px;border:1px solid #d7dedb;border-radius:12px;background:#fff}.ai-banner{padding:14px;border-radius:12px;background:#eef8f3;margin-bottom:16px}.ai-warn{background:#fff4df}.ai-form label{display:block;font-weight:700;margin-bottom:5px}.ai-form input,.ai-form select{width:100%}.ai-actions{display:flex;gap:8px;flex-wrap:wrap}</style>{% endblock %}
+{% block head %}<style>.ai-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.ai-box{padding:14px;border:1px solid #d7dedb;border-radius:12px;background:#fff}.ai-banner{padding:14px;border-radius:12px;background:#eef8f3;margin-bottom:16px}.ai-warn{background:#fff4df}.ai-form label{display:block;font-weight:700;margin-bottom:5px}.ai-form input,.ai-form select{width:100%}.ai-actions{display:flex;gap:8px;flex-wrap:wrap}.diet-note{margin-top:6px;font-size:.9rem;color:#5b6862}</style>{% endblock %}
 {% block content %}
-<div class="top"><div><span class="eyebrow">{{ 'PRACTICE SANDBOX' if practice else 'RULE-BASED MENU PLANNER' }}</span><h1>{{ 'AI 菜單／練習模式' if practice else 'AI 菜單／自動排菜' }}</h1></div><div class="ai-actions"><a class="btn secondary" href="{{ url_for('order_tool.ai_recipe_tags') }}">菜色標記</a>{% if practice %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_login') }}">練習入口</a>{% endif %}</div></div>
+<div class="top"><div><span class="eyebrow">{{ 'PRACTICE SANDBOX' if practice else 'RULE-BASED MENU PLANNER' }}</span><h1>{{ 'AI 菜單／練習模式' if practice else 'AI 菜單／自動排菜' }}</h1></div><div class="ai-actions"><a class="btn secondary" href="{{ url_for('order_tool.ai_recipe_tags') }}">菜色分類與標記</a>{% if practice %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% else %}<a class="btn secondary" href="{{ url_for('order_tool.ai_menu_practice_login') }}">練習入口</a>{% endif %}</div></div>
 <div class="ai-banner {{ 'ai-warn' if practice else '' }}">{% if practice %}<b>目前是完整練習沙盒。</b> 你可以建立草稿、修改主檔、套用菜單、產生採購與刪除資料；所有寫入都只進練習資料庫，不會影響正式資料。{% else %}先產生草稿，確認後才可按「套用正式菜單」。排菜本身不會直接改正式菜單。{% endif %}</div>
 <form class="card ai-form" method="post" action="{{ url_for('order_tool.ai_menu_generate') }}">
 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
 <div class="field"><label>草稿名稱</label><input name="name" value="{{ '練習 AI 自動排菜' if practice else 'AI 自動排菜' }}"></div><br>
 <div class="ai-grid">
   <div><label>供餐對象</label><select name="profile_code" required><option value="">請選擇</option>{% for p in profiles %}<option value="{{ p.code }}">{{ p.name }}｜{{ p.kcal_label }}</option>{% endfor %}</select></div>
+  <div><label>菜單類型</label><select name="menu_variant" required>{% for key,label in menu_variants.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select><div class="diet-note">葷食＝葷＋葷素共用；素食＝素＋葷素共用。分類以已確認配方為準，不看菜名是否有「(素)」。</div></div>
   <div><label>開始日期</label><input type="date" name="start_date" value="{{ start_default.isoformat() }}" required></div>
   <div><label>結束日期</label><input type="date" name="end_date" value="{{ end_default.isoformat() }}" required></div>
   <div><label>週末</label><label><input style="width:auto" type="checkbox" name="include_weekends" value="1"> 也排六日</label></div>
@@ -16,7 +17,7 @@
 <h3>每天菜色結構</h3><div class="ai-grid">{% for c in categories %}<div><label>{{ c }}</label><input type="number" min="0" max="4" name="structure_{{ c }}" value="{{ defaults[c] }}"></div>{% endfor %}</div>
 <h3>排菜規則</h3><div class="ai-grid">
 <div><label>同菜至少間隔供餐日</label><input type="number" min="0" max="20" name="repeat_days" value="5"></div>
-<div><label>每週魚類至少</label><input type="number" min="0" max="10" name="fish_per_week_min" value="1"></div>
+<div><label>每週魚類至少</label><input type="number" min="0" max="10" name="fish_per_week_min" value="1"><div class="diet-note">素食菜單會自動忽略魚類下限。</div></div>
 <div><label>每週炸物最多</label><input type="number" min="0" max="10" name="fried_per_week_max" value="1"></div>
 <div><label>每週甜湯最多</label><input type="number" min="0" max="10" name="sweet_soup_per_week_max" value="1"></div>
 </div><br><label><input style="width:auto" type="checkbox" name="exclude_incomplete_nutrition" value="1" checked> 排除無法確認熱量的菜色</label><br><br>

@@ -9,8 +9,27 @@
   </div>
   <a class="btn secondary" href="{{ url_for('order_tool.ai_menu_index') }}">回 AI 菜單</a>
 </div>
+
+<div class="card" style="margin-bottom:16px">
+  <div class="field" style="max-width:320px">
+    <label for="recipe-category-filter">依菜色類別篩選</label>
+    <select id="recipe-category-filter">
+      <option value="">全部類別</option>
+      <option value="主食">主食</option>
+      <option value="主菜">主菜</option>
+      <option value="副菜">副菜</option>
+      <option value="青菜">青菜</option>
+      <option value="湯品">湯品</option>
+      <option value="點心">點心</option>
+      <option value="其他">其他</option>
+    </select>
+  </div>
+  <div id="recipe-filter-count" class="muted" style="margin-top:8px"></div>
+</div>
+
+<div id="recipe-tag-list">
 {% for row in rows %}
-<form class="card" method="post">
+<form class="card recipe-tag-card" data-category="{{ row.recipe.category or '其他' }}" method="post">
   <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="recipe_id" value="{{ row.recipe.id }}">
   <h3>{{ row.recipe.name }} <span class="muted">{{ row.recipe.category or '未分類' }}</span></h3>
@@ -30,4 +49,27 @@
   <br><button class="btn secondary">儲存這道菜</button>
 </form>
 {% endfor %}
+</div>
+
+<script>
+(function () {
+  const select = document.getElementById('recipe-category-filter');
+  const cards = Array.from(document.querySelectorAll('.recipe-tag-card'));
+  const count = document.getElementById('recipe-filter-count');
+
+  function applyFilter() {
+    const category = select.value;
+    let visible = 0;
+    cards.forEach((card) => {
+      const show = !category || card.dataset.category === category;
+      card.style.display = show ? '' : 'none';
+      if (show) visible += 1;
+    });
+    count.textContent = `目前顯示 ${visible} 道菜`;
+  }
+
+  select.addEventListener('change', applyFilter);
+  applyFilter();
+})();
+</script>
 {% endblock %}

@@ -11,7 +11,7 @@
       <span class="muted">選擇後自動儲存</span>
     </form>
   </div>
-  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.recipes') }}">← 菜色清單</a><form method="post" action="{{ url_for('order_tool.recipe_copy', recipe_id=recipe.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn">複製此菜色</button></form></div>
+  <div class="actions no-print"><a class="btn secondary" href="{{ url_for('order_tool.recipes') }}">← 菜色清單</a><a class="btn ok" href="{{ url_for('order_tool.summary') }}">回總表</a></div>
 </div>
 
 <div class="grid">

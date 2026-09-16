@@ -233,7 +233,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
     assert "每週菜單總表" in page
     assert "KITCHEN V2" not in page
     assert "請先在下面每一天，把要供應的菜加進去。" in page
-    assert "加好以後，請按「下一步：選擇學校」，去各校勾選菜色、填寫人數。" in page
+    assert "加好以後，請按「下一步：選擇學校」。" in page
     assert all(label in page for label in ("週一", "週二", "週三", "週四", "週五", "週六", "週日"))
     assert "08/10" in page and "08/16" in page
     assert "搜尋或輸入新菜色" in page

@@ -9,17 +9,17 @@
 {%- endmacro %}
 {% block content %}
 <section class="summary-week-head">
-  <div>
-    <h1>每週菜單總表</h1>
-    <p class="summary-help">請先在下面每一天，把要供應的菜加進去。<br>加好以後，請按「下一步：選擇學校」，去各校勾選菜色、填寫人數。</p>
-  </div>
-  <nav class="week-switcher" aria-label="切換週次">
-    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=previous_week.isoformat()) }}">← 上一週</a>
-    <a class="btn" href="{{ url_for('order_tool.summary') }}">回到本週</a>
-    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=next_week.isoformat()) }}">下一週 →</a>
+  <h1>每週菜單總表</h1>
+  <div class="summary-week-actions">
+    <nav class="week-switcher" aria-label="切換週次">
+      <a class="btn secondary" href="{{ url_for('order_tool.summary', week=previous_week.isoformat()) }}">← 上一週</a>
+      <a class="btn" href="{{ url_for('order_tool.summary') }}">回到本週</a>
+      <a class="btn secondary" href="{{ url_for('order_tool.summary', week=next_week.isoformat()) }}">下一週 →</a>
+    </nav>
     <a class="btn ok summary-next" href="{{ url_for('order_tool.school_menus', week=week_start.isoformat()) }}">下一步：選擇學校 →</a>
-  </nav>
+  </div>
 </section>
+<p class="summary-help">請先在下面每一天，把要供應的菜加進去。加好以後，請按「下一步：選擇學校」。</p>
 
 <script id="recipe-search-data" type="application/json">{{ recipe_options|tojson }}</script>
 
@@ -96,12 +96,13 @@
   {% endfor %}
 </section>
 
-<section class="menu-import-card card">
+<details class="menu-import-card card">
+  <summary class="menu-import-summary">已經用 Excel 做好菜單了嗎？點這裡，直接匯入。</summary>
   <div class="menu-import-main">
     <div class="import-mark" aria-hidden="true">匯</div>
     <div>
       <h2>匯入菜單</h2>
-      <div class="muted">上傳 Excel，系統會依日期放進週一到週日；同一天相同菜名自動略過。</div>
+      <div class="muted">欄位請有：日期、星期、主食、主菜、副菜、蔬菜、湯品。同一天相同菜名會自動略過。</div>
     </div>
     <form method="post" action="{{ url_for('order_tool.summary_import') }}" enctype="multipart/form-data" class="menu-upload-form">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -120,10 +121,5 @@
       <button class="btn ok" type="submit">匯入總表</button>
     </form>
   </div>
-  <div class="menu-template-zone">
-    <div><b>菜單模板</b><span class="pill ok">已支援</span></div>
-    <p>廣豐月菜單：日期、星期、主食、主菜、副菜、蔬菜、湯品。</p>
-    <small>預設只匯入一般菜單；含「素食」名稱的工作表可另外選取。系統只讀儲存格，不會載入 Excel 內的圖片或文字框。</small>
-  </div>
-</section>
+</details>
 {% endblock %}

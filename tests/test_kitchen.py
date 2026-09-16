@@ -4,6 +4,7 @@ from io import BytesIO
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import event
 
 import blueprints.order_tool as order_tool_module
 from app import create_app
@@ -1280,6 +1281,86 @@ def test_summary_import_rejects_unknown_template_without_writing(app, authed_cli
     assert "請提供這種格式作為新模板" in response.get_data(as_text=True)
     with app.app_context():
         assert KitchenMenuPlan.query.count() == 0
+
+
+def test_week_purchase_generate_avoids_n_plus_one_queries(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        supplier_id = ids["supplier"]
+        for index in range(10):
+            ingredient = KitchenIngredient(
+                name=f"測資{index}",
+                supplier_id=supplier_id,
+                purchase_unit="kg",
+                grams_per_purchase_unit=Decimal("1000"),
+                unit_price=Decimal("10"),
+                order_increment=Decimal("0.001"),
+            )
+            recipe = KitchenRecipe(name=f"測菜{index}", category="副菜")
+            db.session.add_all([ingredient, recipe])
+            db.session.flush()
+            db.session.add(KitchenRecipeIngredient(
+                recipe_id=recipe.id,
+                ingredient_id=ingredient.id,
+                grams_per_person=Decimal("12"),
+                quantity_status="manual",
+            ))
+            db.session.add(KitchenSupplierItem(
+                supplier_id=supplier_id,
+                ingredient_id=ingredient.id,
+                name=ingredient.name,
+                unit="kg",
+                active=True,
+            ))
+        recipe_ids = [row.id for row in KitchenRecipe.query.all()]
+        for offset in range(5):
+            day = date(2026, 8, 10) + timedelta(days=offset)
+            plan = KitchenMenuPlan(service_date=day, meal_type="午餐", name="中央菜單")
+            db.session.add(plan)
+            db.session.flush()
+            for sort_order, recipe_id in enumerate(recipe_ids):
+                db.session.add(KitchenMenuPlanItem(plan_id=plan.id, recipe_id=recipe_id, sort_order=sort_order))
+            db.session.add(KitchenMenuAssignment(
+                plan_id=plan.id,
+                school_id=ids["school"],
+                headcount=40,
+                service_status="serving",
+            ))
+        db.session.commit()
+
+    statements = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    with app.app_context():
+        event.listen(db.engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        response = authed_client.post("/admin/order-tool/purchases/generate", data={
+            "start": "2026-08-10",
+            "end": "2026-08-14",
+        })
+        assert response.status_code == 302
+    finally:
+        with app.app_context():
+            event.remove(db.engine, "before_cursor_execute", before_cursor_execute)
+
+    supplier_item_selects = [
+        sql for sql in statements
+        if "kitchen_supplier_item" in sql.lower() and sql.lstrip().lower().startswith("select")
+    ]
+    plan_selects = [
+        sql for sql in statements
+        if "kitchen_menu_plan" in sql.lower()
+        and "kitchen_menu_plan_item" not in sql.lower()
+        and sql.lstrip().lower().startswith("select")
+    ]
+    assert len(supplier_item_selects) <= 1
+    assert len(plan_selects) <= 2
+    with app.app_context():
+        assert KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date.between(date(2026, 8, 10), date(2026, 8, 14))
+        ).count() == 5
 
 
 def test_full_801_person_purchase_calculation_and_snapshot(app, authed_client):

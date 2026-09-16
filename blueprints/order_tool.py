@@ -265,10 +265,25 @@ def _package_conversion_rule(raw: str | None, purchase_unit: str) -> dict | None
     return None
 
 
-def _supplier_item_match(supplier_id: int | None, ingredient_id: int | None, ingredient_name: str):
+def _active_supplier_items_by_supplier() -> dict[int, list[KitchenSupplierItem]]:
+    grouped: dict[int, list[KitchenSupplierItem]] = defaultdict(list)
+    for row in KitchenSupplierItem.query.filter_by(active=True).all():
+        grouped[row.supplier_id].append(row)
+    return grouped
+
+
+def _supplier_item_match(
+    supplier_id: int | None,
+    ingredient_id: int | None,
+    ingredient_name: str,
+    catalog: dict[int, list[KitchenSupplierItem]] | None = None,
+):
     if not supplier_id:
         return None
-    rows = KitchenSupplierItem.query.filter_by(supplier_id=supplier_id, active=True).all()
+    if catalog is None:
+        rows = KitchenSupplierItem.query.filter_by(supplier_id=supplier_id, active=True).all()
+    else:
+        rows = catalog.get(supplier_id) or []
     if ingredient_id:
         exact = next((row for row in rows if row.ingredient_id == ingredient_id), None)
         if exact:
@@ -1240,8 +1255,17 @@ def _supplier_identity(ingredient: KitchenIngredient):
     return f"unassigned:{ingredient.id}", None, "⚠ 未指定供應商"
 
 
-def _requirements_for_date(service_date: date):
-    plans_on_day = KitchenMenuPlan.query.filter_by(service_date=service_date).all()
+_PLAN_REQUIREMENT_LOAD = (
+    selectinload(KitchenMenuPlan.assignments).selectinload(KitchenMenuAssignment.school),
+    selectinload(KitchenMenuPlan.items)
+    .selectinload(KitchenMenuPlanItem.recipe)
+    .selectinload(KitchenRecipe.ingredients)
+    .selectinload(KitchenRecipeIngredient.ingredient)
+    .selectinload(KitchenIngredient.supplier),
+)
+
+
+def _requirements_from_plans(plans_on_day):
     grouped: dict[str, dict[int, dict]] = defaultdict(dict)
     for plan in plans_on_day:
         serving_assignments = [
@@ -1253,9 +1277,12 @@ def _requirements_for_date(service_date: date):
         if people <= 0:
             continue
         for menu_item in plan.items:
-            for component in menu_item.recipe.ingredients:
+            recipe = menu_item.recipe
+            if not recipe:
+                continue
+            for component in recipe.ingredients:
                 ing = component.ingredient
-                if (component.grams_per_person or Decimal("0")) <= 0:
+                if not ing or (component.grams_per_person or Decimal("0")) <= 0:
                     continue
                 supplier_key, supplier_id, supplier_name = _supplier_identity(ing)
                 base_amount = (component.grams_per_person or Decimal("0")) * people
@@ -1276,6 +1303,32 @@ def _requirements_for_date(service_date: date):
                     assignment.school.name for assignment in serving_assignments
                 )
     return grouped
+
+
+def _requirements_for_date(service_date: date):
+    plans_on_day = (
+        KitchenMenuPlan.query.filter_by(service_date=service_date)
+        .options(*_PLAN_REQUIREMENT_LOAD)
+        .all()
+    )
+    return _requirements_from_plans(plans_on_day)
+
+
+def _requirements_for_dates(start: date, end: date):
+    plans = (
+        KitchenMenuPlan.query.filter(KitchenMenuPlan.service_date.between(start, end))
+        .options(*_PLAN_REQUIREMENT_LOAD)
+        .all()
+    )
+    plans_by_date: dict[date, list[KitchenMenuPlan]] = defaultdict(list)
+    for plan in plans:
+        plans_by_date[plan.service_date].append(plan)
+    result = {}
+    day = start
+    while day <= end:
+        result[day] = _requirements_from_plans(plans_by_date.get(day, []))
+        day += timedelta(days=1)
+    return result
 
 
 def _summary_data(service_date: date):
@@ -2515,12 +2568,28 @@ def catalog_import_apply():
     return redirect(url_for("order_tool.catalog_import"))
 
 
-def _generate_date_orders(service_date: date):
-    if _active_confirmed_orders(service_date):
+def _generate_date_orders(
+    service_date: date,
+    *,
+    requirements=None,
+    supplier_catalog: dict[int, list[KitchenSupplierItem]] | None = None,
+    existing_orders=None,
+    skip_confirmed_check: bool = False,
+    commit: bool = True,
+):
+    if not skip_confirmed_check and _active_confirmed_orders(service_date):
         return 0, True
 
-    requirements = _requirements_for_date(service_date)
-    existing_orders = KitchenPurchaseOrder.query.filter_by(service_date=service_date).all()
+    if requirements is None:
+        requirements = _requirements_for_date(service_date)
+    if supplier_catalog is None:
+        supplier_catalog = _active_supplier_items_by_supplier()
+    if existing_orders is None:
+        existing_orders = (
+            KitchenPurchaseOrder.query.filter_by(service_date=service_date)
+            .options(selectinload(KitchenPurchaseOrder.items))
+            .all()
+        )
     order = next((row for row in existing_orders if row.supplier_key == "daily"), None)
     if order is None and existing_orders:
         order = existing_orders[0]
@@ -2534,7 +2603,8 @@ def _generate_date_orders(service_date: date):
         for old_order in existing_orders:
             if old_order.status == "draft":
                 db.session.delete(old_order)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return 0, False
 
     if order is None:
@@ -2565,7 +2635,7 @@ def _generate_date_orders(service_date: date):
         required_amount = data["required_amount"]
         required_qty = required_amount / units_per_purchase
         recommended = _round_up_increment(required_qty, increment)
-        supplier_item = _supplier_item_match(data["supplier_id"], ing.id, ing.name)
+        supplier_item = _supplier_item_match(data["supplier_id"], ing.id, ing.name, catalog=supplier_catalog)
         conversion_rule = _package_conversion_rule(
             supplier_item.package_conversion if supplier_item else None,
             ing.purchase_unit,
@@ -2624,7 +2694,8 @@ def _generate_date_orders(service_date: date):
         if old_order.id != order.id:
             db.session.delete(old_order)
 
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return 1, False
 
 
@@ -2676,7 +2747,8 @@ def _procurement_rows(service_date: date):
             KitchenPurchaseOrder.status == "draft",
         )
         .options(
-            selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.ingredient)
+            selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.ingredient),
+            selectinload(KitchenPurchaseOrder.items).selectinload(KitchenPurchaseOrderItem.supplier),
         )
         .order_by(KitchenPurchaseOrder.service_date, KitchenPurchaseOrder.supplier_name_snapshot)
         .all()
@@ -3372,7 +3444,11 @@ def procurement():
     rows = _procurement_rows(service_date)
     suppliers = KitchenSupplier.query.filter_by(active=True).order_by(KitchenSupplier.name).all()
     pending_recipes = set()
-    plans = KitchenMenuPlan.query.filter_by(service_date=service_date).all()
+    plans = (
+        KitchenMenuPlan.query.filter_by(service_date=service_date)
+        .options(*_PLAN_REQUIREMENT_LOAD)
+        .all()
+    )
     for plan in plans:
         if not any(x.service_status == "serving" and x.headcount > 0 for x in plan.assignments):
             continue
@@ -3725,13 +3801,42 @@ def generate_purchases():
         return redirect(url_for("order_tool.purchases", start=start, end=end))
     created = 0
     blocked_dates = []
+    requirements_by_date = _requirements_for_dates(start, end)
+    supplier_catalog = _active_supplier_items_by_supplier()
+    existing_by_date: dict[date, list[KitchenPurchaseOrder]] = defaultdict(list)
+    for order in (
+        KitchenPurchaseOrder.query.filter(
+            KitchenPurchaseOrder.service_date.between(start, end),
+        )
+        .options(selectinload(KitchenPurchaseOrder.items))
+        .all()
+    ):
+        existing_by_date[order.service_date].append(order)
+    confirmed_dates = {
+        order.service_date
+        for orders in existing_by_date.values()
+        for order in orders
+        if order.status == "confirmed"
+    }
     day = start
     while day <= end:
-        count, blocked = _generate_date_orders(day)
+        if day in confirmed_dates:
+            blocked_dates.append(str(day))
+            day += timedelta(days=1)
+            continue
+        count, blocked = _generate_date_orders(
+            day,
+            requirements=requirements_by_date.get(day),
+            supplier_catalog=supplier_catalog,
+            existing_orders=existing_by_date.get(day, []),
+            skip_confirmed_check=True,
+            commit=False,
+        )
         created += count
         if blocked:
             blocked_dates.append(str(day))
         day += timedelta(days=1)
+    db.session.commit()
     if created:
         flash(f"已建立 / 更新 {created} 天的採購草稿；每一天只會有一張。", "success")
     if blocked_dates:

@@ -176,10 +176,19 @@ def _weekly_data(week_start, week_end):
                 "message": f"同一天同一食材出現 {len(rows)} 筆採購資料，請確認是否重複。",
             })
 
-    for key, expected in expected_totals.items():
-        if expected <= 0 or item_keys.get(key):
-            continue
-        ingredient = db.session.get(KitchenIngredient, key[1])
+    missing_keys = [
+        key for key, expected in expected_totals.items()
+        if expected > 0 and not item_keys.get(key)
+    ]
+    missing_ingredients = {}
+    missing_ids = [key[1] for key in missing_keys if key[1] is not None]
+    if missing_ids:
+        missing_ingredients = {
+            ingredient.id: ingredient
+            for ingredient in KitchenIngredient.query.filter(KitchenIngredient.id.in_(missing_ids)).all()
+        }
+    for key in missing_keys:
+        ingredient = missing_ingredients.get(key[1])
         ingredient_name = ingredient.name if ingredient else f"食材 #{key[1]}"
         recipe_names = "、".join(sorted({row["recipe_name"] for row in sources[key].values()}))
         anomalies.append({

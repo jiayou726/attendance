@@ -57,23 +57,6 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,t
 .summary-week-actions{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto}
 .summary-week-actions .summary-next{min-height:52px;padding:12px 22px;font-size:18px;font-weight:800;border-radius:12px}
 .summary-help{margin:0 0 16px;padding:16px 20px;border-radius:16px;background:#e8f4ee;color:#16382f;font-size:24px;font-weight:700;line-height:1.55;letter-spacing:.01em}
-.menu-week-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px;align-items:start;width:calc(100vw - 40px);margin:0 0 18px calc(50% - 50vw + 20px);padding:0;overflow:visible}
-.menu-day{min-width:0;width:100%}
-.menu-day-head{min-height:74px;padding:14px 16px}
-.menu-day-head b,.menu-day-head span{display:block}
-.menu-day-head b{font-size:20px}
-.menu-day-head span{margin-top:2px;font-size:16px;opacity:.85}
-.menu-day-head em{padding:4px 8px;font-size:13px}
-.quick-dish-form{padding:12px}
-.quick-dish-form select{min-height:46px;font-size:16px}
-.quick-dish-form .dish-search-input{min-height:48px;padding:8px 11px;font-size:16px}
-.quick-dish-form .quick-add{min-height:44px;padding:8px 12px;font-size:16px}
-.menu-day-body{min-height:0;padding:10px 12px}
-.day-empty{min-height:88px;font-size:16px}
-.menu-dish{grid-template-columns:auto 1fr auto;gap:8px;padding:12px 4px}
-.menu-dish a{font-size:20px;line-height:1.4;font-weight:750}
-.dish-category{min-width:44px;padding:4px 6px;font-size:14px}
-.menu-day-foot{font-size:13px;padding:11px 13px}
 .menu-import-card{display:block;padding:0}
 .menu-import-summary{padding:20px 24px;color:#203a34;font-size:26px;font-weight:700;line-height:1.45;cursor:pointer;list-style:none}
 .menu-import-summary::-webkit-details-marker{display:none}

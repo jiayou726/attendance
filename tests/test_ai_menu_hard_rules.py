@@ -53,8 +53,11 @@ def test_keyword_rules_detect_sweet_soups_and_exclude_non_fish_seafood():
     assert "fried" in suggest_tags(recipe("遊龍鍋貼"))
     assert "fried" in suggest_tags(recipe("香煎鍋貼"))
     assert "fried" not in suggest_tags(recipe("香煎鯖魚"))
+    assert "fried" not in suggest_tags(recipe("炸醬麵"))
+    assert "fried" not in suggest_tags(recipe("蛋酥白菜"))
     assert "sweet_soup" not in suggest_tags(recipe("冬瓜排骨湯", "湯品"))
     assert "sweet_soup" not in suggest_tags(recipe("銀芽豆包", "點心"))
+    assert "sweet_soup" not in suggest_tags(recipe("紅豆包", "點心"))
     assert "fried" not in suggest_tags(recipe("綜合滷味"))
     assert "fried" not in suggest_tags(recipe("敏豆甜不辣"))
 

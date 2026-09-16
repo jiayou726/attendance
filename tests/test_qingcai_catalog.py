@@ -36,11 +36,13 @@ def test_mixed_vegetable_sides_stay_dishes():
     assert not is_leafy_side("木耳炒高麗菜", "副菜")
 
 
-def test_pepper_suji_is_side_not_main():
+def test_suji_dishes_are_sides_except_suji_steak():
     assert is_vegetable_suji_side("彩椒素雞")
     assert is_vegetable_suji_side("杏鮑素雞")
     assert is_vegetable_suji_side("杏鮑素雞丁")
-    assert not is_vegetable_suji_side("照燒素雞")
+    assert is_vegetable_suji_side("照燒素雞")
+    assert is_vegetable_suji_side("照燒素雞(素)")
     assert not is_vegetable_suji_side("蔬菜素排")
+    assert not is_vegetable_suji_side("素雞排")
     assert classify_category("彩椒素雞", "主菜") == "副菜"
-    assert classify_category("照燒素雞", "主菜") == "主菜"
+    assert classify_category("照燒素雞", "主菜") == "副菜"

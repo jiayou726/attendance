@@ -25,7 +25,6 @@ GENERIC_LEAF_DISHES = frozenset({
 MIXED_KEEP = re.compile(
     r"冬粉|寬粉|干片|年糕|滷|杏鮑|南瓜|茄子|玉米|毛豆|豆腐|培根|豆包|豆芽|銀芽|木耳|香菇|四季豆|鮮菇|彩椒"
 )
-VEG_SIDE_SUJI = re.compile(r"^(彩椒|杏鮑|青椒|芹菜|木耳|金針|海帶|茄子|四季豆|白菜|高麗|豆芽|玉米)")
 
 
 def _bare(name: str) -> str:
@@ -91,11 +90,11 @@ def organic_ingredient_name(dish_or_veg: str) -> str | None:
 
 
 def is_vegetable_suji_side(name: str) -> bool:
-    """彩椒素雞這類『蔬菜名 + 素雞』是副菜，不是主菜。"""
+    """素雞（不含素雞排）當副菜，例如彩椒素雞、照燒素雞。"""
     n = _bare(name)
-    if "素雞排" in n or n.startswith(("照燒素雞", "三杯素雞", "宮保素雞", "糖醋素雞", "香煎素雞", "紅燒素雞")):
+    if "素雞排" in n:
         return False
-    return "素雞" in n and bool(VEG_SIDE_SUJI.search(n))
+    return "素雞" in n
 
 
 def classify_category(name: str, current: str | None = None) -> str:

@@ -24,6 +24,7 @@ def test_each_generation_requests_a_fresh_random_seed(monkeypatch):
     monkeypatch.setattr(engine.secrets, "randbits", lambda _bits: next(seeds))
     monkeypatch.setattr(engine.random, "Random", lambda seed: (seen.append(seed), original_random(seed))[1])
     rules = Rules(fish_per_week_min=0, fried_per_week_max=9, sweet_soup_per_week_max=9,
+                  fish_per_week_max=9,
                   prefer_kcal_in_range=False, exclude_incomplete_nutrition=False)
 
     for _ in range(2):
@@ -48,6 +49,10 @@ def test_keyword_rules_detect_sweet_soups_and_exclude_non_fish_seafood():
     assert "fish" not in suggest_tags(recipe("魷魚羹"))
     assert "fish" not in suggest_tags(recipe("花枝丸"))
     assert "fried" in suggest_tags(recipe("芝麻球"))
+    assert "fried" in suggest_tags(recipe("鍋貼"))
+    assert "fried" in suggest_tags(recipe("遊龍鍋貼"))
+    assert "fried" in suggest_tags(recipe("香煎鍋貼"))
+    assert "fried" not in suggest_tags(recipe("香煎鯖魚"))
     assert "sweet_soup" not in suggest_tags(recipe("冬瓜排骨湯", "湯品"))
     assert "sweet_soup" not in suggest_tags(recipe("銀芽豆包", "點心"))
     assert "fried" not in suggest_tags(recipe("綜合滷味"))
@@ -83,7 +88,7 @@ def test_regular_and_vegetarian_generation_use_separate_main_dish_pools(monkeypa
     ]
     monkeypatch.setattr(engine, "load_candidates", lambda: candidates)
     rules = Rules(recipe_repeat_days=0, main_repeat_days=0, fish_per_week_min=0,
-                  fried_per_week_max=9, sweet_soup_per_week_max=9,
+                  fried_per_week_max=9, sweet_soup_per_week_max=9, fish_per_week_max=9,
                   prefer_kcal_in_range=False, exclude_incomplete_nutrition=False)
 
     regular = engine.generate(date(2026, 9, 14), date(2026, 9, 14),
@@ -120,6 +125,7 @@ def test_generate_never_exceeds_weekly_sweet_soup_max(monkeypatch):
         fish_per_week_min=0,
         fried_per_week_max=99,
         sweet_soup_per_week_max=1,
+        fish_per_week_max=99,
         prefer_kcal_in_range=False,
         exclude_incomplete_nutrition=False,
     )
@@ -151,6 +157,7 @@ def test_generate_fails_instead_of_breaking_sweet_soup_hard_cap(monkeypatch):
         fish_per_week_min=0,
         fried_per_week_max=99,
         sweet_soup_per_week_max=1,
+        fish_per_week_max=99,
         prefer_kcal_in_range=False,
         exclude_incomplete_nutrition=False,
     )
@@ -176,6 +183,7 @@ def test_generate_guarantees_weekly_fish_minimum_when_feasible(monkeypatch):
         fish_per_week_min=1,
         fried_per_week_max=99,
         sweet_soup_per_week_max=99,
+        fish_per_week_max=1,
         prefer_kcal_in_range=False,
         exclude_incomplete_nutrition=False,
     )
@@ -193,3 +201,56 @@ def test_generate_guarantees_weekly_fish_minimum_when_feasible(monkeypatch):
         if recipe_id
     )
     assert fish_count >= 1
+    assert fish_count <= 1
+
+
+def test_fried_respects_weekly_max_and_selected_weekday(monkeypatch):
+    candidates = [
+        Candidate(1, "白飯", "主食", 200),
+        Candidate(2, "炸雞", "主菜", 300, frozenset({"fried"})),
+        Candidate(3, "滷肉", "主菜", 250, frozenset()),
+    ]
+    monkeypatch.setattr(engine, "load_candidates", lambda: candidates)
+    rules = Rules(
+        recipe_repeat_days=0,
+        main_repeat_days=0,
+        fish_per_week_min=0,
+        fish_per_week_max=9,
+        fried_per_week_max=1,
+        fried_weekdays=(2,),
+        sweet_soup_per_week_max=9,
+        prefer_kcal_in_range=False,
+        exclude_incomplete_nutrition=False,
+    )
+
+    result = engine.generate(
+        date(2026, 9, 14),
+        date(2026, 9, 18),
+        _structure(主食=1, 主菜=1),
+        rules,
+    )
+
+    fried_days = [
+        result.dates[key[0]]
+        for key, recipe_id in result.assignment.items()
+        if recipe_id and "fried" in result.candidates[recipe_id].tags
+    ]
+    assert fried_days == [date(2026, 9, 16)]
+
+
+def test_fish_max_and_weekday_from_dict():
+    rules = Rules.from_dict({
+        "fish_per_week_max": "1",
+        "fried_per_week_max": "1",
+        "sweet_soup_per_week_max": "1",
+        "fish_weekdays": ["2"],
+        "fried_weekdays": ["4"],
+        "sweet_soup_weekdays": [],
+    })
+    assert rules.fish_per_week_max == 1
+    assert rules.fish_weekdays == (2,)
+    assert rules.fried_weekdays == (4,)
+    assert rules.sweet_soup_weekdays == ()
+    lines = engine.describe_rules(rules)
+    assert any("魚類每週最多 1 次" in line and "週三" in line for line in lines)
+    assert any("炸物每週最多 1 次" in line and "週五" in line for line in lines)

@@ -139,3 +139,15 @@ def test_public_excel_matches_simple_two_row_menu_format(app, client):
     assert sheet["P3"].value == "✓"
     assert "狀態" not in [cell.value for cell in sheet[2]]
     assert "規則分數" not in [cell.value for cell in sheet[2]]
+
+
+def test_ai_menu_form_uses_weekly_max_and_weekdays(app, client):
+    page = client.get("/admin/order-tool/ai-menu").get_data(as_text=True)
+    assert "魚類每週最多" in page
+    assert "炸物每週最多" in page
+    assert "甜湯每週最多" in page
+    assert "周幾出現" in page
+    assert "name=\"fish_weekdays\"" in page
+    assert "name=\"fried_weekdays\"" in page
+    assert "name=\"sweet_soup_weekdays\"" in page
+    assert "每週魚類至少" not in page

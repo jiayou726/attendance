@@ -18,12 +18,18 @@
       </div><br>
       <label class="inline-check"><input type="checkbox" name="include_weekends" value="1"> 週六、週日也排菜</label>
       <hr><h3>每天菜色結構</h3><div class="ai-structure-grid">{% for category in categories %}<div class="field"><label>{{ category }}</label><input type="number" name="structure_{{ category }}" min="0" max="{{ structure_limits[category] }}" value="{{ default_structure[category] }}"></div>{% endfor %}</div>
-      <hr><h3>排菜規則</h3><div class="ai-structure-grid">
+      <hr><h3>排菜規則</h3>
+      <div class="ai-structure-grid">
         <div class="field"><label>同一道菜間隔</label><input type="number" name="recipe_repeat_days" min="0" max="30" value="{{ default_rules.recipe_repeat_days }}"><div class="muted">供餐日</div></div>
         <div class="field"><label>主菜間隔</label><input type="number" name="main_repeat_days" min="0" max="30" value="{{ default_rules.main_repeat_days }}"><div class="muted">供餐日</div></div>
-        <div class="field"><label>每週魚類至少</label><input type="number" name="fish_per_week_min" min="0" max="10" value="{{ default_rules.fish_per_week_min }}"></div>
-        <div class="field"><label>每週炸物最多</label><input type="number" name="fried_per_week_max" min="0" max="10" value="{{ default_rules.fried_per_week_max }}"></div>
-        <div class="field"><label>每週甜湯最多</label><input type="number" name="sweet_soup_per_week_max" min="0" max="10" value="{{ default_rules.sweet_soup_per_week_max }}"></div>
+      </div>
+      <div class="ai-cap-rules">
+        {% for tag, cap_label, max_name, days_name, max_value in cap_rows %}
+        <div class="ai-cap-rule">
+          <div class="field"><label>{{ cap_label }}每週最多</label><input type="number" name="{{ max_name }}" min="0" max="10" value="{{ max_value }}"><div class="muted">次</div></div>
+          <div class="field"><label>周幾出現</label><div class="ai-weekday-picks">{% for weekday_index, weekday_label in weekday_options %}<label class="inline-check"><input type="checkbox" name="{{ days_name }}" value="{{ weekday_index }}">週{{ weekday_label }}</label>{% endfor %}</div><div class="muted">不勾選表示不限星期；勾選後只在那些天出現，且當天會排進去。</div></div>
+        </div>
+        {% endfor %}
       </div><br>
       <label class="inline-check"><input type="checkbox" name="prefer_kcal_in_range" value="1" checked> 排菜時把每日總熱量納入規則分數</label><br>
       <label class="inline-check"><input type="checkbox" name="exclude_incomplete_nutrition" value="1" checked> 優先排除營養資料不完整的菜</label><br><br>

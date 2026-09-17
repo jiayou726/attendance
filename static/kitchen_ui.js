@@ -87,7 +87,7 @@
 
       const matches = recipeOptions.filter((recipe) =>
         String(recipe.name).toLocaleLowerCase('zh-Hant').includes(query)
-      ).slice(0, 10);
+      ).slice(0, 30);
 
       matches.forEach((recipe) => {
         const option = document.createElement('button');
@@ -185,7 +185,7 @@
 
       const matches = ingredientOptions.filter((ingredient) =>
         String(ingredient.name).toLocaleLowerCase('zh-Hant').includes(query)
-      ).slice(0, 10);
+      ).slice(0, 30);
 
       matches.forEach((ingredient) => {
         const option = document.createElement('button');

@@ -16,7 +16,8 @@ NON_FISH_SEAFOOD = ("魷魚", "章魚", "墨魚", "花枝", "蝦", "小卷", "�
 NON_FISH_PHRASES = NON_FISH_SEAFOOD + ("魚香", "魚丸", "魚板", "魚豆腐", "魚餃", "魚卵", "素魚", "柴魚")
 FISH_TERMS = ("鮭", "鯖", "鱈", "旗魚", "虱目", "鯛", "柳葉魚", "鯊", "鮪", "魚排", "魚丁", "魚片", "魚塊", "魚干", "魚乾")
 SWEET_SOUP_TERMS = ("甜湯", "紅豆", "綠豆", "薏仁", "花生湯", "西米露", "芋圓", "粉圓", "山粉圓", "銀耳", "蓮子", "湯圓", "紫米湯")
-FRIED_TERMS = ("炸", "酥", "天婦羅", "椒鹽甜不辣", "薯條", "薯餅", "雞塊", "可樂餅", "春捲", "芝麻球", "炸物")
+FRIED_TERMS = ("炸", "香酥", "酥炸", "鹹酥", "鹽酥", "天婦羅", "椒鹽甜不辣", "薯條", "薯餅", "雞塊", "可樂餅", "春捲", "芝麻球", "炸物", "鍋貼")
+NON_FRIED_PHRASES = ("炸醬",)
 
 @dataclass(frozen=True)
 class TagDef:
@@ -32,7 +33,7 @@ TAG_DEFS: tuple[TagDef, ...] = (
     TagDef("beef", "牛肉", ("牛",), "主要蛋白質為牛肉"),
     TagDef("egg", "蛋類", ("蛋",), "含蛋"),
     TagDef("tofu", "豆製品", ("豆腐", "豆干", "豆乾", "干絲", "豆皮", "豆包", "百頁", "油豆腐", "麵腸", "素肉", "毛豆", "豆腸"), "含豆製品"),
-    TagDef("fried", "炸物", ("炸", "酥", "天婦羅", "甜不辣", "薯條", "薯餅", "雞塊", "麵筋泡", "可樂餅", "春捲"), "油炸或半成品炸物"),
+    TagDef("fried", "炸物", ("炸", "香酥", "酥炸", "鹹酥", "鹽酥", "天婦羅", "甜不辣", "薯條", "薯餅", "雞塊", "麵筋泡", "可樂餅", "春捲", "鍋貼"), "油炸、鍋貼或半成品炸物"),
     TagDef("sweet_soup", "甜湯", ("甜湯", "紅豆湯", "綠豆湯", "薏仁湯", "花生湯", "西米露", "芋圓", "粉圓", "山粉圓", "銀耳", "蓮子", "湯圓", "麥片"), "甜湯或甜點心"),
     TagDef("curry", "咖哩", ("咖哩",), "咖哩口味"),
     TagDef("vegetarian", "素食", ("素", "全素", "蔬"), "全素可用"),
@@ -65,11 +66,14 @@ def suggest_tags(recipe) -> set[str]:
     if any(term in fish_text for term in FISH_TERMS):
         suggested.add("fish")
     category = (getattr(recipe, "category", "") or "").strip()
-    sweet_context = category in {"湯品", "點心"} or any(marker in name for marker in ("湯", "露", "芋圓", "粉圓", "湯圓"))
+    sweet_context = category == "湯品" or any(marker in name for marker in ("湯", "露", "芋圓", "粉圓", "湯圓", "甜湯"))
     if sweet_context and any(term in name for term in SWEET_SOUP_TERMS):
         suggested.add("sweet_soup")
-    explicitly_fried_ingredient = any("炸" in ingredient_name for ingredient_name in ingredient_names)
-    if any(term in name for term in FRIED_TERMS) or explicitly_fried_ingredient:
+    explicitly_fried_ingredient = any("炸" in ingredient_name and "炸醬" not in ingredient_name for ingredient_name in ingredient_names)
+    fried_text = name
+    for phrase in NON_FRIED_PHRASES:
+        fried_text = fried_text.replace(phrase, " ")
+    if any(term in fried_text for term in FRIED_TERMS) or explicitly_fried_ingredient:
         suggested.add("fried")
     if "vegetarian" in suggested and suggested & {"chicken", "pork", "beef", "fish"}:
         suggested.discard("vegetarian")
@@ -84,6 +88,21 @@ def effective_rule_tags(recipe) -> set[str]:
     """
     manual = {row.tag for row in recipe.tags or () if row.source == SOURCE_MANUAL}
     return manual | (suggest_tags(recipe) & AUTO_RULE_TAGS)
+
+def persist_auto_rule_tags(session, recipe) -> bool:
+    """把魚類／炸物／甜湯關鍵字結果寫進資料庫，不刪人工已勾的其他標記。"""
+    from models import KitchenRecipeTag
+    wanted = suggest_tags(recipe) & AUTO_RULE_TAGS
+    existing = {row.tag: row for row in recipe.tags}
+    changed = False
+    for key in wanted:
+        if key not in existing:
+            session.add(KitchenRecipeTag(recipe_id=recipe.id, tag=key, source=SOURCE_MANUAL))
+            changed = True
+        elif existing[key].source != SOURCE_MANUAL:
+            existing[key].source = SOURCE_MANUAL
+            changed = True
+    return changed
 
 def set_manual_tags(session, recipe, keys) -> bool:
     from models import KitchenRecipeTag

@@ -319,7 +319,7 @@ def ingredient_nutrition_update(ingredient_id):
 
 @order_bp.get("/recipe-tags")
 def recipe_tags():
-    recipes=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags)).filter(KitchenRecipe.active.is_(True)).order_by(KitchenRecipe.category,KitchenRecipe.name).all());rows=[{"recipe":r,"manual":{x.tag for x in r.tags if x.source=="manual"},"suggested":tag_service.suggest_tags(r),"nutrition":recipe_nutrition(r)} for r in recipes];return render_template("kitchen/recipe_tags.html",rows=rows[:200],total=len(rows),tag_defs=tag_service.TAG_DEFS,categories=CATEGORY_ORDER,category="",q="",only="")
+    recipes=(KitchenRecipe.query.options(joinedload(KitchenRecipe.ingredients).joinedload(KitchenRecipeIngredient.ingredient),joinedload(KitchenRecipe.tags)).order_by(KitchenRecipe.category,KitchenRecipe.name).all());rows=[{"recipe":r,"manual":{x.tag for x in r.tags if x.source=="manual"},"suggested":tag_service.suggest_tags(r),"nutrition":recipe_nutrition(r)} for r in recipes];return render_template("kitchen/recipe_tags.html",rows=rows[:200],total=len(rows),tag_defs=tag_service.TAG_DEFS,categories=CATEGORY_ORDER,category="",q="",only="")
 
 @order_bp.post("/recipe-tags")
 def recipe_tags_save():

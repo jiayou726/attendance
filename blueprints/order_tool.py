@@ -428,7 +428,8 @@ def index():
     return render_template(
         "kitchen/dashboard.html",
         recent_orders=recent_orders,
-        recipe_count=KitchenRecipe.query.filter_by(active=True).count(),
+        ai_enabled_recipe_count=KitchenRecipe.query.filter_by(active=True).count(),
+        total_recipe_count=KitchenRecipe.query.count(),
         ingredient_count=KitchenIngredient.query.filter_by(active=True).count(),
         school_count=KitchenSchool.query.filter_by(active=True).count(),
         supplier_count=KitchenSupplier.query.filter_by(active=True).count(),
@@ -825,7 +826,38 @@ def recipe_toggle(recipe_id: int):
     if not row:
         abort(404)
     row.active = not row.active
-    return _commit("菜色狀態已更新。", "order_tool.recipes")
+    message = "已啟用給 AI 菜單。" if row.active else "已取消 AI 啟用；人工菜單仍可使用。"
+    return _commit(message, "order_tool.recipes")
+
+
+@order_bp.post("/recipes/<int:recipe_id>/delete")
+def recipe_delete(recipe_id: int):
+    row = db.session.get(KitchenRecipe, recipe_id)
+    if not row:
+        abort(404)
+    if request.form.get("confirm_delete") != "1":
+        flash("未完成刪除確認，菜色已保留。", "error")
+        return redirect(url_for("order_tool.recipes"))
+
+    # A recipe ID that has appeared anywhere in a menu is historical data.
+    # Keep it intact and let the user exclude it from AI instead of deleting it.
+    from ai_models import KitchenMenuDraftItem
+
+    used_by_manual_menu = KitchenMenuPlanItem.query.filter_by(recipe_id=recipe_id).first()
+    used_by_ai_draft = KitchenMenuDraftItem.query.filter_by(recipe_id=recipe_id).first()
+    used_by_daily_note = KitchenDailyDishNote.query.filter_by(recipe_id=recipe_id).first()
+    if used_by_manual_menu or used_by_ai_draft or used_by_daily_note:
+        flash(
+            f"「{row.name}」已有菜單或歷史紀錄，不能刪除；可改為「AI 不使用」。",
+            "error",
+        )
+        return redirect(url_for("order_tool.recipes"))
+
+    name = row.name
+    db.session.delete(row)
+    db.session.commit()
+    flash(f"已永久刪除未使用的菜色「{name}」及其配方。", "success")
+    return redirect(url_for("order_tool.recipes"))
 
 
 @order_bp.get("/recipes/<int:recipe_id>")
@@ -1009,7 +1041,7 @@ def plan_detail(plan_id: int):
     plan = db.session.get(KitchenMenuPlan, plan_id)
     if not plan:
         abort(404)
-    recipes = KitchenRecipe.query.filter_by(active=True).order_by(
+    recipes = KitchenRecipe.query.order_by(
         KitchenRecipe.category, KitchenRecipe.name
     ).all()
     return render_template(
@@ -1059,7 +1091,7 @@ def plan_item_add(plan_id: int):
         return redirect(url_for("order_tool.plan_detail", plan_id=plan_id))
     recipe_id = _int(request.form.get("recipe_id"), default=0) or 0
     recipe = db.session.get(KitchenRecipe, recipe_id)
-    if not recipe or not recipe.active:
+    if not recipe:
         flash("找不到可用菜色。", "error")
         return redirect(url_for("order_tool.plan_detail", plan_id=plan_id))
     if not KitchenMenuPlanItem.query.filter_by(plan_id=plan_id, recipe_id=recipe_id).first():
@@ -1407,7 +1439,7 @@ def summary():
             "plans": day_plans,
             "draft_plans": [plan for plan in day_plans if plan.status == "draft"],
         })
-    recipes = KitchenRecipe.query.filter_by(active=True).order_by(
+    recipes = KitchenRecipe.query.order_by(
         KitchenRecipe.category, KitchenRecipe.name
     ).all()
     return render_template(
@@ -1994,15 +2026,10 @@ def summary_dish_add():
         return redirect(redirect_to)
 
     recipe = db.session.get(KitchenRecipe, recipe_id) if recipe_id else None
-    if recipe is not None and not recipe.active:
-        recipe = None
     if recipe is None and dish_name:
         recipe = KitchenRecipe.query.filter(
             db.func.lower(KitchenRecipe.name) == dish_name.lower()
         ).first()
-        if recipe is not None and not recipe.active:
-            flash(f"「{recipe.name}」目前已停用，請先到菜色配方重新啟用。", "error")
-            return redirect(redirect_to)
     if recipe is None:
         if category not in CATEGORIES:
             category = "其他"
@@ -2015,7 +2042,7 @@ def summary_dish_add():
             recipe = KitchenRecipe.query.filter(
                 db.func.lower(KitchenRecipe.name) == dish_name.lower()
             ).first()
-            if recipe is None or not recipe.active:
+            if recipe is None:
                 flash("菜色建立失敗，請重新整理後再試一次。", "error")
                 return redirect(redirect_to)
 
@@ -2313,8 +2340,6 @@ def summary_import():
                 db.session.flush()
                 recipes_by_name[key] = recipe
                 created_recipes += 1
-            elif not recipe.active:
-                recipe.active = True
             if recipe.id in existing_recipe_ids:
                 existing_items += 1
                 continue

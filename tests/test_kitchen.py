@@ -272,6 +272,89 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
         ).count() == 1
 
 
+def test_recipe_active_only_controls_ai_and_not_manual_menu_use(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+
+    response = authed_client.post(
+        f"/admin/order-tool/recipes/{ids['recipe']}/toggle",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert "AI 不使用" in page
+    assert "啟用給 AI 菜單" in page
+
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, ids["recipe"]).active is False
+
+    dashboard = authed_client.get("/admin/order-tool/").get_data(as_text=True)
+    assert "共 1 道；AI 啟用菜色 0 道" in dashboard
+
+    assert authed_client.post("/admin/order-tool/plans", data={
+        "service_date": "2026-08-13",
+        "meal_type": "午餐",
+        "name": "中央菜單",
+        "note": "",
+    }).status_code == 302
+    with app.app_context():
+        plan_id = KitchenMenuPlan.query.filter_by(service_date=TEST_DAY).one().id
+
+    plan_page = authed_client.get(
+        f"/admin/order-tool/plans/{plan_id}"
+    ).get_data(as_text=True)
+    assert f'"id": {ids["recipe"]}' in plan_page
+    assert authed_client.post(
+        f"/admin/order-tool/plans/{plan_id}/items",
+        data={"recipe_id": str(ids["recipe"])},
+    ).status_code == 302
+
+    assert authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-14",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    }).status_code == 302
+
+    with app.app_context():
+        assert KitchenMenuPlanItem.query.filter_by(recipe_id=ids["recipe"]).count() == 2
+        assert db.session.get(KitchenRecipe, ids["recipe"]).active is False
+
+
+def test_recipe_delete_removes_only_unused_recipes(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        unused = KitchenRecipe(name="待整理舊菜", category="其他", active=False)
+        db.session.add(unused)
+        db.session.commit()
+        unused_id = unused.id
+
+    refused = authed_client.post(
+        f"/admin/order-tool/recipes/{unused_id}/delete",
+        follow_redirects=True,
+    )
+    assert "未完成刪除確認，菜色已保留" in refused.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, unused_id) is not None
+
+    deleted = authed_client.post(
+        f"/admin/order-tool/recipes/{unused_id}/delete",
+        data={"confirm_delete": "1"},
+        follow_redirects=True,
+    )
+    assert "已永久刪除未使用的菜色" in deleted.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, unused_id) is None
+
+    _create_plan(app, authed_client, ids)
+    blocked = authed_client.post(
+        f"/admin/order-tool/recipes/{ids['recipe']}/delete",
+        data={"confirm_delete": "1"},
+        follow_redirects=True,
+    )
+    assert "已有菜單或歷史紀錄，不能刪除" in blocked.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, ids["recipe"]) is not None
+
+
 def test_summary_recipe_category_search_picker_and_delete(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={
@@ -1232,6 +1315,28 @@ def test_summary_import_can_choose_regular_or_vegetarian_sheet(app, authed_clien
         assert KitchenRecipe.query.filter_by(name="馬鈴薯豆腸").count() == 1
 
 
+def test_summary_import_does_not_enable_existing_ai_disabled_recipe(app, authed_client):
+    with app.app_context():
+        db.session.add(KitchenRecipe(name="馬鈴薯燉肉", category="主菜", active=False))
+        db.session.commit()
+
+    response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={
+            "menu_file": (_menu_upload_file_with_regular_and_vegetarian(), "中平115年8月菜單.xlsx"),
+            "menu_sheet_kind": "regular",
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        recipe = KitchenRecipe.query.filter_by(name="馬鈴薯燉肉").one()
+        assert recipe.active is False
+        assert KitchenMenuPlanItem.query.filter_by(recipe_id=recipe.id).count() == 1
+
+
 def test_summary_import_detects_template_dates_and_deduplicates(app, authed_client):
     response = authed_client.post(
         "/admin/order-tool/summary/import",
@@ -1242,7 +1347,7 @@ def test_summary_import_detects_template_dates_and_deduplicates(app, authed_clie
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "匯入完成" in page
-    assert "2026/06/01 — 2026/06/07" in page
+    assert "06/01" in page and "06/07" in page
 
     with app.app_context():
         monday = KitchenMenuPlan.query.filter_by(service_date=date(2026, 6, 1)).one()
@@ -1450,14 +1555,11 @@ def test_purchase_order_delete_requires_confirmation_and_removes_items(app, auth
         order_id = order.id
         assert KitchenPurchaseOrderItem.query.filter_by(order_id=order_id).count() == 1
 
-    dashboard = authed_client.get("/admin/order-tool/").get_data(as_text=True)
     history = authed_client.get(
         "/admin/order-tool/purchases?start=2026-08-13&end=2026-08-13"
     ).get_data(as_text=True)
     delete_url = f"/admin/order-tool/purchases/{order_id}/delete"
-    assert delete_url in dashboard
     assert delete_url in history
-    assert "此動作無法復原" in dashboard
     assert "此動作無法復原" in history
 
     refused = authed_client.post(

@@ -143,6 +143,8 @@ class KitchenRecipe(db.Model):
     # 成品預計每人打菜量（g）；不參與 AP 採購計算。
     serving_output_g = db.Column(db.Numeric(10, 2), nullable=True)
     note = db.Column(db.String(255))
+    # Whether this recipe may be selected by the AI menu generator.
+    # Manual menus and historical records intentionally ignore this flag.
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

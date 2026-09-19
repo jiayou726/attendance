@@ -16,34 +16,71 @@ CATEGORY_ORDER=("主食","主菜","副菜","青菜","湯品","點心")
 DEFAULT_STRUCTURE={"主食":1,"主菜":1,"副菜":2,"青菜":1,"湯品":1,"點心":0}
 STRUCTURE_LIMITS={"主食":2,"主菜":2,"副菜":4,"青菜":2,"湯品":2,"點心":2}
 HARD_RULE_PENALTY=1_000_000
+WEEKDAY_LABEL="一二三四五六日"
+CAP_TAGS=("fish","fried","sweet_soup")
+CAP_LABEL={"fish":"魚類","fried":"炸物","sweet_soup":"甜湯"}
 
 
 class RuleFeasibilityError(ValueError):
     """Raised when a requested menu cannot satisfy a hard weekly rule."""
 
 
+def _as_int(value, default=0):
+    try:return max(0,int(value))
+    except (TypeError,ValueError):return default
+
+def parse_weekdays(value)->tuple[int,...]:
+    if value in (None,"",[]):return ()
+    if isinstance(value,str):
+        value=[part.strip() for part in value.replace("，",",").split(",") if part.strip()]
+    out=[]
+    for item in value:
+        try:n=int(item)
+        except (TypeError,ValueError):continue
+        if 0<=n<=6:out.append(n)
+    return tuple(sorted(set(out)))
+
+def weekday_text(days)->str:
+    if not days:return "不限星期"
+    return "、".join(f"週{WEEKDAY_LABEL[d]}" for d in days)
+
+def _cap_max(rules,tag):
+    return getattr(rules,f"{tag}_per_week_max")
+
+def _cap_days(rules,tag):
+    return getattr(rules,f"{tag}_weekdays") or ()
+
+
 @dataclass
 class Rules:
     recipe_repeat_days:int=5
     main_repeat_days:int=5
-    fish_per_week_min:int=1
+    fish_per_week_min:int=0
+    fish_per_week_max:int=1
     fried_per_week_max:int=1
     sweet_soup_per_week_max:int=1
+    fish_weekdays:tuple[int,...]=()
+    fried_weekdays:tuple[int,...]=()
+    sweet_soup_weekdays:tuple[int,...]=()
     prefer_kcal_in_range:bool=True
     exclude_incomplete_nutrition:bool=True
     @classmethod
     def from_dict(cls,data):
         data=data or {}; r=cls()
         legacy=data.get("repeat_days")
-        if legacy is not None:r.recipe_repeat_days=r.main_repeat_days=max(0,int(legacy))
-        for k in ("recipe_repeat_days","main_repeat_days","fish_per_week_min","fried_per_week_max","sweet_soup_per_week_max"):
-            if data.get(k) is not None:
-                try:setattr(r,k,max(0,int(data[k])))
-                except (TypeError,ValueError):pass
+        if legacy is not None:r.recipe_repeat_days=r.main_repeat_days=_as_int(legacy)
+        for k in ("recipe_repeat_days","main_repeat_days","fish_per_week_min","fish_per_week_max","fried_per_week_max","sweet_soup_per_week_max"):
+            if data.get(k) is not None:setattr(r,k,_as_int(data[k],getattr(r,k)))
+        for k in ("fish_weekdays","fried_weekdays","sweet_soup_weekdays"):
+            if k in data:setattr(r,k,parse_weekdays(data.get(k)))
         for k in ("prefer_kcal_in_range","exclude_incomplete_nutrition"):
             if k in data:setattr(r,k,bool(data[k]))
         return r
-    def to_dict(self):return dict(self.__dict__)
+    def to_dict(self):
+        data=dict(self.__dict__)
+        for k in ("fish_weekdays","fried_weekdays","sweet_soup_weekdays"):
+            data[k]=list(getattr(self,k) or ())
+        return data
 
 @dataclass(frozen=True)
 class Candidate:
@@ -76,7 +113,10 @@ def build_structure(values):
     return out
 
 def describe_rules(r):
-    lines=[f"同一道菜 {r.recipe_repeat_days} 天內不重複",f"主菜 {r.main_repeat_days} 天內不重複",f"每週至少 {r.fish_per_week_min} 次魚類（硬限制）",f"每週最多 {r.fried_per_week_max} 次炸物（硬限制）",f"每週最多 {r.sweet_soup_per_week_max} 次甜湯（硬限制）"]
+    lines=[f"同一道菜 {r.recipe_repeat_days} 天內不重複",f"主菜 {r.main_repeat_days} 天內不重複"]
+    for tag in CAP_TAGS:
+        lines.append(f"{CAP_LABEL[tag]}每週最多 {_cap_max(r,tag)} 次，{weekday_text(_cap_days(r,tag))}出現（硬限制）")
+    if r.fish_per_week_min:lines.append(f"每週至少 {r.fish_per_week_min} 次魚類（硬限制）")
     if r.prefer_kcal_in_range:lines.append("每日總熱量與六大類份數盡量接近供餐對象基準")
     if r.exclude_incomplete_nutrition:lines.append("排除營養資料不完整的菜色")
     return lines
@@ -138,13 +178,38 @@ def _week_tag_counts(dates,assignment,candidates):
         for tag in cand.tags:counts.setdefault(week,Counter())[tag]+=1
     return counts
 
+def _day_tags(dates,assignment,candidates,day_index):
+    by_id=_candidate_map(candidates);tags=set()
+    for key,rid in assignment.items():
+        if not rid or key[0]!=day_index:continue
+        cand=by_id.get(rid)
+        if cand:tags.update(cand.tags)
+    return tags
+
+def _required_tag_dates(dates,weekdays,maxn):
+    if not weekdays or maxn<=0:return []
+    hits=[d for d in dates if d.weekday() in weekdays]
+    return [] if len(hits)>maxn else hits
+
 def _hard_cap_violations(dates,rules,assignment,candidates):
     violations=[]
+    by_id=_candidate_map(candidates)
     for week,cnt in _week_tag_counts(dates,assignment,candidates).items():
-        if cnt["fried"]>rules.fried_per_week_max:
-            violations.append(f"{week[0]}年第{week[1]}週炸物 {cnt['fried']} 次，超過上限 {rules.fried_per_week_max} 次")
-        if cnt["sweet_soup"]>rules.sweet_soup_per_week_max:
-            violations.append(f"{week[0]}年第{week[1]}週甜湯 {cnt['sweet_soup']} 次，超過上限 {rules.sweet_soup_per_week_max} 次")
+        for tag in CAP_TAGS:
+            maxn=_cap_max(rules,tag)
+            if cnt[tag]>maxn:
+                violations.append(f"{week[0]}年第{week[1]}週{CAP_LABEL[tag]} {cnt[tag]} 次，超過上限 {maxn} 次")
+    for key,rid in assignment.items():
+        if not rid:continue
+        i=key[0]
+        if i<0 or i>=len(dates):continue
+        cand=by_id.get(rid)
+        if not cand:continue
+        weekday=dates[i].weekday()
+        for tag in CAP_TAGS:
+            allowed=_cap_days(rules,tag)
+            if allowed and tag in cand.tags and weekday not in allowed:
+                violations.append(f"{dates[i]:%Y-%m-%d} 出現{CAP_LABEL[tag]}，但規則只允許 {weekday_text(allowed)} 出現")
     return violations
 
 def hard_rule_violations(dates,rules,assignment,candidates):
@@ -152,6 +217,11 @@ def hard_rule_violations(dates,rules,assignment,candidates):
     for week,cnt in _week_tag_counts(dates,assignment,candidates).items():
         if cnt["fish"]<rules.fish_per_week_min:
             violations.append(f"{week[0]}年第{week[1]}週魚類 {cnt['fish']} 次，未達至少 {rules.fish_per_week_min} 次")
+    index={d:i for i,d in enumerate(dates)}
+    for tag in CAP_TAGS:
+        for day in _required_tag_dates(dates,_cap_days(rules,tag),_cap_max(rules,tag)):
+            if tag not in _day_tags(dates,assignment,candidates,index[day]):
+                violations.append(f"{day:%Y-%m-%d}（週{WEEKDAY_LABEL[day.weekday()]}）應出現{CAP_LABEL[tag]}，但當天沒有")
     return violations
 
 def evaluate(dates,structure,rules,assignment,candidates,kcal_min=None,kcal_max=None):
@@ -193,10 +263,17 @@ def evaluate(dates,structure,rules,assignment,candidates,kcal_min=None,kcal_max=
     for week,cnt in week_tags.items():
         if cnt["fish"]<rules.fish_per_week_min:
             deficit=rules.fish_per_week_min-cnt["fish"];breakdown["hard_fish"]+=deficit*HARD_RULE_PENALTY;warnings.append(f"⛔ {week[0]}年第{week[1]}週：魚類 {cnt['fish']} 次，未達硬限制 {rules.fish_per_week_min} 次")
-        if cnt["fried"]>rules.fried_per_week_max:
-            excess=cnt["fried"]-rules.fried_per_week_max;breakdown["hard_fried"]+=excess*HARD_RULE_PENALTY;warnings.append(f"⛔ {week[0]}年第{week[1]}週：炸物 {cnt['fried']} 次，超過硬限制 {rules.fried_per_week_max} 次")
-        if cnt["sweet_soup"]>rules.sweet_soup_per_week_max:
-            excess=cnt["sweet_soup"]-rules.sweet_soup_per_week_max;breakdown["hard_sweet_soup"]+=excess*HARD_RULE_PENALTY;warnings.append(f"⛔ {week[0]}年第{week[1]}週：甜湯 {cnt['sweet_soup']} 次，超過硬限制 {rules.sweet_soup_per_week_max} 次")
+        for tag in CAP_TAGS:
+            maxn=_cap_max(rules,tag)
+            if cnt[tag]>maxn:
+                excess=cnt[tag]-maxn;breakdown[f"hard_{tag}"]+=excess*HARD_RULE_PENALTY;warnings.append(f"⛔ {week[0]}年第{week[1]}週：{CAP_LABEL[tag]} {cnt[tag]} 次，超過硬限制 {maxn} 次")
+    for msg in _hard_cap_violations(dates,rules,assignment,by_id):
+        if "不在允許" in msg or "只允許" in msg:
+            breakdown["hard_weekday"]+=HARD_RULE_PENALTY;warnings.append(f"⛔ {msg}")
+    for msg in hard_rule_violations(dates,rules,assignment,by_id):
+        if "應出現" in msg:
+            breakdown["hard_weekday"]+=HARD_RULE_PENALTY
+            if f"⛔ {msg}" not in warnings:warnings.append(f"⛔ {msg}")
     return sum(breakdown.values()),dict(breakdown),day_results,warnings
 
 def _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max):
@@ -221,6 +298,38 @@ def _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys
             if best is None:
                 y,w=week
                 raise RuleFeasibilityError(f"{y}年第{w}週無法滿足每週至少 {rules.fish_per_week_min} 次魚類；請增加可用魚類菜色、調整每日結構或降低魚類下限。")
+            _score,key,candidate_id=best;assignment[key]=candidate_id
+
+def _weekday_preference(day,candidate,rules):
+    score=0;weekday=day.weekday()
+    for tag in CAP_TAGS:
+        if tag not in candidate.tags:continue
+        allowed=_cap_days(rules,tag)
+        if allowed and weekday in allowed:score-=400
+    return score
+
+def _repair_required_weekdays(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max):
+    index={d:i for i,d in enumerate(dates)}
+    for tag in CAP_TAGS:
+        for day in _required_tag_dates(dates,_cap_days(rules,tag),_cap_max(rules,tag)):
+            i=index[day]
+            if tag in _day_tags(dates,assignment,by_id,i):continue
+            best=None
+            for key,current_id in list(assignment.items()):
+                day_index,cat,_slot=key
+                if key in locked_keys or day_index!=i:continue
+                current=by_id.get(current_id)
+                if current and tag in current.tags:continue
+                same={rid for k,rid in assignment.items() if k[0]==i and k!=key and rid}
+                for cand in pools.get(cat,[]):
+                    if tag not in cand.tags or cand.id in same:continue
+                    trial=dict(assignment);trial[key]=cand.id
+                    if _hard_cap_violations(dates,rules,trial,by_id):continue
+                    penalty,_,_,_=evaluate(dates,structure,rules,trial,candidates,kcal_min,kcal_max)
+                    score=(penalty,cand.name,key)
+                    if best is None or score<best[0]:best=(score,key,cand.id)
+            if best is None:
+                raise RuleFeasibilityError(f"{day:%Y-%m-%d}（週{WEEKDAY_LABEL[day.weekday()]}）無法安排{CAP_LABEL[tag]}；請補充菜色、調整每日結構，或改選其他星期。")
             _score,key,candidate_id=best;assignment[key]=candidate_id
 
 def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weekends=False,seed=None,locked=None,meal_variant="regular",reference_assignment=None):
@@ -248,14 +357,15 @@ def generate(start,end,structure,rules,kcal_min=None,kcal_max=None,include_weeke
                     if cand.id in day_seen:continue
                     trial=dict(assignment);trial[key]=cand.id
                     if _hard_cap_violations(dates,rules,trial,by_id):continue
-                    gap=i-last.get(cand.id,-999);reference=by_id.get((reference_assignment or {}).get(key));score=usage[cand.id]*60+rng.random()+_vegetarian_pair_score(cand,reference)
+                    gap=i-last.get(cand.id,-999);reference=by_id.get((reference_assignment or {}).get(key));score=usage[cand.id]*60+rng.random()+_vegetarian_pair_score(cand,reference)+_weekday_preference(d,cand,rules)
                     if gap<rules.recipe_repeat_days:score+=6000
                     if c=="主菜" and gap<rules.main_repeat_days:score+=4000
                     if bestscore is None or score<bestscore:best,bestscore=cand,score
                 if best is None:
-                    raise RuleFeasibilityError(f"{d:%Y-%m-%d} 的「{c}」沒有符合每週硬限制的可用菜色；請補充菜色或放寬炸物／甜湯上限。")
+                    raise RuleFeasibilityError(f"{d:%Y-%m-%d} 的「{c}」沒有符合每週硬限制的可用菜色；請補充菜色或放寬魚類／炸物／甜湯上限。")
                 assignment[key]=best.id;day_seen.add(best.id);last[best.id]=i;usage[best.id]+=1
     _repair_weekly_fish(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max)
+    _repair_required_weekdays(dates,structure,rules,assignment,pools,by_id,locked_keys,candidates,kcal_min,kcal_max)
     violations=variant_violations(assignment,by_id,meal_variant)+hard_rule_violations(dates,rules,assignment,by_id)
     if violations:raise RuleFeasibilityError("產生完成後驗證失敗："+"；".join(violations))
     pair_penalty=lambda values:sum(_vegetarian_pair_score(by_id.get(rid),by_id.get((reference_assignment or {}).get(key))) for key,rid in values.items() if by_id.get(rid))

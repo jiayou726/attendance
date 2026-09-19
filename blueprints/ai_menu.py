@@ -14,7 +14,7 @@ from extensions import db
 from models import KitchenIngredient,KitchenMenuPlan,KitchenMenuPlanItem,KitchenRecipe,KitchenRecipeIngredient
 from ai_models import KitchenMealProfile,KitchenMenuDraft,KitchenMenuDraftItem
 from services import meal_profiles as profile_service, recipe_tags as tag_service
-from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,candidate_allowed,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates,variant_violations
+from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,candidate_allowed,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates,variant_violations,WEEKDAY_LABEL
 from services.nutrition import recipe_nutrition
 from services.nutrition_sources import STATUS_ESTIMATED,STATUS_MATCHED,match_ingredient_name
 from services.practice_database import ensure_practice_database
@@ -40,7 +40,7 @@ def _practice_profile(raw):
         if str(p.id)==str(raw) or p.code==raw:return p
 
 def _parse_rules(form):
-    return Rules.from_dict({"recipe_repeat_days":form.get("recipe_repeat_days"),"main_repeat_days":form.get("main_repeat_days"),"fish_per_week_min":form.get("fish_per_week_min"),"fried_per_week_max":form.get("fried_per_week_max"),"sweet_soup_per_week_max":form.get("sweet_soup_per_week_max"),"prefer_kcal_in_range":form.get("prefer_kcal_in_range")=="1","exclude_incomplete_nutrition":form.get("exclude_incomplete_nutrition")=="1"})
+    return Rules.from_dict({"recipe_repeat_days":form.get("recipe_repeat_days"),"main_repeat_days":form.get("main_repeat_days"),"fish_per_week_min":form.get("fish_per_week_min"),"fish_per_week_max":form.get("fish_per_week_max"),"fried_per_week_max":form.get("fried_per_week_max"),"sweet_soup_per_week_max":form.get("sweet_soup_per_week_max"),"fish_weekdays":form.getlist("fish_weekdays"),"fried_weekdays":form.getlist("fried_weekdays"),"sweet_soup_weekdays":form.getlist("sweet_soup_weekdays"),"prefer_kcal_in_range":form.get("prefer_kcal_in_range")=="1","exclude_incomplete_nutrition":form.get("exclude_incomplete_nutrition")=="1"})
 
 def _recipe_ingredients(ids):
     if not ids:return {}
@@ -109,15 +109,21 @@ def _settings(form,profile):
 
 @order_bp.get("/ai-menu")
 def ai_menu():
-    _seed_profiles();start,end=_default_range();drafts=KitchenMenuDraft.query.options(joinedload(KitchenMenuDraft.profile)).order_by(KitchenMenuDraft.id.desc()).limit(20).all()
-    return render_template("kitchen/ai_menu.html",profiles=profile_service.active_profiles(),drafts=drafts,categories=CATEGORY_ORDER,default_structure=DEFAULT_STRUCTURE,structure_limits=STRUCTURE_LIMITS,default_rules=Rules(),start_default=start,end_default=end,tagged_recipe_count=0,practice=_practice_ok())
+    _seed_profiles();    start,end=_default_range();drafts=KitchenMenuDraft.query.options(joinedload(KitchenMenuDraft.profile)).order_by(KitchenMenuDraft.id.desc()).limit(20).all()
+    default_rules=Rules()
+    cap_rows=(
+        ("fish","魚類","fish_per_week_max","fish_weekdays",default_rules.fish_per_week_max),
+        ("fried","炸物","fried_per_week_max","fried_weekdays",default_rules.fried_per_week_max),
+        ("sweet_soup","甜湯","sweet_soup_per_week_max","sweet_soup_weekdays",default_rules.sweet_soup_per_week_max),
+    )
+    return render_template("kitchen/ai_menu.html",profiles=profile_service.active_profiles(),drafts=drafts,categories=CATEGORY_ORDER,default_structure=DEFAULT_STRUCTURE,structure_limits=STRUCTURE_LIMITS,default_rules=default_rules,weekday_options=list(enumerate(WEEKDAY_LABEL)),cap_rows=cap_rows,start_default=start,end_default=end,tagged_recipe_count=0,practice=_practice_ok())
 
 @order_bp.post("/ai-menu/generate")
 def ai_menu_generate():
     pid=_int(request.form.get("profile_id"),default=0);profile=db.session.get(KitchenMealProfile,pid) if pid else None; settings,error=_settings(request.form,profile)
     if error:flash(error,"error");return redirect(url_for("order_tool.ai_menu"))
     start,end,structure,rules,weekends=settings
-    vegetarian_rules=Rules.from_dict(rules.to_dict());vegetarian_rules.fish_per_week_min=0
+    vegetarian_rules=Rules.from_dict(rules.to_dict());vegetarian_rules.fish_per_week_min=0;vegetarian_rules.fish_weekdays=()
     try:
         regular_result=generate(start,end,structure,rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="regular")
         vegetarian_result=generate(start,end,structure,vegetarian_rules,int(profile.kcal_min),int(profile.kcal_max),weekends,meal_variant="vegetarian",reference_assignment=regular_result.assignment)

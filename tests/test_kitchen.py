@@ -266,6 +266,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
     assert response.status_code == 302
     with app.app_context():
         new_recipe = KitchenRecipe.query.filter_by(name="香煎鯖魚", category="主菜").one()
+        assert new_recipe.active is False
         friday_plan = KitchenMenuPlan.query.filter_by(service_date=date(2026, 8, 14)).one()
         assert KitchenMenuPlanItem.query.filter_by(
             plan_id=friday_plan.id, recipe_id=new_recipe.id
@@ -275,10 +276,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
 def test_recipe_active_only_controls_ai_and_not_manual_menu_use(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
 
-    response = authed_client.post(
-        f"/admin/order-tool/recipes/{ids['recipe']}/toggle",
-        follow_redirects=True,
-    )
+    response = authed_client.get("/admin/order-tool/recipes")
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert "AI 不使用" in page

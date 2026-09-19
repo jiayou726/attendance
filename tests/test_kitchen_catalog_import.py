@@ -69,6 +69,7 @@ def test_catalog_template_and_preview_then_apply_skip_duplicates(app, client):
     with app.app_context():
         assert KitchenRecipe.query.filter_by(name="已存在菜").one().note == "原資料"
         new_recipe = KitchenRecipe.query.filter_by(name="新菜").one()
+        assert new_recipe.active is False
         assert len(new_recipe.ingredients) == 2
         assert {row.ingredient.name for row in new_recipe.ingredients} == {"雞丁", "洋蔥"}
         assert KitchenRecipeIngredient.query.filter_by(recipe_id=new_recipe.id, quantity_status="manual").count() == 2

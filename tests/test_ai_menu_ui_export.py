@@ -115,6 +115,7 @@ def test_swap_page_can_create_recipe_with_bom_and_replace_slot(app, client):
     assert response.status_code == 302
     with app.app_context():
         recipe = KitchenRecipe.query.filter_by(name="新建豆腐主菜").one()
+        assert recipe.active is False
         assert recipe.ingredients[0].grams_per_person == Decimal("60")
         item = KitchenMenuDraftItem.query.filter_by(draft_id=draft_id).one()
         assert item.recipe_id == recipe.id

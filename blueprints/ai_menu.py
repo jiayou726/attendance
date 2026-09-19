@@ -181,6 +181,9 @@ def ai_menu_swap_new(draft_id):
         if ingredient and ingredient.active and amount is not None and amount>0:components[ingredient.id]=amount
     if not components:
         flash("至少要選一項食材並填寫正確的每人用量。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
+    # Temporarily include the pending recipe so the normal AI hard-rule validator
+    # can evaluate the requested swap. It is disabled again before commit; new
+    # recipes never join future AI candidate pools without an explicit enable.
     recipe=KitchenRecipe(name=name,category=cat,active=True,note="從 AI 換菜頁新增")
     db.session.add(recipe);db.session.flush()
     for ingredient_id,amount in components.items():
@@ -193,7 +196,7 @@ def ai_menu_swap_new(draft_id):
         db.session.rollback();flash("這道菜不符合目前葷／素分類或整週硬限制，因此沒有新增。","error");return redirect(url_for("order_tool.ai_menu_swap",**redirect_args))
     item=next((x for x in draft.items if x.service_date==d and x.category==cat and x.slot_index==slot),None)
     if not item:db.session.rollback();abort(404)
-    item.recipe_id=recipe.id;db.session.commit();flash("新菜色與配方已建立，並已換入菜單。","success");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
+    item.recipe_id=recipe.id;recipe.active=False;db.session.commit();flash("新菜色與配方已建立，並已換入菜單。","success");return redirect(url_for("order_tool.ai_menu_draft",draft_id=draft.id))
 
 @order_bp.post("/ai-menu/drafts/<int:draft_id>/swap")
 def ai_menu_swap_apply(draft_id):

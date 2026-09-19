@@ -2033,7 +2033,7 @@ def summary_dish_add():
     if recipe is None:
         if category not in CATEGORIES:
             category = "其他"
-        recipe = KitchenRecipe(name=dish_name, category=category, active=True)
+        recipe = KitchenRecipe(name=dish_name, category=category, active=False)
         db.session.add(recipe)
         try:
             db.session.flush()
@@ -2334,7 +2334,7 @@ def summary_import():
                 recipe = KitchenRecipe(
                     name=dish["name"],
                     category=dish["category"] if dish["category"] in CATEGORIES else "其他",
-                    active=True,
+                    active=False,
                 )
                 db.session.add(recipe)
                 db.session.flush()

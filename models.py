@@ -145,7 +145,7 @@ class KitchenRecipe(db.Model):
     note = db.Column(db.String(255))
     # Whether this recipe may be selected by the AI menu generator.
     # Manual menus and historical records intentionally ignore this flag.
-    active = db.Column(db.Boolean, nullable=False, default=True)
+    active = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

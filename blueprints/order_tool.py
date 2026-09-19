@@ -838,25 +838,22 @@ def recipe_delete(recipe_id: int):
     if request.form.get("confirm_delete") != "1":
         flash("未完成刪除確認，菜色已保留。", "error")
         return redirect(url_for("order_tool.recipes"))
-
-    # A recipe ID that has appeared anywhere in a menu is historical data.
-    # Keep it intact and let the user exclude it from AI instead of deleting it.
-    from ai_models import KitchenMenuDraftItem
-
-    used_by_manual_menu = KitchenMenuPlanItem.query.filter_by(recipe_id=recipe_id).first()
-    used_by_ai_draft = KitchenMenuDraftItem.query.filter_by(recipe_id=recipe_id).first()
-    used_by_daily_note = KitchenDailyDishNote.query.filter_by(recipe_id=recipe_id).first()
-    if used_by_manual_menu or used_by_ai_draft or used_by_daily_note:
-        flash(
-            f"「{row.name}」已有菜單或歷史紀錄，不能刪除；可改為「AI 不使用」。",
-            "error",
-        )
+    if row.active:
+        flash(f"「{row.name}」仍為 AI 啟用，請先取消 AI 啟用再刪除。", "error")
         return redirect(url_for("order_tool.recipes"))
 
+    from ai_models import KitchenMenuDraftItem
+
     name = row.name
+    removed_references = 0
+    for model in (KitchenMenuPlanItem, KitchenMenuDraftItem, KitchenDailyDishNote):
+        removed_references += model.query.filter_by(recipe_id=recipe_id).delete(
+            synchronize_session=False
+        )
     db.session.delete(row)
     db.session.commit()
-    flash(f"已永久刪除未使用的菜色「{name}」及其配方。", "success")
+    reference_message = f"，並移除 {removed_references} 筆菜單／歷史引用" if removed_references else ""
+    flash(f"已永久刪除 AI 不使用的菜色「{name}」及其配方{reference_message}。", "success")
     return redirect(url_for("order_tool.recipes"))
 
 

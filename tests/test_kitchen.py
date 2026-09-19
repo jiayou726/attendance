@@ -317,7 +317,7 @@ def test_recipe_active_only_controls_ai_and_not_manual_menu_use(app, authed_clie
         assert db.session.get(KitchenRecipe, ids["recipe"]).active is False
 
 
-def test_recipe_delete_removes_only_unused_recipes(app, authed_client):
+def test_recipe_delete_removes_ai_disabled_recipe_and_menu_references(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     with app.app_context():
         unused = KitchenRecipe(name="待整理舊菜", category="其他", active=False)
@@ -338,19 +338,35 @@ def test_recipe_delete_removes_only_unused_recipes(app, authed_client):
         data={"confirm_delete": "1"},
         follow_redirects=True,
     )
-    assert "已永久刪除未使用的菜色" in deleted.get_data(as_text=True)
+    assert "已永久刪除 AI 不使用的菜色" in deleted.get_data(as_text=True)
     with app.app_context():
         assert db.session.get(KitchenRecipe, unused_id) is None
 
     _create_plan(app, authed_client, ids)
-    blocked = authed_client.post(
+    removed = authed_client.post(
         f"/admin/order-tool/recipes/{ids['recipe']}/delete",
         data={"confirm_delete": "1"},
         follow_redirects=True,
     )
-    assert "已有菜單或歷史紀錄，不能刪除" in blocked.get_data(as_text=True)
+    assert "並移除 1 筆菜單／歷史引用" in removed.get_data(as_text=True)
     with app.app_context():
-        assert db.session.get(KitchenRecipe, ids["recipe"]) is not None
+        assert db.session.get(KitchenRecipe, ids["recipe"]) is None
+        assert KitchenMenuPlanItem.query.filter_by(recipe_id=ids["recipe"]).count() == 0
+
+    with app.app_context():
+        enabled = KitchenRecipe(name="AI 啟用保護菜", category="其他", active=True)
+        db.session.add(enabled)
+        db.session.commit()
+        enabled_id = enabled.id
+
+    blocked = authed_client.post(
+        f"/admin/order-tool/recipes/{enabled_id}/delete",
+        data={"confirm_delete": "1"},
+        follow_redirects=True,
+    )
+    assert "仍為 AI 啟用，請先取消 AI 啟用再刪除" in blocked.get_data(as_text=True)
+    with app.app_context():
+        assert db.session.get(KitchenRecipe, enabled_id) is not None
 
 
 def test_summary_recipe_category_search_picker_and_delete(app, authed_client):

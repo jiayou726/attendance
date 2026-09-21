@@ -27,25 +27,21 @@
 {% endif %}
 
 <details class="card manual-procurement-card" {% if not rows %}open{% endif %}>
-  <summary><b>＋ 新增臨時食材</b><span class="muted">　菜單外叫貨，會自動儲存食材與廠商</span></summary>
+  <summary><b>＋ 新增臨時食材</b><span class="muted">　菜單外臨時採購，直接填實際採購量即可</span></summary>
   <form method="post" action="{{ url_for('order_tool.procurement_manual_item_create') }}" class="manual-procurement-form">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="date" value="{{ service_date.isoformat() }}">
     <div class="manual-fields">
       <div class="field"><label>食材名稱</label><input name="ingredient_name" required placeholder="例如：玉米筍"></div>
       <div class="field"><label>廠商</label><input name="supplier_name" type="search" list="supplier-search-options" placeholder="可搜尋或直接輸入"></div>
-      <div class="field"><label>每人用量</label><div class="input-unit"><input name="per_person_amount" type="number" min="0.0001" step="0.0001" required value="1"><select name="base_unit"><option value="g">g</option><option value="個">個</option></select></div></div>
+      <div class="field"><label>實際採購量</label><input name="actual_order_qty" type="number" min="0.0001" step="0.0001" required placeholder="例如：10"></div>
       <div class="field"><label>採購單位</label><select name="purchase_unit">{% for unit in ['kg','斤','箱','包','袋','桶','瓶','個'] %}<option value="{{ unit }}">{{ unit }}</option>{% endfor %}</select></div>
-      <div class="field"><label>1 採購單位等於</label><div class="input-unit"><input name="units_per_purchase" type="number" min="0.0001" step="0.0001" required value="1000"><span>上方每人單位</span></div></div>
-      <div class="field"><label>實際採購量（可空白）</label><input name="actual_order_qty" type="number" min="0" step="0.0001" placeholder="空白則使用系統計算量"></div>
+      <div class="field"><label>包裝數量（選填）</label><input name="package_qty" type="number" min="0" step="0.0001" placeholder="例如：2"></div>
+      <div class="field"><label>包裝單位（選填）</label><select name="package_unit"><option value="">不指定</option>{% for unit in package_units %}<option value="{{ unit }}">{{ unit }}</option>{% endfor %}</select></div>
+      <div class="field"><label>交貨日期</label><input name="delivery_date" type="date" value="{{ service_date.isoformat() }}" required></div>
+      <div class="field"><label>交貨時段</label><select name="delivery_slot"><option>上午</option><option>下午</option></select></div>
     </div>
-    <fieldset class="manual-school-picker">
-      <legend>選擇吃這項食材的學校，人數可直接修改</legend>
-      {% for school in schools %}{% set count = school_headcounts.get(school.id, school.default_headcount) %}
-      <label class="manual-school-row"><input type="checkbox" name="school_ids" value="{{ school.id }}" {% if count > 0 %}checked{% endif %}><span>{{ school.name }}</span><input name="headcount_{{ school.id }}" type="number" min="0" step="1" value="{{ count }}"><span>人</span></label>
-      {% else %}<div class="muted">尚未建立學校資料。</div>{% endfor %}
-    </fieldset>
-    <div class="row"><button class="btn" type="submit">計算並新增</button><span class="muted">重新計算菜單時，這筆臨時叫貨不會被刪除。</span></div>
+    <div class="row"><button class="btn" type="submit">新增臨時食材</button><span class="muted">重新計算菜單時，這筆臨時採購不會被刪除。</span></div>
   </form>
 </details>
 
@@ -76,8 +72,8 @@
       <tr class="{{ 'is-ordered' if item.ordered else '' }}" data-procurement-item="{{ item.id }}" data-auto-save-url="{{ url_for('order_tool.procurement_item_autosave', item_id=item.id) }}" data-supplier-name="{{ row.supplier_name }}" data-ingredient-name="{{ item.ingredient_name_snapshot }}">
         <td><label class="order-check"><input class="order-confirm-toggle" data-auto-save-url="{{ url_for('order_tool.purchase_item_ordered', item_id=item.id) }}" data-csrf="{{ csrf_token() }}" name="ordered_{{ item.id }}" type="checkbox" value="1" {% if item.ordered %}checked{% endif %}><span>已叫</span></label></td>
         <td><input type="hidden" name="item_ids" value="{{ item.id }}"><b>{{ item.ingredient_name_snapshot }}</b>{% if item.source_type == 'manual' %}<small class="manual-item-badge">臨時叫貨</small>{% endif %}</td>
-        <td class="procurement-people"><b>{{ row.total_people }}</b> 人次{% if row.school_names %}<small class="included-schools"><span>包含學校（{{ row.school_names|length }}）</span>{{ row.school_names|join('、') }}</small>{% endif %}</td>
-        <td><b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small></td>
+        <td class="procurement-people">{% if item.source_type == 'manual' %}<b>—</b><small>來自：臨時採購</small>{% else %}<b>{{ row.total_people }}</b> 人次{% if row.school_names %}<small class="included-schools"><span>包含學校（{{ row.school_names|length }}）</span>{{ row.school_names|join('、') }}</small>{% endif %}{% endif %}</td>
+        <td>{% if item.source_type == 'manual' %}<b>—</b><small>來自：臨時採購</small>{% else %}<b>{{ trim_decimal(item.required_qty) }} {{ item.purchase_unit_snapshot }}</b><small>{{ required_display(item) }}</small>{% endif %}</td>
         <td><div class="actual-package-fields"><div class="input-unit"><input class="actual-qty-input" name="actual_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.actual_order_qty) }}" required><span>{{ item.purchase_unit_snapshot }}</span></div><div class="package-equation"><span>＝</span><input class="package-qty-input" name="package_qty_{{ item.id }}" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.package_qty) if item.package_qty is not none else '' }}" placeholder="數量"><select class="package-unit-input" name="package_unit_{{ item.id }}"><option value="">不指定</option>{% if item.package_unit and item.package_unit not in package_units %}<option value="{{ item.package_unit }}" selected>{{ item.package_unit }}</option>{% endif %}{% for unit in package_units %}<option value="{{ unit }}"{% if item.package_unit == unit %} selected{% endif %}>{{ unit }}</option>{% endfor %}</select></div><small class="supplier-conversion-hint">{% if item.package_conversion_snapshot %}廠商換算：{{ item.package_conversion_snapshot }}{% else %}包裝數量與單位都是選填，可只填數量{% endif %}</small></div></td>
         <td><div class="delivery-fields"><input name="delivery_date_{{ item.id }}" type="date" value="{{ (item.delivery_date or service_date).isoformat() }}" required><select name="delivery_slot_{{ item.id }}"><option{% if item.delivery_slot != '下午' %} selected{% endif %}>上午</option><option{% if item.delivery_slot == '下午' %} selected{% endif %}>下午</option></select></div></td>
         <td><input class="supplier-search-input" name="supplier_{{ item.id }}" type="search" list="supplier-search-options" value="{{ '' if row.supplier_name.startswith('⚠') else row.supplier_name }}" placeholder="搜尋或輸入新廠商" autocomplete="off"></td>

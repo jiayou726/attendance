@@ -2623,7 +2623,10 @@ def _generate_date_orders(
     }
     if not ingredient_rows:
         for old_order in existing_orders:
-            if old_order.status == "draft":
+            has_manual_items = any(
+                (item.source_type or "menu") == "manual" for item in old_order.items
+            )
+            if old_order.status == "draft" and not has_manual_items:
                 db.session.delete(old_order)
         if commit:
             db.session.commit()
@@ -2646,7 +2649,10 @@ def _generate_date_orders(
         order.supplier_overridden = False
         order.status = "draft"
 
-    existing_items = {item.ingredient_id: item for item in order.items}
+    existing_items = {
+        item.ingredient_id: item for item in order.items
+        if (item.source_type or "menu") == "menu"
+    }
     seen_ingredient_ids = set()
     for data in ingredient_rows.values():
         ing = data["ingredient"]
@@ -2783,6 +2789,20 @@ def _procurement_rows(service_date: date):
     for order in orders:
         for item in _sorted_purchase_items(order.items):
             requirement = requirements_by_key.get(item.ingredient_id, {})
+            if (item.source_type or "menu") == "manual":
+                try:
+                    saved_counts = json.loads(item.school_headcounts or "{}")
+                except (TypeError, ValueError):
+                    saved_counts = {}
+                manual_schools = []
+                total_people = 0
+                for school_id, headcount in saved_counts.items():
+                    school = db.session.get(KitchenSchool, _int(school_id, default=0) or 0)
+                    count = _int(headcount, default=0) or 0
+                    total_people += max(count, 0)
+                    if school:
+                        manual_schools.append(school.name)
+                requirement = {"total_people": total_people, "school_names": set(manual_schools)}
             rows.append({
                 "order": order,
                 "item": item,
@@ -3465,6 +3485,7 @@ def procurement():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
     rows = _procurement_rows(service_date)
     suppliers = KitchenSupplier.query.filter_by(active=True).order_by(KitchenSupplier.name).all()
+    schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
     pending_recipes = set()
     plans = (
         KitchenMenuPlan.query.filter_by(service_date=service_date)
@@ -3478,11 +3499,18 @@ def procurement():
             if any(component.quantity_status == "pending" or (component.grams_per_person or 0) <= 0
                    for component in menu_item.recipe.ingredients):
                 pending_recipes.add(menu_item.recipe.name)
+    school_headcounts = defaultdict(int)
+    for plan in plans:
+        for assignment in plan.assignments:
+            if assignment.service_status == "serving":
+                school_headcounts[assignment.school_id] += max(assignment.headcount or 0, 0)
     return render_template(
         "kitchen/procurement.html",
         rows=rows,
         conversion_options=_procurement_conversion_options(rows),
         suppliers=suppliers,
+        schools=schools,
+        school_headcounts=dict(school_headcounts),
         package_units=PACKAGE_UNITS,
         pending_recipes=sorted(pending_recipes),
         service_date=service_date,
@@ -3490,6 +3518,111 @@ def procurement():
         next_date=service_date + timedelta(days=1),
         week_start=service_date - timedelta(days=service_date.weekday()),
     )
+
+
+@order_bp.post("/summary/procurement/manual-items")
+def procurement_manual_item_create():
+    service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    ingredient_name = str(request.form.get("ingredient_name") or "").strip()[:100]
+    supplier_name = str(request.form.get("supplier_name") or "").strip()[:100]
+    base_unit = str(request.form.get("base_unit") or "g").strip()
+    purchase_unit = str(request.form.get("purchase_unit") or "kg").strip()[:20]
+    per_person = _decimal(request.form.get("per_person_amount"), default=None)
+    units_per_purchase = _decimal(request.form.get("units_per_purchase"), default=None)
+    actual = _decimal(request.form.get("actual_order_qty"), default=None)
+    if not ingredient_name or base_unit not in BASE_UNITS or not purchase_unit:
+        flash("請完整填寫食材名稱與單位。", "error")
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    if per_person is None or per_person <= 0 or units_per_purchase is None or units_per_purchase <= 0:
+        flash("每人用量與採購換算必須大於 0。", "error")
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+    school_counts = {}
+    for raw_school_id in request.form.getlist("school_ids"):
+        school_id = _int(raw_school_id, default=0) or 0
+        school = db.session.get(KitchenSchool, school_id)
+        count = _int(request.form.get(f"headcount_{school_id}"), default=None)
+        if school and school.active and count is not None and count >= 0:
+            school_counts[str(school_id)] = count
+    total_people = sum(school_counts.values())
+    if total_people <= 0:
+        flash("請至少勾選一所學校，並填寫大於 0 的人數。", "error")
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+    supplier = None
+    if supplier_name:
+        supplier = KitchenSupplier.query.filter(db.func.lower(KitchenSupplier.name) == supplier_name.lower()).first()
+        if supplier is None:
+            supplier = KitchenSupplier(name=supplier_name, note="由臨時叫貨新增", active=True)
+            db.session.add(supplier)
+            db.session.flush()
+        else:
+            supplier.active = True
+
+    ingredient = KitchenIngredient.query.filter(db.func.lower(KitchenIngredient.name) == ingredient_name.lower()).first()
+    if ingredient is None:
+        ingredient = KitchenIngredient(
+            name=ingredient_name,
+            supplier_id=supplier.id if supplier else None,
+            base_unit=base_unit,
+            purchase_unit=purchase_unit,
+            grams_per_purchase_unit=units_per_purchase,
+            order_increment=Decimal("0.001") if purchase_unit == "kg" else Decimal("1"),
+            note="由臨時叫貨自動新增",
+            active=True,
+        )
+        db.session.add(ingredient)
+        db.session.flush()
+    elif ingredient.base_unit != base_unit or ingredient.purchase_unit != purchase_unit:
+        flash(f"「{ingredient.name}」已存在，但單位設定不同，請改用原單位。", "error")
+        db.session.rollback()
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    elif supplier:
+        ingredient.supplier_id = supplier.id
+
+    order = KitchenPurchaseOrder.query.filter_by(service_date=service_date, supplier_key="daily").one_or_none()
+    if order and order.status != "draft":
+        flash("這一天的採購單已確認，請先重開草稿。", "error")
+        db.session.rollback()
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    if order is None:
+        order = KitchenPurchaseOrder(
+            service_date=service_date, supplier_key="daily",
+            supplier_name_snapshot="每日採購單", status="draft",
+        )
+        db.session.add(order)
+        db.session.flush()
+    duplicate = next((item for item in order.items if item.ingredient_id == ingredient.id), None)
+    if duplicate:
+        flash(f"這一天已有「{ingredient.name}」，請直接調整原本那一列的實際採購量。", "warning")
+        db.session.rollback()
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+
+    required_amount = per_person * total_people
+    required_qty = required_amount / units_per_purchase
+    recommended = _round_up_increment(required_qty, ingredient.order_increment or Decimal("0.001"))
+    actual_qty = actual if actual is not None and actual >= 0 else recommended
+    item = KitchenPurchaseOrderItem(
+        order_id=order.id, ingredient_id=ingredient.id,
+        supplier_id=supplier.id if supplier else ingredient.supplier_id,
+        supplier_name_snapshot=supplier.name if supplier else (
+            ingredient.supplier.name if ingredient.supplier else "⚠ 未指定供應商"
+        ),
+        ingredient_name_snapshot=ingredient.name, base_unit_snapshot=base_unit,
+        required_grams=required_amount, required_qty=required_qty,
+        purchase_unit_snapshot=purchase_unit,
+        grams_per_purchase_unit_snapshot=units_per_purchase,
+        recommended_order_qty=recommended, actual_order_qty=actual_qty,
+        unit_price_snapshot=ingredient.unit_price or Decimal("0"),
+        amount=actual_qty * (ingredient.unit_price or Decimal("0")),
+        delivery_date=service_date, delivery_slot="上午", manual_override=True,
+        source_type="manual", per_person_amount=per_person,
+        school_headcounts=json.dumps(school_counts, ensure_ascii=False, sort_keys=True),
+    )
+    db.session.add(item)
+    db.session.commit()
+    flash(f"已新增臨時叫貨「{ingredient.name}」，需求 { _trim_decimal(required_qty) } {purchase_unit}。", "success")
+    return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
 
 
 @order_bp.get("/summary/procurement.xlsx")

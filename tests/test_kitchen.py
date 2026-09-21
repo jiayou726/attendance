@@ -1678,6 +1678,50 @@ def test_actual_purchase_qty_and_price_are_persisted(app, authed_client):
         assert db.session.get(KitchenPurchaseOrder, order_id).status == "draft"
 
 
+def test_manual_procurement_item_calculates_schools_and_survives_regeneration(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=100)
+    authed_client.post("/admin/order-tool/purchases/generate", data={
+        "start": "2026-08-13", "end": "2026-08-13",
+    })
+
+    response = authed_client.post("/admin/order-tool/summary/procurement/manual-items", data={
+        "date": "2026-08-13",
+        "ingredient_name": "臨時玉米筍",
+        "supplier_name": "現場蔬菜商",
+        "per_person_amount": "25",
+        "base_unit": "g",
+        "purchase_unit": "kg",
+        "units_per_purchase": "1000",
+        "school_ids": [str(ids["school"])],
+        f"headcount_{ids['school']}": "120",
+        "actual_order_qty": "3.5",
+    })
+    assert response.status_code == 302
+
+    with app.app_context():
+        ingredient = KitchenIngredient.query.filter_by(name="臨時玉米筍").one()
+        supplier = KitchenSupplier.query.filter_by(name="現場蔬菜商").one()
+        item = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ingredient.id).one()
+        assert ingredient.supplier_id == supplier.id
+        assert item.source_type == "manual"
+        assert item.required_grams == Decimal("3000.000")
+        assert item.required_qty == Decimal("3.0000")
+        assert item.actual_order_qty == Decimal("3.5000")
+        assert item.per_person_amount == Decimal("25.0000")
+        assert f'"{ids["school"]}": 120' in item.school_headcounts
+        item_id = item.id
+
+    authed_client.post("/admin/order-tool/summary/procurement/generate", data={"date": "2026-08-13"})
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id) is not None
+
+    page = authed_client.get("/admin/order-tool/summary/procurement?date=2026-08-13").get_data(as_text=True)
+    assert "臨時叫貨" in page
+    assert "臨時玉米筍" in page
+    assert "120" in page
+
+
 def test_invalid_negative_values_do_not_mutate(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     plan_id = _create_plan(app, authed_client, ids, headcount=801)

@@ -59,6 +59,19 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                         "ALTER TABLE kitchen_school ADD COLUMN "
                         "default_vegetarian_headcount INTEGER NOT NULL DEFAULT 0"
                     ))
+            purchase_item_table = "kitchen_purchase_order_item"
+            if inspector.has_table(purchase_item_table):
+                columns = {column["name"] for column in inspector.get_columns(purchase_item_table)}
+                additions = {
+                    "source_type": "VARCHAR(20) NOT NULL DEFAULT 'menu'",
+                    "per_person_amount": "NUMERIC(16, 4)",
+                    "school_headcounts": "TEXT NOT NULL DEFAULT '{}'",
+                }
+                for column_name, definition in additions.items():
+                    if column_name not in columns:
+                        connection.execute(text(
+                            f"ALTER TABLE {purchase_item_table} ADD COLUMN {column_name} {definition}"
+                        ))
 
         # 日常表格的人工食材備註是空白可建的附加資料；
         # 部署若尚未執行 Alembic，仍可安全、重複地補上新表。

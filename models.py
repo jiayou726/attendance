@@ -370,6 +370,11 @@ class KitchenPurchaseOrderItem(db.Model):
     ordered = db.Column(db.Boolean, nullable=False, default=False)
     # 使用者手動改過數量/單價/備註後，重新產生需求時保留人工值。
     manual_override = db.Column(db.Boolean, nullable=False, default=False)
+    # menu：由菜單／配方計算；manual：採購現場額外新增。
+    source_type = db.Column(db.String(20), nullable=False, default="menu")
+    # 臨時叫貨的每人用量與各校人數快照；不回寫菜單配方。
+    per_person_amount = db.Column(db.Numeric(16, 4), nullable=True)
+    school_headcounts = db.Column(db.Text, nullable=False, default="{}")
 
     order = db.relationship("KitchenPurchaseOrder", back_populates="items")
     ingredient = db.relationship("KitchenIngredient")

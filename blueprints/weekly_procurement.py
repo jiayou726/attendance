@@ -134,10 +134,28 @@ def _weekly_data(week_start, week_end):
         for item in order.items:
             ingredient_id = item.ingredient_id
             key = (order.service_date, ingredient_id)
+            ingredient_name = item.ingredient_name_snapshot or "未命名食材"
+            supplier_name = item.supplier_name_snapshot
+            if not supplier_name and item.supplier:
+                supplier_name = item.supplier.name
+            supplier_name = supplier_name or "未指定廠商"
+            delivery_date = item.delivery_date or order.service_date
+
+            # 臨時採購是人工直接新增的採購需求，不屬於菜單／配方來源核對範圍。
+            # 不做 orphan / mismatch / duplicate / missing 對照，也不影響菜單來源異常判定。
+            if (item.source_type or "menu") == "manual":
+                vendor_groups[supplier_name][delivery_date].append({
+                    "item": item,
+                    "order": order,
+                    "sources": [],
+                    "expected": Decimal("0"),
+                    "source_label": "臨時採購",
+                })
+                continue
+
             item_keys[key].append(item)
             expected = expected_totals.get(key, Decimal("0")) if ingredient_id else Decimal("0")
             saved_required = _d(item.required_grams)
-            ingredient_name = item.ingredient_name_snapshot or "未命名食材"
 
             if expected <= 0:
                 anomalies.append({
@@ -159,13 +177,9 @@ def _weekly_data(week_start, week_end):
                 source_rows.append({**source, "allocated_actual_qty": allocation})
             source_rows.sort(key=lambda row: (row.get("recipe_name") or "").casefold())
 
-            supplier_name = item.supplier_name_snapshot
-            if not supplier_name and item.supplier:
-                supplier_name = item.supplier.name
-            supplier_name = supplier_name or "未指定廠商"
-            delivery_date = item.delivery_date or order.service_date
             vendor_groups[supplier_name][delivery_date].append({
                 "item": item, "order": order, "sources": source_rows, "expected": expected,
+                "source_label": "菜單／配方",
             })
 
     for key, rows in item_keys.items():

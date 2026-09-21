@@ -1385,6 +1385,38 @@ def test_summary_import_detects_template_dates_and_deduplicates(app, authed_clie
         assert KitchenMenuPlanItem.query.count() == original_item_count
 
 
+def test_summary_import_reuses_existing_recipe_for_safe_name_variants(app, authed_client):
+    with app.app_context():
+        existing = KitchenRecipe(name="番茄豆腐湯", category="湯品", active=True)
+        db.session.add(existing)
+        db.session.commit()
+        existing_id = existing.id
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "一般菜單"
+    sheet.append(["日期", "星期", "湯品", "主菜"])
+    sheet.append(["9/21", "一", "蕃茄 豆腐湯（切）", "咖哩雞（素）"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    response = authed_client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (output, "2026年9月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = response.get_data(as_text=True)
+    assert "名稱自動沿用現有菜色" in page
+    with app.app_context():
+        assert KitchenRecipe.query.filter_by(name="番茄豆腐湯").count() == 1
+        assert KitchenRecipe.query.filter_by(name="蕃茄 豆腐湯(切)").count() == 0
+        assert KitchenRecipe.query.filter_by(name="咖哩雞(素)").count() == 1
+        plan = KitchenMenuPlan.query.filter_by(service_date=date(2026, 9, 21)).one()
+        assert existing_id in {item.recipe_id for item in plan.items}
+
+
 def test_summary_import_rejects_unknown_template_without_writing(app, authed_client):
     workbook = Workbook()
     workbook.active.append(["這是一個還沒支援的格式", "內容"])

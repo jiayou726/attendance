@@ -11,6 +11,7 @@ from copy import copy
 import json
 import secrets
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
@@ -2103,7 +2104,56 @@ def _menu_text(value) -> str:
 
 
 def _menu_name_key(value: str) -> str:
-    return re.sub(r"[\s　]+", "", value).lower()
+    text = unicodedata.normalize("NFKC", _menu_text(value)).casefold()
+    return re.sub(r"[\s　·・．]+", "", text)
+
+
+MENU_NAME_EQUIVALENTS = (
+    ("蕃茄", "番茄"), ("豆乾", "豆干"), ("胡蘿蔔", "紅蘿蔔"),
+    ("海帶芽", "海芽"), ("海帶結", "海結"), ("海帶根", "海根"),
+    ("馬鈴薯", "洋芋"), ("金真菇", "金針菇"),
+)
+
+
+def _menu_alias_key(value: str) -> str:
+    key = _menu_name_key(value)
+    for source, target in MENU_NAME_EQUIVALENTS:
+        key = key.replace(source, target)
+    return key
+
+
+def _menu_without_preparation_note(value: str) -> str:
+    """只移除「切／規格」這類備註，保留（素）、（辣）等菜色語意。"""
+    text = unicodedata.normalize("NFKC", _menu_text(value))
+    return re.sub(
+        r"\((?:切|切丁|切絲|切片|切塊|切段|碎|小丁|大丁|規格[^)]*)\)",
+        "",
+        text,
+    ).strip()
+
+
+def _menu_recipe_indexes(recipes):
+    exact = defaultdict(list)
+    aliases = defaultdict(list)
+    for recipe in recipes:
+        exact[_menu_name_key(recipe.name)].append(recipe)
+        aliases[_menu_alias_key(recipe.name)].append(recipe)
+    return exact, aliases
+
+
+def _resolve_imported_recipe(name: str, exact_index, alias_index):
+    cleaned = unicodedata.normalize("NFKC", _menu_text(name))[:120]
+    candidates = exact_index.get(_menu_name_key(cleaned), [])
+    if candidates:
+        return candidates[0], cleaned
+    without_note = _menu_without_preparation_note(cleaned)
+    candidates = exact_index.get(_menu_name_key(without_note), [])
+    if len(candidates) == 1:
+        return candidates[0], cleaned
+    candidates = alias_index.get(_menu_alias_key(without_note), [])
+    if len(candidates) == 1:
+        return candidates[0], cleaned
+    return None, cleaned
 
 
 def _menu_category(header: str) -> str | None:
@@ -2253,7 +2303,7 @@ def parse_menu_workbook(raw: bytes, filename: str, sheet_kind: str = "regular") 
                 continue
             for dish in row_dishes:
                 raw_dish_count += 1
-                key = _menu_name_key(dish["name"])
+                key = _menu_alias_key(_menu_without_preparation_note(dish["name"]))
                 if key in by_date[service_date]:
                     duplicate_count += 1
                     continue
@@ -2293,13 +2343,12 @@ def summary_import():
         flash(str(exc), "error")
         return redirect(url_for("order_tool.summary"))
 
-    recipes_by_name = {
-        _menu_name_key(recipe.name): recipe
-        for recipe in KitchenRecipe.query.order_by(KitchenRecipe.id).all()
-    }
+    all_recipes = KitchenRecipe.query.order_by(KitchenRecipe.id).all()
+    recipes_by_name, recipes_by_alias = _menu_recipe_indexes(all_recipes)
     added_items = 0
     existing_items = parsed["duplicate_count"]
     created_recipes = 0
+    normalized_matches = 0
     locked_days = 0
     imported_days = 0
     for day in parsed["days"]:
@@ -2325,18 +2374,22 @@ def summary_import():
         existing_recipe_ids = {item.recipe_id for item in plan.items}
         day_added = 0
         for dish in day["dishes"]:
-            key = _menu_name_key(dish["name"])
-            recipe = recipes_by_name.get(key)
+            recipe, cleaned_name = _resolve_imported_recipe(
+                dish["name"], recipes_by_name, recipes_by_alias
+            )
             if recipe is None:
                 recipe = KitchenRecipe(
-                    name=dish["name"],
+                    name=cleaned_name,
                     category=dish["category"] if dish["category"] in CATEGORIES else "其他",
                     active=False,
                 )
                 db.session.add(recipe)
                 db.session.flush()
-                recipes_by_name[key] = recipe
+                recipes_by_name[_menu_name_key(recipe.name)].append(recipe)
+                recipes_by_alias[_menu_alias_key(recipe.name)].append(recipe)
                 created_recipes += 1
+            elif recipe.name != cleaned_name:
+                normalized_matches += 1
             if recipe.id in existing_recipe_ids:
                 existing_items += 1
                 continue
@@ -2355,6 +2408,8 @@ def summary_import():
     first_day = parsed["days"][0]["date"]
     sheet_names = "、".join(parsed["sheet_names"])
     message = f"匯入完成（{sheet_names}）：{imported_days} 天新增 {added_items} 道菜，略過 {existing_items} 筆重複；建立 {created_recipes} 個新菜色。"
+    if normalized_matches:
+        message += f" 另有 {normalized_matches} 筆名稱自動沿用現有菜色。"
     if locked_days:
         message += f" 另有 {locked_days} 天已確認，未修改。"
     flash(message, "success")

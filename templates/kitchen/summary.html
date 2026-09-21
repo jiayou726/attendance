@@ -102,7 +102,7 @@
     <div class="import-mark" aria-hidden="true">匯</div>
     <div>
       <h2>匯入菜單</h2>
-      <div class="muted">欄位請有：日期、星期、主食、主菜、副菜、蔬菜、湯品。同一天相同菜名會自動略過。</div>
+      <div class="muted">欄位請有：日期、星期、主食、主菜、副菜、蔬菜、湯品。同一天相同菜名會自動略過，也會辨識空格、全半形與常見異體寫法。</div>
     </div>
     <form method="post" action="{{ url_for('order_tool.summary_import') }}" enctype="multipart/form-data" class="menu-upload-form">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

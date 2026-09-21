@@ -41,7 +41,9 @@
           </div>
           <div class="qty">實際採購 {{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</div>
         </div>
-        {% if row.sources %}<ul class="source-list">
+        {% if item.source_type == 'manual' %}
+        <div class="muted" style="margin:8px 0 0 30px">來自：臨時採購</div>
+        {% elif row.sources %}<ul class="source-list">
           {% for source in row.sources %}
           <li><b>{{ row.order.service_date.strftime('%m/%d') }} {{ source.recipe_name }}</b> → {{ source.schools|sum(attribute='headcount') }} 人
             <div class="school-list">{% for school in source.schools %}{{ school.name }} {{ school.headcount }} 人{% if not loop.last %}｜{% endif %}{% endfor %}</div>

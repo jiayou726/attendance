@@ -256,6 +256,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
 
     page = authed_client.get("/admin/order-tool/summary?week=2026-08-10").get_data(as_text=True)
     assert "南洋綠咖哩雞" in page
+    assert f"/recipes/{ids['recipe']}?week=2026-08-10" in page
 
     response = authed_client.post("/admin/order-tool/summary/dishes", data={
         "service_date": "2026-08-14",
@@ -271,6 +272,27 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
         assert KitchenMenuPlanItem.query.filter_by(
             plan_id=friday_plan.id, recipe_id=new_recipe.id
         ).count() == 1
+
+
+def test_recipe_ingredient_edit_returns_to_the_selected_summary_week(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        component_id = KitchenRecipeIngredient.query.filter_by(
+            recipe_id=ids["recipe"], ingredient_id=ids["ingredient"]
+        ).one().id
+
+    page = authed_client.get(
+        f"/admin/order-tool/recipes/{ids['recipe']}?week=2026-08-13"
+    ).get_data(as_text=True)
+    assert 'name="week" value="2026-08-10"' in page
+    assert "/admin/order-tool/summary?week=2026-08-10" in page
+
+    response = authed_client.post(
+        f"/admin/order-tool/recipe-ingredients/{component_id}/update",
+        data={"grams_per_person": "90", "week": "2026-08-10"},
+    )
+    assert response.status_code == 302
+    assert f"/recipes/{ids['recipe']}?week=2026-08-10" in response.headers["Location"]
 
 
 def test_recipe_active_only_controls_ai_and_not_manual_menu_use(app, authed_client):

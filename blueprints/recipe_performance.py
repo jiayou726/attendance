@@ -7,13 +7,14 @@ relationships on the two recipe GET views that need them.
 """
 
 from functools import wraps
+from datetime import timedelta
 
 from flask import abort, render_template, request
 from sqlalchemy.orm import selectinload
 
 from extensions import db
 from models import KitchenIngredient, KitchenRecipe, KitchenRecipeIngredient
-from blueprints.order_tool import CATEGORIES, _int, _recipe_cost, _recipe_total_g
+from blueprints.order_tool import CATEGORIES, _date, _int, _recipe_cost, _recipe_total_g
 
 
 def _recipe_bom_load():
@@ -68,6 +69,13 @@ def install_recipe_performance_views(app):
         if recipe is None:
             abort(404)
 
+        selected_week = _date(request.args.get("week"))
+        week_start = (
+            selected_week - timedelta(days=selected_week.weekday())
+            if selected_week
+            else None
+        )
+
         ingredients_all = (
             KitchenIngredient.query.filter_by(active=True)
             .order_by(KitchenIngredient.name)
@@ -89,6 +97,7 @@ def install_recipe_performance_views(app):
             categories=CATEGORIES,
             total_g=_recipe_total_g(recipe),
             total_cost=_recipe_cost(recipe),
+            week_start=week_start,
         )
 
     app.view_functions["order_tool.recipes"] = recipes_view

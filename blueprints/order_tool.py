@@ -863,6 +863,12 @@ def recipe_detail(recipe_id: int):
     recipe = db.session.get(KitchenRecipe, recipe_id)
     if not recipe:
         abort(404)
+    selected_week = _date(request.args.get("week"))
+    week_start = (
+        selected_week - timedelta(days=selected_week.weekday())
+        if selected_week
+        else None
+    )
     ingredients_all = KitchenIngredient.query.filter_by(active=True).order_by(KitchenIngredient.name).all()
     return render_template(
         "kitchen/recipe_detail.html",
@@ -880,6 +886,7 @@ def recipe_detail(recipe_id: int):
         categories=CATEGORIES,
         total_g=_recipe_total_g(recipe),
         total_cost=_recipe_cost(recipe),
+        week_start=week_start,
     )
 
 
@@ -889,11 +896,15 @@ def recipe_category_update(recipe_id: int):
     if not recipe:
         abort(404)
     category = request.form.get("category", "").strip()
+    week_start = _date(request.form.get("week"))
+    redirect_values = {"recipe_id": recipe_id}
+    if week_start:
+        redirect_values["week"] = week_start.isoformat()
     if category not in CATEGORIES:
         flash("菜色分類不正確。", "error")
-        return redirect(url_for("order_tool.recipe_detail", recipe_id=recipe_id))
+        return redirect(url_for("order_tool.recipe_detail", **redirect_values))
     recipe.category = category
-    return _commit("菜色分類已更新。", "order_tool.recipe_detail", recipe_id=recipe_id)
+    return _commit("菜色分類已更新。", "order_tool.recipe_detail", **redirect_values)
 
 
 @order_bp.post("/recipes/<int:recipe_id>/copy")
@@ -918,7 +929,11 @@ def recipe_copy(recipe_id: int):
         ))
     db.session.commit()
     flash("已複製菜色，可直接修改食材或每人用量。", "success")
-    return redirect(url_for("order_tool.recipe_detail", recipe_id=copy.id))
+    redirect_values = {"recipe_id": copy.id}
+    week_start = _date(request.form.get("week"))
+    if week_start:
+        redirect_values["week"] = week_start.isoformat()
+    return redirect(url_for("order_tool.recipe_detail", **redirect_values))
 
 
 @order_bp.post("/recipes/<int:recipe_id>/ingredients")
@@ -928,10 +943,14 @@ def recipe_ingredient_add(recipe_id: int):
         abort(404)
     ingredient_id = _int(request.form.get("ingredient_id"), default=0) or 0
     amount = _decimal(request.form.get("grams_per_person"))
+    redirect_values = {"recipe_id": recipe_id}
+    week_start = _date(request.form.get("week"))
+    if week_start:
+        redirect_values["week"] = week_start.isoformat()
     ingredient = db.session.get(KitchenIngredient, ingredient_id)
     if not ingredient or not ingredient.active or amount is None or amount <= 0:
         flash("食材或每人用量不正確。", "error")
-        return redirect(url_for("order_tool.recipe_detail", recipe_id=recipe_id))
+        return redirect(url_for("order_tool.recipe_detail", **redirect_values))
     existing = KitchenRecipeIngredient.query.filter_by(recipe_id=recipe_id, ingredient_id=ingredient_id).first()
     if existing:
         existing.grams_per_person = amount
@@ -949,7 +968,7 @@ def recipe_ingredient_add(recipe_id: int):
         message = "食材已加入配方。"
     db.session.commit()
     flash(message, "success")
-    return redirect(url_for("order_tool.recipe_detail", recipe_id=recipe_id))
+    return redirect(url_for("order_tool.recipe_detail", **redirect_values))
 
 
 @order_bp.post("/recipe-ingredients/<int:row_id>/update")
@@ -958,15 +977,19 @@ def recipe_ingredient_update(row_id: int):
     if not row:
         abort(404)
     amount = _decimal(request.form.get("grams_per_person"))
+    redirect_values = {"recipe_id": row.recipe_id}
+    week_start = _date(request.form.get("week"))
+    if week_start:
+        redirect_values["week"] = week_start.isoformat()
     if amount is None or amount <= 0:
         flash("每人用量必須大於 0。", "error")
-        return redirect(url_for("order_tool.recipe_detail", recipe_id=row.recipe_id))
+        return redirect(url_for("order_tool.recipe_detail", **redirect_values))
     row.grams_per_person = amount
     row.quantity_status = "manual"
     row.source_note = "人工確認"
     db.session.commit()
     flash("每人用量已更新。", "success")
-    return redirect(url_for("order_tool.recipe_detail", recipe_id=row.recipe_id))
+    return redirect(url_for("order_tool.recipe_detail", **redirect_values))
 
 
 @order_bp.post("/recipe-ingredients/<int:row_id>/delete")
@@ -975,10 +998,14 @@ def recipe_ingredient_delete(row_id: int):
     if not row:
         abort(404)
     recipe_id = row.recipe_id
+    redirect_values = {"recipe_id": recipe_id}
+    week_start = _date(request.form.get("week"))
+    if week_start:
+        redirect_values["week"] = week_start.isoformat()
     db.session.delete(row)
     db.session.commit()
     flash("食材已從配方移除。", "success")
-    return redirect(url_for("order_tool.recipe_detail", recipe_id=recipe_id))
+    return redirect(url_for("order_tool.recipe_detail", **redirect_values))
 
 
 # ─────────────────────────────────────────────

@@ -2,6 +2,7 @@ Flask>=3.0                  # Web 框架
 Flask-SQLAlchemy>=3.1      # ORM
 Flask-Migrate>=4.0         # 資料庫遷移
 psycopg2-binary>=2.9       # PostgreSQL 連線套件
+psycopg[binary]>=3.2       # SQLAlchemy postgresql+psycopg 部署連線
 
 pandas>=2.2                # 資料處理
 openpyxl>=3.1              # 讀寫 Excel

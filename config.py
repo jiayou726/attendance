@@ -13,12 +13,14 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 def _normalize_database_url(url: str) -> str:
     url = (url or "").strip()
-    # 部分平台仍可能給 postgres://；SQLAlchemy/psycopg2 使用 postgresql://。
+    # SQLAlchemy 2.1 的 postgresql:// 會預設使用 psycopg 3。
+    # 正式指定 psycopg2，避免 Supabase transaction pooler 的 prepared statement 相容性問題。
     if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    # Render / Supabase 若曾被設成 psycopg 3 dialect，強制退回已驗證穩定的 psycopg2。
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
     if url.startswith("postgresql+psycopg://"):
-        url = "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
+        return "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
     return url
 
 

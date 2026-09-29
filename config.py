@@ -16,6 +16,9 @@ def _normalize_database_url(url: str) -> str:
     # 部分平台仍可能給 postgres://；SQLAlchemy/psycopg2 使用 postgresql://。
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    # Render / Supabase 若曾被設成 psycopg 3 dialect，強制退回已驗證穩定的 psycopg2。
+    if url.startswith("postgresql+psycopg://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
     return url
 
 

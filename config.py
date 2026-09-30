@@ -53,6 +53,11 @@ class Config:
         "pool_pre_ping": True,
         "pool_recycle": int(os.getenv("DB_POOL_RECYCLE_SEC", "280")),
     }
+    PRACTICE_ACCOUNT_LIMIT = int(os.getenv("PRACTICE_ACCOUNT_LIMIT", "20"))
+    PRACTICE_ACCOUNT_TTL_DAYS = int(os.getenv("PRACTICE_ACCOUNT_TTL_DAYS", "10"))
+    # Fail closed until the shared-master workspace has been verified in the
+    # deployment environment.
+    PRACTICE_ACCOUNTS_ENABLED = _bool_env("PRACTICE_ACCOUNTS_ENABLED", False)
 
     PRODUCTION = _bool_env("PRODUCTION", False)
     SESSION_COOKIE_HTTPONLY = True

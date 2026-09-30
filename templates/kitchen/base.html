@@ -12,7 +12,7 @@
 <body class="{% block body_class %}{% endblock %}">
 <main class="wrap">
   <div class="top no-print">
-    <h1>{{ '團膳管理｜練習沙盒' if session.get('kitchen_practice') else '團膳管理' }}</h1>
+    <h1>{{ '團膳管理｜練習帳號：' ~ session.get('practice_account_name', '') if session.get('kitchen_practice') else '團膳管理' }}</h1>
     <nav class="nav" aria-label="團膳管理主選單">
       <a href="{{ url_for('order_tool.index') }}">總覽</a>
       <a href="{{ url_for('order_tool.summary') }}">總表</a>
@@ -28,7 +28,7 @@
     </nav>
   </div>
   {% if session.get('kitchen_practice') %}
-    <div class="notice no-print"><b>練習模式：</b>目前團膳頁面的新增、修改、刪除、套用與採購操作都只寫入練習資料庫，不會影響正式資料。</div>
+    <div class="notice no-print"><b>練習帳號：{{ session.get('practice_account_name', '') }}</b>。總表、叫貨與採購結果完全獨立；學校、廠商、食材與配方直接讀取正式主帳，在這裡不可修改。</div>
   {% endif %}
   {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}" role="status">{{ message }}</div>{% endfor %}{% endwith %}
   {% block content %}{% endblock %}

@@ -1,6 +1,6 @@
 """AI 菜單：正式草稿、換菜/鎖定/分數、公版 Excel，以及完整練習沙盒。"""
 from __future__ import annotations
-import json,os,re,secrets
+import json,re,secrets
 from collections import defaultdict
 from datetime import date,datetime,timedelta
 from io import BytesIO
@@ -17,7 +17,12 @@ from services import meal_profiles as profile_service, recipe_tags as tag_servic
 from services.ai_menu_engine import CATEGORY_ORDER,DEFAULT_STRUCTURE,STRUCTURE_LIMITS,RuleFeasibilityError,Rules,build_structure,candidate_allowed,describe_rules,generate,hard_rule_violations,rebuild,replacement_options,service_dates,variant_violations
 from services.nutrition import recipe_nutrition
 from services.nutrition_sources import STATUS_ESTIMATED,STATUS_MATCHED,match_ingredient_name
-from services.practice_database import ensure_practice_database
+from services.practice_database import (
+    PracticeAccountError,
+    activate_account,
+    clear_practice_session,
+    login_or_create_account,
+)
 WEEKDAY="一二三四五六日"
 PRACTICE_USER="practice"
 
@@ -28,6 +33,8 @@ def _default_range():
     today=date.today(); start=(today.replace(day=1)+timedelta(days=32)).replace(day=1); end=(start+timedelta(days=32)).replace(day=1)-timedelta(days=1); return start,end
 
 def _seed_profiles():
+    if _practice_ok():
+        return
     if profile_service.seed_profiles(db.session):db.session.commit()
 
 def _readonly_profiles():
@@ -279,19 +286,25 @@ def ai_menu_public_excel(draft_id):
 def ai_menu_practice_login():
     error=""
     if request.method=="POST":
+        if not current_app.config.get("PRACTICE_ACCOUNTS_ENABLED", True):
+            error="練習帳號目前尚未開放。"
+            return render_template("kitchen/ai_menu_practice_login.html",error=error)
         try:
-            ensure_practice_database()
+            account,created=login_or_create_account(request.form.get("name", ""))
+        except PracticeAccountError as exc:
+            error=str(exc)
         except Exception:
-            current_app.logger.exception("Failed to initialize kitchen practice database")
-            error="練習資料庫初始化失敗，請確認 PRACTICE_DATABASE_URL 或部署儲存空間設定。"
+            current_app.logger.exception("Failed to enter kitchen practice account")
+            error="練習帳號開啟失敗，請聯絡管理者。"
         else:
-            db.session.remove();session["kitchen_practice"]=True
+            activate_account(account)
+            flash(f"{'已建立' if created else '已登入'} {account['display_name']} 的練習帳號。","success")
             return redirect(url_for("order_tool.index"))
     return render_template("kitchen/ai_menu_practice_login.html",error=error)
 
 @order_bp.get("/ai-menu/practice/logout")
 def ai_menu_practice_logout():
-    db.session.remove();session.pop("kitchen_practice",None)
+    clear_practice_session()
     return redirect(url_for("order_tool.ai_menu_practice_login"))
 
 @order_bp.get("/ai-menu/practice")

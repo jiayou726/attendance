@@ -115,6 +115,11 @@ def _protect_kitchen():
         received = request.form.get("_csrf_token", "")
         if not expected or not received or not secrets.compare_digest(expected, received):
             abort(400, description="安全驗證已失效，請重新整理頁面再操作。")
+    if request.method == "POST" and session.get("kitchen_practice"):
+        from services.practice_database import practice_master_write_blocked
+        if practice_master_write_blocked(request.endpoint):
+            flash("練習區的學校、廠商、食材與配方直接讀取正式主帳，不可在這裡修改。", "error")
+            return redirect(request.referrer or url_for("order_tool.index"))
     return None
 
 
@@ -3609,6 +3614,19 @@ def procurement_manual_item_create():
     supplier_name = str(request.form.get("supplier_name") or "").strip()[:100]
     purchase_unit = str(request.form.get("purchase_unit") or "kg").strip()[:20]
     actual = _decimal(request.form.get("actual_order_qty"), default=None)
+    per_person = _decimal(request.form.get("per_person_amount"), default=None)
+    requested_base_unit = str(request.form.get("base_unit") or "").strip()[:10]
+    requested_units_per_purchase = _decimal(request.form.get("units_per_purchase"), default=None)
+    selected_school_ids = {
+        school_id for school_id in (
+            _int(raw, default=0) or 0 for raw in request.form.getlist("school_ids")
+        ) if school_id
+    }
+    selected_headcounts = {}
+    for school_id in selected_school_ids:
+        headcount = _int(request.form.get(f"headcount_{school_id}"), default=0) or 0
+        if headcount > 0:
+            selected_headcounts[str(school_id)] = headcount
     package_qty = _decimal(request.form.get("package_qty"), default=None)
     package_unit = str(request.form.get("package_unit") or "").strip()[:20]
     delivery_date = _date(request.form.get("delivery_date"), default=service_date) or service_date
@@ -3621,6 +3639,12 @@ def procurement_manual_item_create():
         return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
     if actual is None or actual <= 0:
         flash("實際採購量必須大於 0。", "error")
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    if per_person is not None and (per_person <= 0 or not selected_headcounts):
+        flash("每人用量與學校人數必須大於 0。", "error")
+        return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    if requested_units_per_purchase is not None and requested_units_per_purchase <= 0:
+        flash("每採購單位的換算數量必須大於 0。", "error")
         return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
     if package_qty is not None and package_qty < 0:
         flash("包裝數量不可為負數。", "error")
@@ -3670,6 +3694,16 @@ def procurement_manual_item_create():
         base_unit = ingredient.base_unit or "g"
         units_per_purchase = ingredient.grams_per_purchase_unit or Decimal("1")
 
+    if requested_base_unit in BASE_UNITS:
+        base_unit = requested_base_unit
+    if requested_units_per_purchase is not None:
+        units_per_purchase = requested_units_per_purchase
+    required_amount = (
+        per_person * sum(selected_headcounts.values())
+        if per_person is not None else Decimal("0")
+    )
+    required_qty = required_amount / units_per_purchase if units_per_purchase else Decimal("0")
+
     order = KitchenPurchaseOrder.query.filter_by(service_date=service_date, supplier_key="daily").one_or_none()
     if order and order.status != "draft":
         flash("這一天的採購單已確認，請先重開草稿。", "error")
@@ -3705,8 +3739,8 @@ def procurement_manual_item_create():
         ),
         ingredient_name_snapshot=ingredient.name,
         base_unit_snapshot=base_unit,
-        required_grams=Decimal("0"),
-        required_qty=Decimal("0"),
+        required_grams=required_amount,
+        required_qty=required_qty,
         purchase_unit_snapshot=purchase_unit,
         grams_per_purchase_unit_snapshot=units_per_purchase,
         recommended_order_qty=actual,
@@ -3721,8 +3755,8 @@ def procurement_manual_item_create():
         delivery_slot=delivery_slot,
         manual_override=True,
         source_type="manual",
-        per_person_amount=None,
-        school_headcounts="{}",
+        per_person_amount=per_person,
+        school_headcounts=json.dumps(selected_headcounts, ensure_ascii=False),
     )
     db.session.add(item)
     db.session.commit()
@@ -3936,11 +3970,13 @@ def _apply_procurement_item_values(
             db.func.lower(KitchenSupplier.name) == supplier_name.lower()
         ).first()
         if supplier is None:
+            if session.get("kitchen_practice"):
+                return None, "練習區只能選擇正式主帳已有的廠商。"
             supplier = KitchenSupplier(name=supplier_name, note="由採購明細新增", active=True)
             db.session.add(supplier)
             db.session.flush()
             supplier_created = True
-        elif not supplier.active:
+        elif not supplier.active and not session.get("kitchen_practice"):
             supplier.active = True
 
     supplier_item = _supplier_item_match(
@@ -3957,7 +3993,8 @@ def _apply_procurement_item_values(
         package_unit = conversion_rule["package_unit"]
 
     conversion_changed = False
-    if supplier and package_qty is not None and package_qty > 0 and package_unit and actual > 0:
+    if (supplier and package_qty is not None and package_qty > 0 and package_unit
+            and actual > 0 and not session.get("kitchen_practice")):
         supplier_item, conversion_changed = _remember_supplier_conversion(
             supplier, item, actual, package_qty, package_unit
         )
@@ -3968,12 +4005,19 @@ def _apply_procurement_item_values(
     item.actual_order_qty = actual
     item.package_qty = package_qty
     item.package_unit = package_unit
-    item.package_conversion_snapshot = supplier_item.package_conversion if supplier_item else None
+    if supplier_item:
+        item.package_conversion_snapshot = supplier_item.package_conversion
+    elif package_qty is not None and package_qty > 0 and package_unit and actual > 0:
+        item.package_conversion_snapshot = (
+            f"1{package_unit}＝{_trim_decimal(actual / package_qty)}{item.purchase_unit_snapshot}"
+        )[:120]
+    else:
+        item.package_conversion_snapshot = None
     item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
     item.delivery_date = delivery_date
     item.delivery_slot = delivery_slot
     item.manual_override = True
-    if item.ingredient:
+    if item.ingredient and not session.get("kitchen_practice"):
         item.ingredient.supplier_id = supplier.id if supplier else None
 
     return {

@@ -27,6 +27,20 @@ Required:
 - `AUTO_CREATE_DB=0`
 - `KITCHEN_CSRF_ENABLED=1`
 
+Named practice accounts stay disabled by default. After staging verification,
+set `PRACTICE_DATABASE_URL` to the same PostgreSQL host, port and database as
+`DATABASE_URL`, then set:
+
+- `PRACTICE_ACCOUNTS_ENABLED=1`
+- `PRACTICE_ACCOUNT_LIMIT=20`
+- `PRACTICE_ACCOUNT_TTL_DAYS=10`
+
+Practice workspaces create private `practice_*` schemas. Their school,
+supplier, ingredient and recipe tables are non-updatable views of `public`;
+only menu, assignment, kitchen-note, draft and purchase tables are private to
+each named account. Run `flask cleanup-practice-accounts` daily as a deployment
+cron job; login also removes expired accounts before enforcing the limit.
+
 When `PRODUCTION=1`, the app intentionally refuses to start if `SECRET_KEY` or all admin passwords are missing, or if kitchen CSRF is disabled.
 
 ## 3. Supabase / schema warning

@@ -9,9 +9,8 @@ class KitchenRoutingSession(FlaskSQLAlchemySession):
 
     The rest of the application keeps using the normal database. Once the
     practice flag is present in the browser session, every ORM read/write
-    under /admin/order-tool is transparently sent to the ``practice`` bind.
-    Existing kitchen CRUD handlers therefore keep their normal behavior while
-    remaining completely isolated from formal data.
+    under /admin/order-tool is transparently sent to that named account's
+    workspace. Formal kitchen routes retain their original bind unchanged.
     """
 
     def get_bind(self, mapper=None, clause=None, bind=None, **kwargs):
@@ -21,10 +20,10 @@ class KitchenRoutingSession(FlaskSQLAlchemySession):
             and session.get("kitchen_practice")
             and request.path.startswith("/admin/order-tool")
         ):
-            practice_engine = self._db.engines.get("practice")
-            if practice_engine is None:
-                raise RuntimeError("Practice database bind is not configured.")
-            return practice_engine
+            # Import lazily to avoid the extensions -> models -> extensions
+            # cycle during application startup.
+            from services.practice_database import workspace_engine
+            return workspace_engine()
         return super().get_bind(mapper=mapper, clause=clause, bind=bind, **kwargs)
 
 

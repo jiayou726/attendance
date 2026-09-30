@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>練習人員管理</title>
+  <style>
+    body{font-family:Arial,"Noto Sans CJK TC",sans-serif;max-width:1100px;margin:30px auto;padding:0 16px;color:#222}
+    h1{font-size:32px}.muted{color:#666}.flash{padding:12px;background:#eaf7ec;margin:12px 0}
+    table{width:100%;border-collapse:collapse;font-size:18px}th,td{border:1px solid #aaa;padding:10px;text-align:left}
+    th{background:#f3f3f3}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions form{margin:0}
+    button,a{font-size:17px;padding:7px 12px}.danger{color:#a40000}.top{display:flex;justify-content:space-between;align-items:center;gap:16px}
+    @media(max-width:760px){table{font-size:15px}.optional{display:none}}
+  </style>
+</head>
+<body>
+  <div class="top"><h1>練習人員管理</h1><a href="{{ url_for('emp.list_employees') }}">回員工名單</a></div>
+  <p class="muted">最多 20 個帳號；連續 10 天沒有使用會自動刪除。重置會保留姓名並清空總表、叫貨與採購結果。</p>
+  {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+  <table>
+    <thead><tr><th>姓名</th><th class="optional">建立時間</th><th>最後使用</th><th>剩餘</th><th>菜單</th><th>採購單</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for account in accounts %}
+      <tr>
+        <td>{{ account.display_name }}</td>
+        <td class="optional">{{ account.created_at.strftime('%Y/%m/%d %H:%M') }}</td>
+        <td>{{ account.last_active_at.strftime('%Y/%m/%d %H:%M') }}</td>
+        <td>{{ account.days_remaining }} 天</td>
+        <td>{{ account.plan_count if account.plan_count is not none else '—' }}</td>
+        <td>{{ account.order_count if account.order_count is not none else '—' }}</td>
+        <td><div class="actions">
+          <form method="post" action="{{ url_for('practice_admin.reset',account_id=account.id) }}" onsubmit="return confirm('確定重置 {{ account.display_name }} 的所有練習成果？')">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button>重置</button>
+          </form>
+          <form method="post" action="{{ url_for('practice_admin.delete',account_id=account.id) }}" onsubmit="return confirm('確定永久刪除 {{ account.display_name }} 的練習帳號？')">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="danger">刪除</button>
+          </form>
+        </div></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">目前沒有練習帳號。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

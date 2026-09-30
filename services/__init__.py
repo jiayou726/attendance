@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 import re
 from urllib.parse import quote
-from flask import request, render_template
+from flask import request, session
 from blueprints.order_tool import order_bp
 
 _PRACTICE_LINK=(
@@ -21,14 +21,10 @@ def _safe_download_name(value:str)->str:
 
 @order_bp.app_context_processor
 def _practice_context():
-    active=(request.args.get("practice")=="1" or request.path.startswith("/admin/order-tool/ai-menu/practice"))
-    return {"practice_mode":active}
-
-@order_bp.before_app_request
-def _practice_router():
-    if request.method=="GET" and request.path=="/admin/order-tool/ai-menu/practice" and request.args.get("feature")!="ai-menu":
-        return render_template("kitchen/practice_dashboard.html",practice_mode=True)
-    return None
+    return {
+        "practice_mode": bool(session.get("kitchen_practice")),
+        "practice_account_name": session.get("practice_account_name", ""),
+    }
 
 def _rewrite_public_menu_xlsx(response):
     matched=re.search(r"/ai-menu/drafts/(\d+)/public\.xlsx$",request.path)

@@ -28,6 +28,7 @@ from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
 from blueprints.nonregistered_menu_format import install_nonregistered_menu_export_format_fix
 from blueprints.weekly_procurement import weekly_procurement_bp
+from blueprints.practice_admin import practice_admin_bp
 
 
 def _ensure_kitchen_schema_compatibility(app: Flask):
@@ -152,6 +153,7 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(weekly_procurement_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
+    app.register_blueprint(practice_admin_bp, url_prefix="/admin/practice-users")
     app.register_blueprint(punch_bp)
 
     # 非登合菜名範本本身有幾列格式不同；匯出前把所有資料列
@@ -164,6 +166,16 @@ def create_app(config_overrides=None) -> Flask:
 
     @app.before_request
     def protect_admin_pages():
+        if (session.get("kitchen_practice")
+                and request.path.startswith("/admin/order-tool")
+                and request.endpoint not in {
+                    "order_tool.ai_menu_practice_login",
+                    "order_tool.ai_menu_practice_logout",
+                }):
+            from services.practice_database import clear_practice_session, touch_current_account
+            if touch_current_account() is None:
+                clear_practice_session()
+                return redirect(url_for("order_tool.ai_menu_practice_login"))
         # 團膳菜單是內部作業工具，依需求可直接使用；其餘管理後台仍需登入。
         kitchen_public = request.path == "/admin/order-tool" or request.path.startswith("/admin/order-tool/")
         if (request.path.startswith("/admin") and not kitchen_public
@@ -171,6 +183,13 @@ def create_app(config_overrides=None) -> Flask:
             if not session.get("role"):
                 return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
         return None
+
+    @app.cli.command("cleanup-practice-accounts")
+    def cleanup_practice_accounts_command():
+        """Delete named practice accounts inactive for the configured TTL."""
+        from services.practice_database import cleanup_expired_accounts
+        removed = cleanup_expired_accounts()
+        print(f"Removed {removed} expired practice account(s).")
 
     @app.route("/")
     def home():

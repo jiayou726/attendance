@@ -27,9 +27,9 @@ Required:
 - `AUTO_CREATE_DB=0`
 - `KITCHEN_CSRF_ENABLED=1`
 
-Named practice accounts stay disabled by default. After staging verification,
-set `PRACTICE_DATABASE_URL` to the same PostgreSQL host, port and database as
-`DATABASE_URL`, then set:
+Named practice accounts stay disabled by default. `PRACTICE_DATABASE_URL` may
+be omitted to reuse the formal PostgreSQL `DATABASE_URL`; if set, it must use
+the same host, port and database. Then set:
 
 - `PRACTICE_ACCOUNTS_ENABLED=1`
 - `PRACTICE_ACCOUNT_LIMIT=20`

@@ -30,14 +30,20 @@ def _database_url() -> str:
 
 
 def _practice_database_url() -> str:
-    """Dedicated sandbox database used by the kitchen practice account.
+    """Database connection used for named kitchen practice workspaces.
 
-    A separate PRACTICE_DATABASE_URL is recommended in production. When it is
-    omitted, use a separate local SQLite file instead of ever falling back to
-    the formal DATABASE_URL.
+    PostgreSQL practice workspaces must live beside the formal tables so their
+    master-data views can read ``public`` without copying rows. Render may
+    therefore reuse DATABASE_URL when PRACTICE_DATABASE_URL is omitted. Local
+    SQLite development keeps a separate file to avoid touching attendance.db.
     """
     url = _normalize_database_url(os.getenv("PRACTICE_DATABASE_URL", ""))
-    return url or f"sqlite:///{os.path.join(BASE, 'practice.db')}"
+    if url:
+        return url
+    formal_url = _database_url()
+    if formal_url.startswith("postgresql"):
+        return formal_url
+    return f"sqlite:///{os.path.join(BASE, 'practice.db')}"
 
 
 class Config:

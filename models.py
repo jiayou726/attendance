@@ -42,6 +42,8 @@ class KitchenSchool(db.Model):
     default_headcount = db.Column(db.Integer, nullable=False, default=0)
     # 平常素食人數；葷食仍沿用 default_headcount，確保舊資料相容。
     default_vegetarian_headcount = db.Column(db.Integer, nullable=False, default=0)
+    # 平常班級數；每日廚房表尚未有當日紀錄時自動帶入，當天仍可修改。
+    default_class_count = db.Column(db.Integer, nullable=False, default=0)
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

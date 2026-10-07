@@ -465,11 +465,16 @@ def schools():
         if default_vegetarian_headcount is None or default_vegetarian_headcount < 0:
             flash("平常素食人數不可為負數。", "error")
             return redirect(url_for("order_tool.schools"))
+        default_class_count = _int(request.form.get("default_class_count"), default=0)
+        if default_class_count is None or default_class_count < 0:
+            flash("平常班級數不可為負數。", "error")
+            return redirect(url_for("order_tool.schools"))
         db.session.add(KitchenSchool(
             name=name,
             code=request.form.get("code", "").strip() or None,
             default_headcount=default_headcount,
             default_vegetarian_headcount=default_vegetarian_headcount,
+            default_class_count=default_class_count,
         ))
         return _commit("學校已新增。", "order_tool.schools")
     q = request.args.get("q", "").strip()
@@ -502,6 +507,11 @@ def school_update(school_id: int):
         flash("平常素食人數不可為負數。", "error")
         return redirect(url_for("order_tool.schools", edit=school_id))
     row.default_vegetarian_headcount = default_vegetarian_headcount
+    default_class_count = _int(request.form.get("default_class_count"), default=0)
+    if default_class_count is None or default_class_count < 0:
+        flash("平常班級數不可為負數。", "error")
+        return redirect(url_for("order_tool.schools", edit=school_id))
+    row.default_class_count = default_class_count
     return _commit("學校資料已更新。", "order_tool.schools")
 
 
@@ -3094,6 +3104,7 @@ def _daily_kitchen_sheet_data(service_date: date):
                     "id": assignment.school_id,
                     "name": assignment.school.name,
                     "headcount": 0,
+                    "default_class_count": max(assignment.school.default_class_count or 0, 0),
                 })
                 school_count["headcount"] += max(assignment.headcount, 0)
 
@@ -3138,11 +3149,13 @@ def _daily_kitchen_sheet_data(service_date: date):
             )
             for school in dish["school_rows"]:
                 raw_class_count = saved_class_counts.get(str(school["id"]))
-                school["class_count"] = (
-                    raw_class_count
-                    if isinstance(raw_class_count, int) and raw_class_count >= 0
-                    else None
-                )
+                if isinstance(raw_class_count, int) and raw_class_count >= 0:
+                    school["class_count"] = raw_class_count
+                elif note is None:
+                    school["class_count"] = school["default_class_count"]
+                else:
+                    # 當天已經儲存過時尊重現場值；刻意留空也不再被預設值補回。
+                    school["class_count"] = None
             # 舊版只有一個總班級數；僅在單一學校時可無歧義地沿用。
             if (
                 note and note.class_count is not None and not saved_class_counts

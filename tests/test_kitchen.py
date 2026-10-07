@@ -537,11 +537,15 @@ def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procur
         "code": "1-08",
         "default_headcount": "40",
         "default_vegetarian_headcount": "3",
+        "default_class_count": "12",
     })
     assert response.status_code == 302
     schools_page = authed_client.get("/admin/order-tool/schools").get_data(as_text=True)
     assert "平常葷食人數" in schools_page
     assert "平常素食人數" in schools_page
+    assert "平常班級數" in schools_page
+    with app.app_context():
+        assert db.session.get(KitchenSchool, ids["school"]).default_class_count == 12
     authed_client.post("/admin/order-tool/summary/dishes", data={
         "service_date": "2026-08-13",
         "week": "2026-08-10",
@@ -683,6 +687,12 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             "廣豐": 10,
             "平鎮高中小便當": 360,
         }
+        default_class_counts = {
+            "新勢": 10,
+            "平鎮高中": 2,
+            "廣豐": 1,
+            "平鎮高中小便當": 36,
+        }
         vegetarian_counts = {
             "新勢": 4,
             "平鎮高中": 2,
@@ -690,7 +700,10 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
             "平鎮高中小便當": 2,
         }
         for school_name in regular_counts:
-            school = KitchenSchool(name=school_name)
+            school = KitchenSchool(
+                name=school_name,
+                default_class_count=default_class_counts[school_name],
+            )
             db.session.add(school)
             db.session.flush()
             for suffix, counts in (("菜單", regular_counts), ("素食菜單", vegetarian_counts)):
@@ -765,7 +778,7 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
     )
     automatic_sheet = load_workbook(BytesIO(automatic.data), data_only=False)["0813"]
-    assert [automatic_sheet.cell(3, column).value for column in range(3, 8)] == [160, None, 30, 300, 490]
+    assert [automatic_sheet.cell(3, column).value for column in range(3, 8)] == [160, 49, 30, 300, 490]
     assert automatic_sheet["D2"].value == "班級數"
     assert [automatic_sheet.cell(7, column).value for column in range(3, 8)] == [None, None, 7, 2, 9]
 

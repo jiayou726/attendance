@@ -907,6 +907,39 @@ def test_daily_kitchen_missing_ingredients_does_not_block_autosave(app, authed_c
         assert note.class_count == 5
 
 
+
+def test_daily_kitchen_sheet_uses_school_default_when_existing_note_has_no_class_count(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post(f"/admin/order-tool/schools/{ids['school']}/update", data={
+        "name": "內小",
+        "code": "1-08",
+        "default_headcount": "40",
+        "default_vegetarian_headcount": "0",
+        "default_class_count": "12",
+    })
+    _create_plan(app, authed_client, ids, headcount=40)
+
+    with app.app_context():
+        db.session.add(KitchenDailyDishNote(
+            service_date=TEST_DAY,
+            variant="regular",
+            recipe_id=ids["recipe"],
+            ingredients_text="",
+            combo_count=40,
+            school_class_counts="{}",
+            class_count=None,
+            bento_count=0,
+            small_bento_count=0,
+        ))
+        db.session.commit()
+
+    page = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    expected = f'name="class_count_regular_{ids["recipe"]}_{ids["school"]}"'
+    assert expected in page
+    assert f'{expected} type="number" min="0" step="1" value="12"' in page
+
 def test_daily_kitchen_vegetarian_school_buckets():
     bucket = order_tool_module._daily_kitchen_bucket
     assert bucket("桃園市中壢區中平國小", "vegetarian") == "combo"

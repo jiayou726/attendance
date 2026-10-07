@@ -3148,14 +3148,17 @@ def _daily_kitchen_sheet_data(service_date: date):
                 key=lambda row: row["name"].casefold(),
             )
             for school in dish["school_rows"]:
-                raw_class_count = saved_class_counts.get(str(school["id"]))
-                if isinstance(raw_class_count, int) and raw_class_count >= 0:
-                    school["class_count"] = raw_class_count
-                elif note is None:
-                    school["class_count"] = school["default_class_count"]
+                school_key = str(school["id"])
+                if school_key in saved_class_counts:
+                    raw_class_count = saved_class_counts[school_key]
+                    school["class_count"] = (
+                        raw_class_count
+                        if isinstance(raw_class_count, int) and raw_class_count >= 0
+                        else None
+                    )
                 else:
-                    # 當天已經儲存過時尊重現場值；刻意留空也不再被預設值補回。
-                    school["class_count"] = None
+                    # 舊資料常只有出餐數、班級數仍是空的；缺哪一校就補該校預設。
+                    school["class_count"] = school["default_class_count"]
             # 舊版只有一個總班級數；僅在單一學校時可無歧義地沿用。
             if (
                 note and note.class_count is not None and not saved_class_counts
@@ -3217,8 +3220,8 @@ def daily_kitchen_sheet():
                         return redirect(url_for(
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
                         ))
-                    if class_count is not None:
-                        school_class_counts[str(school["id"])] = class_count
+                    # 連空白也保存成 null，才能區分「使用者刻意留空」與舊資料根本沒存過。
+                    school_class_counts[str(school["id"])] = class_count
                 updates.append((variant, dish, ingredients_text, counts, school_class_counts))
 
         for variant, dish, ingredients_text, counts, school_class_counts in updates:
@@ -3239,7 +3242,11 @@ def daily_kitchen_sheet():
             note.school_class_counts = json.dumps(
                 school_class_counts, ensure_ascii=False, sort_keys=True
             )
-            note.class_count = sum(school_class_counts.values()) if school_class_counts else None
+            numeric_class_counts = [
+                value for value in school_class_counts.values()
+                if isinstance(value, int) and value >= 0
+            ]
+            note.class_count = sum(numeric_class_counts) if numeric_class_counts else None
             note.bento_count = counts["bento"]
             note.small_bento_count = counts["small_bento"]
         db.session.commit()

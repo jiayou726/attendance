@@ -648,6 +648,7 @@
   if (dailyKitchenForm) {
     const saveState = dailyKitchenForm.querySelector('[data-daily-kitchen-save-state]');
     const fields = [...dailyKitchenForm.querySelectorAll('[data-daily-save-field]')];
+    const numericFields = fields.filter((field) => field.matches('input[type="number"]'));
     let saveTimer = null;
     let saveChain = Promise.resolve();
     let lastSaved = new URLSearchParams(new FormData(dailyKitchenForm)).toString();
@@ -656,8 +657,8 @@
     const save = () => {
       window.clearTimeout(saveTimer);
       saveTimer = null;
-      if (!fields.every((field) => field.checkValidity())) {
-        if (saveState) saveState.textContent = '請完成數字';
+      if (!numericFields.every((field) => field.checkValidity())) {
+        if (saveState) saveState.textContent = '請修正數字';
         return;
       }
       const body = new URLSearchParams(new FormData(dailyKitchenForm));
@@ -680,7 +681,8 @@
         if (saveState) saveState.textContent = data.message || '已儲存';
       });
       saveChain = operation.catch((error) => {
-        if (saveState) saveState.textContent = error.message || '儲存失敗';
+        const message = error.message || '請重新整理後再試';
+        if (saveState) saveState.textContent = `儲存失敗：${message}`;
       });
     };
     const scheduleSave = () => {

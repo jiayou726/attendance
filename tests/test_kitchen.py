@@ -840,6 +840,73 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
     assert [sheet.cell(7, column).value for column in range(3, 8)] == [5, 3, 4, 1, 10]
 
 
+def test_daily_kitchen_missing_ingredients_does_not_block_autosave(app, authed_client):
+    with app.app_context():
+        school = KitchenSchool(name="無食材測試學校", default_class_count=5)
+        recipe = KitchenRecipe(name="醬燒洋芋(素)", category="副菜")
+        db.session.add_all([school, recipe])
+        db.session.flush()
+        plan = KitchenMenuPlan(
+            service_date=TEST_DAY,
+            meal_type="午餐",
+            name="無食材測試學校菜單",
+        )
+        db.session.add(plan)
+        db.session.flush()
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=plan.id,
+            recipe_id=recipe.id,
+            sort_order=0,
+        ))
+        db.session.add(KitchenMenuAssignment(
+            plan_id=plan.id,
+            school_id=school.id,
+            headcount=30,
+        ))
+        db.session.commit()
+        recipe_id = recipe.id
+        school_id = school.id
+
+    page = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    marker = f'name="ingredients_regular_{recipe_id}"'
+    marker_index = page.index(marker)
+    textarea_start = page.rfind("<textarea", 0, marker_index)
+    textarea_end = page.index(">", marker_index)
+    textarea_tag = page[textarea_start:textarea_end + 1]
+    assert " required" not in textarea_tag
+    assert "尚未設定食材，不影響班級數與出餐數字自動儲存。" in page
+    assert "尚未修改" in page
+
+    script = authed_client.get("/static/kitchen_ui.js").get_data(as_text=True)
+    assert "const numericFields = fields.filter" in script
+    assert "!numericFields.every((field) => field.checkValidity())" in script
+
+    saved = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={
+            "date": "2026-08-13",
+            f"ingredients_regular_{recipe_id}": "",
+            f"combo_regular_{recipe_id}": "30",
+            f"class_count_regular_{recipe_id}_{school_id}": "5",
+            f"bento_regular_{recipe_id}": "0",
+            f"small_bento_regular_{recipe_id}": "0",
+        },
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert saved.status_code == 200
+    assert saved.get_json() == {"message": "已儲存"}
+    with app.app_context():
+        note = KitchenDailyDishNote.query.filter_by(
+            service_date=TEST_DAY,
+            variant="regular",
+            recipe_id=recipe_id,
+        ).one()
+        assert note.ingredients_text == ""
+        assert note.class_count == 5
+
+
 def test_daily_kitchen_vegetarian_school_buckets():
     bucket = order_tool_module._daily_kitchen_bucket
     assert bucket("桃園市中壢區中平國小", "vegetarian") == "combo"

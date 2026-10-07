@@ -940,6 +940,46 @@ def test_daily_kitchen_sheet_uses_school_default_when_existing_note_has_no_class
     assert expected in page
     assert f'{expected} type="number" min="0" step="1" value="12"' in page
 
+
+def test_daily_kitchen_sheet_does_not_default_vegetarian_class_count(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post(f"/admin/order-tool/schools/{ids['school']}/update", data={
+        "name": "內小",
+        "code": "1-08",
+        "default_headcount": "40",
+        "default_vegetarian_headcount": "3",
+        "default_class_count": "12",
+    })
+    _create_plan(app, authed_client, ids, headcount=40)
+
+    with app.app_context():
+        vegetarian_plan = KitchenMenuPlan(
+            service_date=TEST_DAY,
+            meal_type="午餐",
+            name="內小素食菜單",
+        )
+        db.session.add(vegetarian_plan)
+        db.session.flush()
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=vegetarian_plan.id,
+            recipe_id=ids["recipe"],
+            sort_order=0,
+        ))
+        db.session.add(KitchenMenuAssignment(
+            plan_id=vegetarian_plan.id,
+            school_id=ids["school"],
+            headcount=3,
+        ))
+        db.session.commit()
+
+    page = authed_client.get(
+        "/admin/order-tool/summary/daily-kitchen-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    field = f'name="class_count_vegetarian_{ids["recipe"]}_{ids["school"]}"'
+    assert field in page
+    assert f'{field} type="number" min="0" step="1" value=""' in page
+
+
 def test_daily_kitchen_vegetarian_school_buckets():
     bucket = order_tool_module._daily_kitchen_bucket
     assert bucket("桃園市中壢區中平國小", "vegetarian") == "combo"

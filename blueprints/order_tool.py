@@ -3157,8 +3157,10 @@ def _daily_kitchen_sheet_data(service_date: date):
                         else None
                     )
                 else:
-                    # 舊資料常只有出餐數、班級數仍是空的；缺哪一校就補該校預設。
-                    school["class_count"] = school["default_class_count"]
+                    # 只有一般／葷食自動帶學校預設班級數；素食維持空白供現場手動填寫。
+                    school["class_count"] = (
+                        school["default_class_count"] if variant == "regular" else None
+                    )
             # 舊版只有一個總班級數；僅在單一學校時可無歧義地沿用。
             if (
                 note and note.class_count is not None and not saved_class_counts

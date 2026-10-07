@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">單日出餐</div>
     <h1>每日廚房表格</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　班級數會從學校清單自動帶入，當天仍可修改；食材備註與出餐數字也會自動儲存。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　葷食班級數會從學校清單自動帶入，素食不自動帶入；當天仍可修改；食材備註與出餐數字也會自動儲存。</div>
   </div>
   <nav class="week-switcher" aria-label="切換日期">
     <a class="btn secondary" href="{{ url_for('order_tool.daily_kitchen_sheet', date=previous_date.isoformat()) }}">← 前一天</a>

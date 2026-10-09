@@ -620,7 +620,7 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     ).get_data(as_text=True)
     assert all(label in regular for label in (
         "菜色用量表", "食材", "每人用量", "供餐人數", "理論總量",
-        "採購單位", "當日總採購量", "現場備註",
+        "採購單位", "本菜預估採購量", "現場備註",
     ))
     assert "南洋綠咖哩雞" in regular
     assert "88" in regular and "g/人" in regular

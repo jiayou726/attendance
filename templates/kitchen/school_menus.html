@@ -99,10 +99,47 @@
         {% endif %}
       </div>
       <footer><span>葷 <b data-selected-count="regular">{{ day.selected_ids.regular|length }}</b>／素 <b data-selected-count="vegetarian">{{ day.selected_ids.vegetarian|length }}</b></span><a class="day-usage-link" href="{{ url_for('order_tool.production_sheet', date=day.date.isoformat()) }}">菜色用量</a><span data-auto-save-state>{% if day.locked %}已確認{% elif day.service_status == 'no_service' %}已停餐{% else %}已儲存{% endif %}</span></footer>
+      {% if schools|length > 1 %}
+      <button class="school-copy-day-btn" type="button" data-copy-day-menu{% if day.locked or day.service_status == 'no_service' or (not day.selected_ids.regular and not day.selected_ids.vegetarian) %} disabled{% endif %}>複製菜色到其他學校</button>
+      {% endif %}
     </article>
     {% endfor %}
   </section>
 </form>
+{% if schools|length > 1 %}
+<div class="school-copy-backdrop" data-menu-copy-dialog hidden role="dialog" aria-modal="true" aria-labelledby="school-copy-title">
+  <div class="school-copy-panel card">
+    <form data-menu-copy-form data-copy-url="{{ url_for('order_tool.school_menu_copy_day') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="source_school_id" value="{{ selected_school.id }}">
+      <input type="hidden" name="service_date" value="">
+      <div class="school-copy-heading">
+        <h2 id="school-copy-title">複製菜色</h2>
+        <button type="button" class="school-copy-close" data-copy-close aria-label="關閉">×</button>
+      </div>
+      <p class="muted" data-copy-description></p>
+      <p class="school-copy-warning">將來源學校當天的葷食、素食勾選複製過去，<b>取代目標學校當天原有的菜色選擇</b>。不更改各校供餐人數，也不修改停餐狀態。</p>
+      <div class="school-copy-select-heading">
+        <b>選擇目標學校</b>
+        <label><input type="checkbox" data-copy-select-all> 全選</label>
+      </div>
+      <div class="school-copy-targets">
+        {% for school in schools %}
+          {% if school.id != selected_school.id %}
+          <label class="school-copy-target"><input type="checkbox" name="target_school_ids" value="{{ school.id }}" data-copy-target><span>{{ school.name }}</span></label>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="school-copy-actions">
+        <button type="button" class="btn secondary" data-copy-close>取消</button>
+        <button type="submit" class="btn ok" data-copy-submit>確認複製</button>
+      </div>
+      <p class="school-copy-result" data-copy-modal-status role="status" aria-live="polite"></p>
+    </form>
+  </div>
+</div>
+<p class="school-copy-feedback" data-copy-feedback role="status" aria-live="polite" hidden></p>
+{% endif %}
 {% else %}
 <section class="card empty">目前沒有啟用中的學校，請先到「學校」新增。</section>
 {% endif %}

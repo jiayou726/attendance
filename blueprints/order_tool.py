@@ -1922,8 +1922,15 @@ def school_menu_copy_day():
             recipe_ids = selected[variant]
             if not recipe_ids and assignment is None:
                 continue
+            original_headcount = assignment.headcount if assignment is not None else None
             plan = _editable_school_plan(target, service_date, variant)
-            # Reuse the existing plan and assignment, preserving original headcounts.
+            # An old shared central plan is detached by _editable_school_plan.
+            # Restore that school's own saved headcount after detaching it.
+            if original_headcount is not None:
+                target_assignment = KitchenMenuAssignment.query.filter_by(
+                    plan_id=plan.id, school_id=target.id,
+                ).one()
+                target_assignment.headcount = original_headcount
             for old_item in list(plan.items):
                 db.session.delete(old_item)
             db.session.flush()

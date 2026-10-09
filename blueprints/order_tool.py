@@ -1863,6 +1863,89 @@ def school_menus_export():
     )
 
 
+@order_bp.post("/summary/schools/copy-day")
+def school_menu_copy_day():
+    """Copy saved recipe selections to other schools on the SAME day.
+
+    Headcounts and no-service decisions belong to each destination school and
+    must never be overwritten by a copied menu. Validate every destination
+    before writing anything, so partial copies cannot occur.
+    """
+    source_id = _int(request.form.get("source_school_id"), default=0) or 0
+    service_date = _date(request.form.get("service_date"))
+    target_values = request.form.getlist("target_school_ids")
+    target_ids = {_int(value, default=0) or 0 for value in target_values}
+    source = db.session.get(KitchenSchool, source_id)
+    if not source or not source.active or not service_date:
+        return {"message": "來源學校或日期不正確。"}, 400
+    if not target_values or 0 in target_ids or source_id in target_ids:
+        return {"message": "請選擇來源以外的目標學校。"}, 400
+
+    targets = KitchenSchool.query.filter(
+        KitchenSchool.id.in_(target_ids),
+        KitchenSchool.active.is_(True),
+    ).order_by(KitchenSchool.name).all()
+    if len(targets) != len(target_ids):
+        return {"message": "包含無效或已停用的目標學校。"}, 400
+    if _active_confirmed_orders(service_date):
+        return {"message": "當天採購單已確認，不能覆蓋任何學校的菜色。"}, 409
+
+    source_assignments = {
+        variant: _school_assignment_for_day(source_id, service_date, variant)
+        for variant in ("regular", "vegetarian")
+    }
+    if any(row and row.service_status == "no_service" for row in source_assignments.values()):
+        return {"message": "來源學校當天停餐，無法複製菜色。"}, 409
+    selected = {
+        variant: [item.recipe_id for item in sorted(
+            assignment.plan.items, key=lambda entry: entry.sort_order
+        )] if assignment else []
+        for variant, assignment in source_assignments.items()
+    }
+    if not any(selected.values()):
+        return {"message": "來源學校尚未儲存當天菜色，請先完成勾選。"}, 400
+
+    # Reject a locked or no-service destination before any mutation takes place.
+    for target in targets:
+        rows = [
+            row for variant in ("regular", "vegetarian")
+            if (row := _school_assignment_for_day(target.id, service_date, variant))
+        ]
+        if any(row.plan.status != "draft" for row in rows):
+            return {"message": f"「{target.name}」當天菜單已確認，無法覆蓋。"}, 409
+        if any(row.service_status == "no_service" for row in rows):
+            return {"message": f"「{target.name}」當天已設定停餐，請先取消停餐再複製。"}, 409
+
+    for target in targets:
+        for variant in ("regular", "vegetarian"):
+            assignment = _school_assignment_for_day(target.id, service_date, variant)
+            recipe_ids = selected[variant]
+            if not recipe_ids and assignment is None:
+                continue
+            original_headcount = assignment.headcount if assignment is not None else None
+            plan = _editable_school_plan(target, service_date, variant)
+            # An old shared central plan is detached by _editable_school_plan.
+            # Restore that school's own saved headcount after detaching it.
+            if original_headcount is not None:
+                target_assignment = KitchenMenuAssignment.query.filter_by(
+                    plan_id=plan.id, school_id=target.id,
+                ).one()
+                target_assignment.headcount = original_headcount
+            for old_item in list(plan.items):
+                db.session.delete(old_item)
+            db.session.flush()
+            for order, recipe_id in enumerate(recipe_ids):
+                db.session.add(KitchenMenuPlanItem(
+                    plan_id=plan.id, recipe_id=recipe_id, sort_order=order,
+                ))
+    db.session.commit()
+    return {
+        "message": f"已將 {source.name} {service_date.strftime('%m/%d')} 的葷、素菜色複製到 {len(targets)} 所學校。",
+        "copied": len(targets),
+        "targetNames": [target.name for target in targets],
+    }
+
+
 @order_bp.post("/summary/schools/save-day")
 def school_menu_save_day():
     school_id = _int(request.form.get("school_id"), default=0) or 0

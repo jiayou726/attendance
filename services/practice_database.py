@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import current_app, session
-from sqlalchemy import MetaData, create_engine, func, select, text
+from sqlalchemy import MetaData, create_engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateIndex, CreateTable, ForeignKeyConstraint
 
@@ -237,6 +237,7 @@ def _drop_workspace(connection, engine, workspace_key: str) -> None:
             f"DROP SCHEMA IF EXISTS {_quote(engine, workspace_key)} CASCADE"
         ))
         return
+    current_app.extensions.setdefault("practice_estimate_schema_checked", set()).discard(workspace_key)
     cached = _sqlite_engine_cache().pop(workspace_key, None)
     if cached is not None:
         cached.dispose()
@@ -342,11 +343,38 @@ def touch_current_account() -> dict | None:
     return account
 
 
+
+def _ensure_workspace_estimate_columns(account: dict) -> None:
+    """Idempotently upgrade operational columns in an existing named workspace."""
+    engine = _practice_engine()
+    key = _assert_workspace_key(account["workspace_key"])
+    cache = current_app.extensions.setdefault("practice_estimate_schema_checked", set())
+    if key in cache:
+        return
+    is_postgres = _is_postgres(engine)
+    bind = engine if is_postgres else _sqlite_account_engine(engine, key)
+    table = f"{_quote(engine, key)}.kitchen_purchase_order_item" if is_postgres else "kitchen_purchase_order_item"
+    with bind.begin() as connection:
+        columns = {col["name"] for col in inspect(connection).get_columns(
+            "kitchen_purchase_order_item", schema=key if is_postgres else None,
+        )}
+        if "dish_estimates_json" not in columns:
+            connection.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN dish_estimates_json TEXT NOT NULL DEFAULT '{{}}'"
+            ))
+        if "dish_adjustment_qty" not in columns:
+            connection.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN dish_adjustment_qty NUMERIC(16, 4)"
+            ))
+    cache.add(key)
+
+
 def workspace_engine(account: dict | None = None):
     account = account or get_account(session.get("practice_account_id"))
     if account is None:
         raise PracticeAccountError("練習帳號已不存在。")
     engine = _practice_engine()
+    _ensure_workspace_estimate_columns(account)
     if _is_postgres(engine):
         schema = _assert_workspace_key(account["workspace_key"])
         return engine.execution_options(schema_translate_map={None: schema})

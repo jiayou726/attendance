@@ -14,7 +14,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
 
@@ -2819,6 +2819,20 @@ def _generate_date_orders(
         if old_order.id != order.id:
             db.session.delete(old_order)
 
+    # Preserve dish estimates and recompute the total after a changed menu.
+    active_estimates = [item for item in order.items if item.dish_adjustment_qty is not None]
+    if active_estimates:
+        db.session.flush()
+        sheets = _production_sheet_data(service_date)
+        for item in active_estimates:
+            if item not in db.session.deleted:
+                total = _production_estimate_total(item, sheets)
+                next_qty = total + item.dish_adjustment_qty
+                if next_qty < 0:
+                    item.dish_adjustment_qty = -total
+                    next_qty = Decimal("0")
+                _set_purchase_estimate_total(item, next_qty)
+
     if commit:
         db.session.commit()
     return 1, False
@@ -2946,6 +2960,73 @@ def _procurement_conversion_options(rows):
     return result
 
 
+
+_PURCHASE_ESTIMATE_PRECISION = Decimal("0.0001")
+_PURCHASE_ESTIMATE_LIMIT = Decimal("1000000000000")
+
+
+def _round_estimate(value: Decimal) -> Decimal:
+    return value.quantize(_PURCHASE_ESTIMATE_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def _dish_estimate_overrides(item: KitchenPurchaseOrderItem) -> dict[str, Decimal]:
+    try:
+        raw = json.loads(item.dish_estimates_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for key, value in raw.items():
+        parsed = _decimal(value, default=None)
+        if isinstance(key, str) and parsed is not None and 0 <= parsed < _PURCHASE_ESTIMATE_LIMIT:
+            result[key] = _round_estimate(parsed)
+    return result
+
+
+def _production_estimate_total(item: KitchenPurchaseOrderItem, sheets: dict) -> Decimal:
+    """Sum individual dishes once across both regular and vegetarian."""
+    return _round_estimate(sum((
+        component["estimated_qty"]
+        for dishes in sheets.values() for dish in dishes for component in dish["components"]
+        if component["purchase_item"] is not None
+        and component["purchase_item"].id == item.id
+        and not component["conversion_missing"]
+    ), Decimal("0")))
+
+
+def _set_purchase_estimate_total(item: KitchenPurchaseOrderItem, actual: Decimal) -> None:
+    """Synchronize quantity, amount and package without modifying supplier rules."""
+    actual = _round_estimate(actual)
+    if actual < 0 or actual >= _PURCHASE_ESTIMATE_LIMIT:
+        raise ValueError("加總後採購量不正確，請檢查採購調整量。")
+    if item.package_qty is not None:
+        if item.package_unit and item.package_qty > 0 and item.actual_order_qty > 0:
+            per_package = item.actual_order_qty / item.package_qty
+            item.package_qty = _round_estimate(actual / per_package)
+            if not item.package_conversion_snapshot:
+                item.package_conversion_snapshot = (
+                    f"1{item.package_unit}＝{_trim_decimal(per_package)}{item.purchase_unit_snapshot}"
+                )[:120]
+        else:
+            item.package_qty = None
+            item.package_unit = None
+            item.package_conversion_snapshot = None
+    item.actual_order_qty = actual
+    item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
+    item.manual_override = True
+
+
+def _recalculate_purchase_adjustment(item: KitchenPurchaseOrderItem, actual: Decimal) -> None:
+    """Procurement changes extras, but never overwrites individual dish estimates."""
+    if item.dish_adjustment_qty is None:
+        return
+    sheets = _production_sheet_data(item.order.service_date)
+    item.dish_adjustment_qty = _round_estimate(
+        actual - _production_estimate_total(item, sheets)
+    )
+
+
 def _production_sheet_data(service_date: date):
     """Build a dish-level daily usage sheet without duplicating procurement data."""
     plans = (
@@ -2976,6 +3057,7 @@ def _production_sheet_data(service_date: date):
             if item.ingredient_id:
                 purchase_items.setdefault(item.ingredient_id, item)
 
+    item_overrides = {item.id: _dish_estimate_overrides(item) for item in purchase_items.values()}
     grouped = {"regular": {}, "vegetarian": {}}
     for plan in plans:
         assignments = [
@@ -3009,7 +3091,16 @@ def _production_sheet_data(service_date: date):
                 divisor = ingredient.grams_per_purchase_unit or Decimal("0")
                 has_conversion = divisor > 0
                 purchase_item = purchase_items.get(ingredient.id)
+                estimate_key = f"{variant}:{dish['recipe'].id}"
+                default_qty = _round_estimate(base_amount / divisor) if has_conversion else Decimal("0")
+                estimated_qty = (
+                    item_overrides.get(purchase_item.id, {}).get(estimate_key, default_qty)
+                    if purchase_item is not None else default_qty
+                )
                 components.append({
+                    "estimate_key": estimate_key,
+                    "estimated_qty": estimated_qty,
+                    "estimate_default_qty": default_qty,
                     "ingredient": ingredient,
                     "per_person": per_person,
                     "per_person_unit": ingredient.base_unit or "g",
@@ -3408,68 +3499,74 @@ def production_sheet():
 
 @order_bp.post("/summary/production-sheet/items/<int:item_id>/save")
 def production_sheet_item_autosave(item_id: int):
-    """Edit the one daily purchase item shared by every dish using this ingredient."""
+    """Write one dish estimate and update the single daily purchase item."""
     item = db.session.get(KitchenPurchaseOrderItem, item_id)
-    if not item or not item.ingredient_id:
-        return {"message": "找不到對應的採購品項。"}, 404
+    if not item or not item.ingredient_id or (item.source_type or "menu") != "menu":
+        return {"message": "找不到對應的菜單採購品項。"}, 404
     service_date = _date(request.form.get("date"))
-    if not service_date or item.order.service_date != service_date:
-        return {"message": "採購日期不符，請重新整理。"}, 409
+    if service_date != item.order.service_date:
+        return {"message": "日期不符，請重新整理。"}, 409
     if item.order.status != "draft":
         return {"message": "已確認的採購單不可直接修改。"}, 409
 
-    # Reject obsolete/duplicate item IDs: the production sheet selects one
-    # authoritative purchase item per ingredient and day.
-    sheets = _production_sheet_data(service_date)
-    if not any(
-        component["purchase_item"] is not None
-        and component["purchase_item"].id == item_id
-        for dishes in sheets.values()
-        for dish in dishes
-        for component in dish["components"]
-    ):
-        return {"message": "這筆食材已不在當日用量表，請重新整理。"}, 409
-
-    actual = _decimal(request.form.get("actual"), default=None)
-    expected = _decimal(request.form.get("expected"), default=None)
-    if (actual is None or actual < 0 or actual >= Decimal("1000000000000")
-            or actual != actual.quantize(Decimal("0.0001"))):
-        return {"message": "實際採購量須為非負數，最多四位小數。"}, 400
-    if expected is None:
+    estimate_key = str(request.form.get("estimate_key") or "").strip()
+    estimate = _decimal(request.form.get("estimate"), default=None)
+    expected_estimate = _decimal(request.form.get("expected_estimate"), default=None)
+    expected_actual = _decimal(request.form.get("expected_actual"), default=None)
+    if (estimate is None or estimate < 0 or estimate >= _PURCHASE_ESTIMATE_LIMIT
+            or estimate != _round_estimate(estimate)):
+        return {"message": "本菜預估採購量須為非負數，最多四位小數。"}, 400
+    if expected_estimate is None or expected_actual is None:
         return {"message": "缺少原始數量，請重新整理。"}, 400
-    if expected != item.actual_order_qty:
+
+    sheets = _production_sheet_data(service_date)
+    selected = next((
+        component
+        for dishes in sheets.values() for dish in dishes for component in dish["components"]
+        if component["estimate_key"] == estimate_key
+        and component["purchase_item"] is not None
+        and component["purchase_item"].id == item_id
+        and not component["conversion_missing"]
+    ), None)
+    if selected is None:
+        return {"message": "菜色或食材已變更，請重新整理。"}, 409
+    previous = selected["estimated_qty"]
+    if expected_estimate != previous or expected_actual != item.actual_order_qty:
         return {
-            "message": "採購量已在其他畫面變更，已載入最新數量，請確認後再修改。",
-            "actual": _trim_decimal(item.actual_order_qty),
+            "message": "其他畫面已更新採購量，請重新整理後再修改。",
+            "estimate": _trim_decimal(previous), "actual": _trim_decimal(item.actual_order_qty),
         }, 409
 
-    if actual != item.actual_order_qty:
-        # Preserve the entered carton/package conversion without changing
-        # the supplier's master conversion rule. Keep the displayed equation
-        # consistent when the purchase quantity changes.
-        if item.package_qty is not None:
-            if item.package_unit and item.package_qty > 0 and item.actual_order_qty > 0:
-                per_package = item.actual_order_qty / item.package_qty
-                item.package_qty = (actual / per_package).quantize(Decimal("0.0001"))
-                if not item.package_conversion_snapshot:
-                    item.package_conversion_snapshot = (
-                        f"1{item.package_unit}＝{_trim_decimal(per_package)}{item.purchase_unit_snapshot}"
-                    )[:120]
-            else:
-                item.package_qty = None
-                item.package_unit = None
-                item.package_conversion_snapshot = None
-        item.actual_order_qty = actual
-        item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
-        item.manual_override = True
+    if estimate != previous:
+        prior_total = _production_estimate_total(item, sheets)
+        if item.dish_adjustment_qty is None:
+            # Preserve legacy manual adjustments, but not automatic order rounding.
+            item.dish_adjustment_qty = (
+                _round_estimate(item.actual_order_qty - prior_total)
+                if item.manual_override else Decimal("0")
+            )
+        next_qty = _round_estimate(
+            prior_total + estimate - previous + item.dish_adjustment_qty
+        )
+        try:
+            _set_purchase_estimate_total(item, next_qty)
+        except ValueError as exc:
+            db.session.rollback()
+            return {"message": str(exc)}, 400
+        overrides = _dish_estimate_overrides(item)
+        overrides[estimate_key] = estimate
+        item.dish_estimates_json = json.dumps(
+            {key: _trim_decimal(value) for key, value in overrides.items()},
+            ensure_ascii=False, sort_keys=True,
+        )
         db.session.commit()
-
     return {
         "message": "已儲存",
+        "estimate": _trim_decimal(estimate),
         "actual": _trim_decimal(item.actual_order_qty),
+        "adjustment": _trim_decimal(item.dish_adjustment_qty or Decimal("0")),
         "packageQty": _trim_decimal(item.package_qty) if item.package_qty is not None else "",
         "packageUnit": item.package_unit or "",
-        "amount": _trim_decimal(item.amount),
     }
 
 
@@ -3554,7 +3651,7 @@ def _write_production_export_sheet(sheet, service_date: date, variant_label: str
             sheet.cell(title_row, material_col + 4).number_format = "#,##0"
             sheet.row_dimensions[title_row].height = 24
 
-            headers = ["材料明細", "單量", "單份用量", "生產用量(總餐數)", "總量", "", "實際叫貨量", ""]
+            headers = ["材料明細", "單量", "單份用量", "生產用量(總餐數)", "總量", "", "本菜預估量", ""]
             for offset, header in enumerate(headers):
                 cell = sheet.cell(header_row, material_col + offset, header)
                 cell.font = actual_header_font if offset == 6 else default_font
@@ -3590,11 +3687,9 @@ def _write_production_export_sheet(sheet, service_date: date, variant_label: str
                     people_ref = sheet.cell(data_row, material_col + 3).coordinate
                     sheet.cell(data_row, material_col + 4, f"={portion_ref}*{people_ref}")
                     sheet.cell(data_row, material_col + 5, component["theoretical_unit"])
-                    actual_uses_package = bool(item and item.package_qty is not None and item.package_unit)
-                    actual_qty = item.package_qty if actual_uses_package else (item.actual_order_qty if item else None)
-                    actual_unit = item.package_unit if actual_uses_package else (
-                        item.purchase_unit_snapshot if item else component["purchase_unit"]
-                    )
+                    # Export this dish's estimate instead of repeating the daily total.
+                    actual_qty = component["estimated_qty"] if item and not component["conversion_missing"] else None
+                    actual_unit = item.purchase_unit_snapshot if item else component["purchase_unit"]
                     sheet.cell(data_row, material_col + 6, float(actual_qty) if actual_qty is not None else None)
                     sheet.cell(data_row, material_col + 6).font = actual_value_font
                     sheet.cell(data_row, material_col + 7, actual_unit)
@@ -4092,6 +4187,7 @@ def _apply_procurement_item_values(
     item.supplier_id = supplier.id if supplier else None
     item.supplier_item_id = supplier_item.id if supplier_item else None
     item.supplier_name_snapshot = supplier.name if supplier else "⚠ 未指定供應商"
+    _recalculate_purchase_adjustment(item, actual)
     item.actual_order_qty = actual
     item.package_qty = package_qty
     item.package_unit = package_unit
@@ -4298,6 +4394,7 @@ def purchase_item_update(item_id: int):
     if actual is None or actual < 0 or price is None or price < 0:
         flash("實際叫貨量與單價不可為負數。", "error")
         return redirect(url_for("order_tool.purchase_detail", order_id=item.order_id))
+    _recalculate_purchase_adjustment(item, actual)
     item.actual_order_qty = actual
     item.unit_price_snapshot = price
     item.amount = actual * price

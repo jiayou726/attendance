@@ -2231,7 +2231,7 @@ def test_copy_school_day_menu_to_multiple_schools_keeps_each_headcount(app, auth
     })
     assert response.status_code == 200, response.get_data(as_text=True)
     assert response.json["copied"] == 2
-    assert response.json["targetNames"] == ["丙國小", "乙國小"] or set(response.json["targetNames"]) == {"乙國小", "丙國小"}
+    assert set(response.json["targetNames"]) == {"乙國小", "丙國小"}
 
     with app.app_context():
         for target_id, expected_headcount, expected_veg_headcount in (
@@ -2322,7 +2322,8 @@ def test_copy_school_day_menu_rejects_locked_stopped_and_invalid_targets_atomica
         **base, "target_school_ids": [str(target_id)],
     }).status_code == 409
     with app.app_context():
-        locked.plan.status = "draft"
+        restored = order_tool_module._school_assignment_for_day(target_id, TEST_DAY, "regular")
+        restored.plan.status = "draft"
         db.session.commit()
         order = KitchenPurchaseOrder(
             service_date=TEST_DAY, supplier_key="daily",

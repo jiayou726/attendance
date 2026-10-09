@@ -288,6 +288,60 @@
     const schoolId = schoolMenuForm.dataset.schoolId || '';
     const schoolName = schoolMenuForm.dataset.schoolName || '';
     const saveUrl = schoolMenuForm.dataset.saveUrl || '';
+    const copyDialog = document.querySelector('[data-menu-copy-dialog]');
+    const copyForm = copyDialog?.querySelector('[data-menu-copy-form]');
+    const copyFeedback = document.querySelector('[data-copy-feedback]');
+    const copySelectAll = copyForm?.querySelector('[data-copy-select-all]');
+    const copyTargets = [...(copyForm?.querySelectorAll('[data-copy-target]') || [])];
+    const copyStatus = copyForm?.querySelector('[data-copy-modal-status]');
+    const copySubmit = copyForm?.querySelector('[data-copy-submit]');
+    const closeCopyDialog = () => {
+      if (copyDialog) copyDialog.hidden = true;
+    };
+    copyDialog?.querySelectorAll('[data-copy-close]').forEach((button) => {
+      button.addEventListener('click', closeCopyDialog);
+    });
+    copyDialog?.addEventListener('click', (event) => {
+      if (event.target === copyDialog) closeCopyDialog();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && copyDialog && !copyDialog.hidden) closeCopyDialog();
+    });
+    copySelectAll?.addEventListener('change', () => {
+      copyTargets.forEach((input) => { input.checked = copySelectAll.checked; });
+    });
+    copyTargets.forEach((input) => input.addEventListener('change', () => {
+      if (copySelectAll) copySelectAll.checked = copyTargets.every((target) => target.checked);
+    }));
+    copyForm?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const selected = copyTargets.filter((input) => input.checked);
+      if (!selected.length) {
+        if (copyStatus) copyStatus.textContent = '請至少選擇一所目標學校。';
+        return;
+      }
+      if (copySubmit) copySubmit.disabled = true;
+      if (copyStatus) copyStatus.textContent = '複製中…';
+      try {
+        const body = new URLSearchParams(new FormData(copyForm));
+        const response = await fetch(copyForm.dataset.copyUrl, {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'school-menu-copy' },
+          body,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || '複製失敗');
+        closeCopyDialog();
+        if (copyFeedback) {
+          copyFeedback.hidden = false;
+          copyFeedback.textContent = `${data.message} 若已產生採購草稿，請重新產生採購單更新食材需求。`;
+        }
+      } catch (error) {
+        if (copyStatus) copyStatus.textContent = error.message || '複製失敗';
+      } finally {
+        if (copySubmit) copySubmit.disabled = false;
+      }
+    });
 
     schoolMenuForm.querySelectorAll('[data-school-menu-day]').forEach((day) => {
       const headcount = day.querySelector('[data-variant-panel="regular"] input[type="number"]');
@@ -295,6 +349,7 @@
       const checkboxes = [...day.querySelectorAll('.school-dish-check input[type="checkbox"]')];
       const noServiceToggle = day.querySelector('[data-no-service-toggle]');
       const serviceStatusBadge = day.querySelector('[data-service-status-badge]');
+      const copyButton = day.querySelector('[data-copy-day-menu]');
       const counts = {
         regular: day.querySelector('[data-selected-count="regular"]'),
         vegetarian: day.querySelector('[data-selected-count="vegetarian"]'),
@@ -314,6 +369,10 @@
           item.disabled = noService || day.classList.contains('locked');
         });
         if (serviceStatusBadge) serviceStatusBadge.hidden = !noService;
+        if (copyButton) {
+          copyButton.disabled = noService || day.classList.contains('locked')
+            || !checkboxes.some((item) => item.checked);
+        }
       };
 
       const currentState = () => JSON.stringify({
@@ -329,6 +388,10 @@
         Object.entries(counts).forEach(([variant, node]) => {
           if (node) node.textContent = String(checkboxes.filter((item) => item.checked && item.dataset.menuVariant === variant).length);
         });
+        if (copyButton) {
+          copyButton.disabled = isNoService() || day.classList.contains('locked')
+            || !checkboxes.some((item) => item.checked);
+        }
       };
       const saveDay = () => {
         if (!saveUrl || !serviceDate || !headcount || !vegetarianHeadcount || day.classList.contains('locked')) return;
@@ -379,6 +442,28 @@
         }).finally(() => pendingSchoolMenuSaves.delete(operation));
       };
 
+      copyButton?.addEventListener('click', async () => {
+        // A copy is always based on the SAVED source menu, not unsent UI edits.
+        window.clearTimeout(headcountSaveTimer);
+        saveDay();
+        copyButton.disabled = true;
+        try {
+          await Promise.all([...pendingSchoolMenuSaves]);
+          if (!copyDialog || !copyForm) return;
+          copyForm.reset();
+          copyForm.querySelector('input[name="service_date"]').value = serviceDate;
+          if (copySelectAll) copySelectAll.checked = false;
+          if (copyStatus) copyStatus.textContent = '';
+          const label = copyForm.querySelector('[data-copy-description]');
+          if (label) label.textContent = `來源：${schoolName}　日期：${serviceDate}（同一天複製）`;
+          copyDialog.hidden = false;
+          copyTargets[0]?.focus();
+        } catch (_) {
+          window.alert('來源菜單尚未成功儲存，請先確認儲存狀態。');
+        } finally {
+          updateCount();
+        }
+      });
       checkboxes.forEach((checkbox) => checkbox.addEventListener('change', saveDay));
       noServiceToggle?.addEventListener('change', () => {
         window.clearTimeout(headcountSaveTimer);

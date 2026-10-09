@@ -2172,3 +2172,169 @@ def test_procurement_changes_extra_not_dish_estimates(app, authed_client):
     ).get_data(as_text=True)
     assert "採購單已確認，不可修改" in page
     assert f'data-production-item="{item_id}"' not in page
+
+
+def test_copy_school_day_menu_to_multiple_schools_keeps_each_headcount(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        extra = KitchenRecipe(name="當日另一道菜", category="副菜")
+        a = KitchenSchool(name="乙國小", code="B-01", default_headcount=250, default_vegetarian_headcount=6)
+        b = KitchenSchool(name="丙國小", code="C-01", default_headcount=60, default_vegetarian_headcount=1)
+        db.session.add_all([extra, a, b])
+        db.session.commit()
+        extra_id, a_id, b_id = extra.id, a.id, b.id
+
+    def save(school_id, regular, vegetarian, people, veggie_people):
+        return authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+            "school_id": str(school_id), "service_date": "2026-08-13",
+            "headcount": str(people), "vegetarian_headcount": str(veggie_people),
+            "regular_recipe_ids": [str(x) for x in regular],
+            "vegetarian_recipe_ids": [str(x) for x in vegetarian],
+        })
+
+    assert save(ids["school"], [ids["recipe"]], [extra_id], 40, 3).status_code == 204
+    assert save(a_id, [extra_id], [ids["recipe"]], 120, 2).status_code == 204
+
+    # Legacy: the same central menu assignment may store a nondefault headcount.
+    with app.app_context():
+        central = KitchenMenuPlan(
+            service_date=TEST_DAY, meal_type="午餐", name="中央菜單",
+        )
+        db.session.add(central)
+        db.session.flush()
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=central.id, recipe_id=extra_id, sort_order=0,
+        ))
+        db.session.add(KitchenMenuAssignment(
+            plan_id=central.id, school_id=b_id, headcount=77,
+            service_status="serving",
+        ))
+        db.session.commit()
+
+    page = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert 'data-copy-day-menu' in page
+    assert 'data-menu-copy-dialog' in page
+    assert 'data-copy-target' in page
+    assert '取代目標學校當天原有的菜色選擇' in page
+    assert '複製菜色到其他學校' in page
+    assert 'data-copy-url="/admin/order-tool/summary/schools/copy-day"' in page
+    js = authed_client.get("/static/kitchen_ui.js").get_data(as_text=True)
+    assert "await Promise.all([...pendingSchoolMenuSaves])" in js
+
+    endpoint = "/admin/order-tool/summary/schools/copy-day"
+    response = authed_client.post(endpoint, data={
+        "source_school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "target_school_ids": [str(a_id), str(b_id)],
+    })
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.json["copied"] == 2
+    assert response.json["targetNames"] == ["丙國小", "乙國小"] or set(response.json["targetNames"]) == {"乙國小", "丙國小"}
+
+    with app.app_context():
+        for target_id, expected_headcount, expected_veg_headcount in (
+            (a_id, 120, 2), (b_id, 77, 1),
+        ):
+            regular = order_tool_module._school_assignment_for_day(
+                target_id, TEST_DAY, "regular"
+            )
+            veg = order_tool_module._school_assignment_for_day(
+                target_id, TEST_DAY, "vegetarian"
+            )
+            assert regular.headcount == expected_headcount
+            assert veg.headcount == expected_veg_headcount
+            assert regular.service_status == veg.service_status == "serving"
+            assert [x.recipe_id for x in regular.plan.items] == [ids["recipe"]]
+            assert [x.recipe_id for x in veg.plan.items] == [extra_id]
+        source_regular = order_tool_module._school_assignment_for_day(
+            ids["school"], TEST_DAY, "regular"
+        )
+        assert source_regular.headcount == 40
+        assert [x.recipe_id for x in source_regular.plan.items] == [ids["recipe"]]
+        # The detached central menu is untouched, so existing non-target schools
+        # would not lose their menu when target B gains its dedicated menu.
+        assert KitchenMenuPlan.query.filter_by(
+            service_date=TEST_DAY, name="中央菜單",
+        ).one().items[0].recipe_id == extra_id
+
+    # Repeat is safe: items are replaced, never appended/doubled.
+    assert authed_client.post(endpoint, data={
+        "source_school_id": str(ids["school"]), "service_date": "2026-08-13",
+        "target_school_ids": [str(a_id)],
+    }).status_code == 200
+    with app.app_context():
+        regular = order_tool_module._school_assignment_for_day(a_id, TEST_DAY, "regular")
+        assert len(regular.plan.items) == 1
+
+
+def test_copy_school_day_menu_rejects_locked_stopped_and_invalid_targets_atomically(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        extra = KitchenRecipe(name="未複製菜色", category="副菜")
+        target = KitchenSchool(name="目標學校", code="T01", default_headcount=90)
+        stopped = KitchenSchool(name="停餐學校", code="S01", default_headcount=100)
+        inactive = KitchenSchool(name="停用學校", code="X01", active=False)
+        db.session.add_all([extra, target, stopped, inactive])
+        db.session.commit()
+        extra_id, target_id, stopped_id, inactive_id = extra.id, target.id, stopped.id, inactive.id
+    url = "/admin/order-tool/summary/schools/copy-day"
+    base = {"source_school_id": str(ids["school"]), "service_date": "2026-08-13"}
+    assert authed_client.post(url, data={**base, "target_school_ids": [str(target_id)]}).status_code == 400
+    assert authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]), "service_date": "2026-08-13",
+        "headcount": "40", "vegetarian_headcount": "0",
+        "regular_recipe_ids": str(ids["recipe"]),
+    }).status_code == 204
+    assert authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(target_id), "service_date": "2026-08-13",
+        "headcount": "45", "vegetarian_headcount": "0",
+        "regular_recipe_ids": str(extra_id),
+    }).status_code == 204
+    assert authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(stopped_id), "service_date": "2026-08-13",
+        "headcount": "100", "service_status": "no_service",
+    }).status_code == 204
+
+    for target_ids, code in (
+        ([str(target_id), str(stopped_id)], 409),
+        ([str(target_id), str(inactive_id)], 400),
+        ([str(target_id), str(ids["school"])], 400),
+        ([str(target_id), "99999999"], 400),
+    ):
+        response = authed_client.post(url, data={
+            **base, "target_school_ids": target_ids,
+        })
+        assert response.status_code == code
+        with app.app_context():
+            unchanged = order_tool_module._school_assignment_for_day(
+                target_id, TEST_DAY, "regular"
+            )
+            assert unchanged.headcount == 45
+            assert [x.recipe_id for x in unchanged.plan.items] == [extra_id]
+
+    with app.app_context():
+        locked = order_tool_module._school_assignment_for_day(target_id, TEST_DAY, "regular")
+        locked.plan.status = "confirmed"
+        db.session.commit()
+    assert authed_client.post(url, data={
+        **base, "target_school_ids": [str(target_id)],
+    }).status_code == 409
+    with app.app_context():
+        locked.plan.status = "draft"
+        db.session.commit()
+        order = KitchenPurchaseOrder(
+            service_date=TEST_DAY, supplier_key="daily",
+            supplier_name_snapshot="每日採購單", status="confirmed",
+        )
+        db.session.add(order)
+        db.session.commit()
+    assert authed_client.post(url, data={
+        **base, "target_school_ids": [str(target_id)],
+    }).status_code == 409
+    with app.app_context():
+        unchanged = order_tool_module._school_assignment_for_day(
+            target_id, TEST_DAY, "regular"
+        )
+        assert [x.recipe_id for x in unchanged.plan.items] == [extra_id]

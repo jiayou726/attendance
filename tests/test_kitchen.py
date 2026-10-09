@@ -787,7 +787,8 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-14"
     )
     no_transfer_sheet = load_workbook(BytesIO(no_transfer.data), data_only=False)["0814"]
-    assert [no_transfer_sheet.cell(3, column).value for column in range(3, 8)] == [100, None, None, 300, 400]
+    # 10 + 36 classes fall back to the two serving schools' stored defaults.
+    assert [no_transfer_sheet.cell(3, column).value for column in range(3, 8)] == [100, 46, None, 300, 400]
 
     saved = authed_client.post(
         "/admin/order-tool/summary/daily-kitchen-sheet",

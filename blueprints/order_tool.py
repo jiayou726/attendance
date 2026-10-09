@@ -3405,6 +3405,74 @@ def production_sheet():
     )
 
 
+
+@order_bp.post("/summary/production-sheet/items/<int:item_id>/save")
+def production_sheet_item_autosave(item_id: int):
+    """Edit the one daily purchase item shared by every dish using this ingredient."""
+    item = db.session.get(KitchenPurchaseOrderItem, item_id)
+    if not item or not item.ingredient_id:
+        return {"message": "找不到對應的採購品項。"}, 404
+    service_date = _date(request.form.get("date"))
+    if not service_date or item.order.service_date != service_date:
+        return {"message": "採購日期不符，請重新整理。"}, 409
+    if item.order.status != "draft":
+        return {"message": "已確認的採購單不可直接修改。"}, 409
+
+    # Reject obsolete/duplicate item IDs: the production sheet selects one
+    # authoritative purchase item per ingredient and day.
+    sheets = _production_sheet_data(service_date)
+    if not any(
+        component["purchase_item"] is not None
+        and component["purchase_item"].id == item_id
+        for dishes in sheets.values()
+        for dish in dishes
+        for component in dish["components"]
+    ):
+        return {"message": "這筆食材已不在當日用量表，請重新整理。"}, 409
+
+    actual = _decimal(request.form.get("actual"), default=None)
+    expected = _decimal(request.form.get("expected"), default=None)
+    if (actual is None or actual < 0 or actual >= Decimal("1000000000000")
+            or actual != actual.quantize(Decimal("0.0001"))):
+        return {"message": "實際採購量須為非負數，最多四位小數。"}, 400
+    if expected is None:
+        return {"message": "缺少原始數量，請重新整理。"}, 400
+    if expected != item.actual_order_qty:
+        return {
+            "message": "採購量已在其他畫面變更，已載入最新數量，請確認後再修改。",
+            "actual": _trim_decimal(item.actual_order_qty),
+        }, 409
+
+    if actual != item.actual_order_qty:
+        # Preserve the entered carton/package conversion without changing
+        # the supplier's master conversion rule. Keep the displayed equation
+        # consistent when the purchase quantity changes.
+        if item.package_qty is not None:
+            if item.package_unit and item.package_qty > 0 and item.actual_order_qty > 0:
+                per_package = item.actual_order_qty / item.package_qty
+                item.package_qty = (actual / per_package).quantize(Decimal("0.0001"))
+                if not item.package_conversion_snapshot:
+                    item.package_conversion_snapshot = (
+                        f"1{item.package_unit}＝{_trim_decimal(per_package)}{item.purchase_unit_snapshot}"
+                    )[:120]
+            else:
+                item.package_qty = None
+                item.package_unit = None
+                item.package_conversion_snapshot = None
+        item.actual_order_qty = actual
+        item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
+        item.manual_override = True
+        db.session.commit()
+
+    return {
+        "message": "已儲存",
+        "actual": _trim_decimal(item.actual_order_qty),
+        "packageQty": _trim_decimal(item.package_qty) if item.package_qty is not None else "",
+        "packageUnit": item.package_unit or "",
+        "amount": _trim_decimal(item.amount),
+    }
+
+
 def _write_production_export_sheet(sheet, service_date: date, variant_label: str, dishes: list[dict]):
     """Match the two-column, dish-by-dish production worksheet used on site."""
     weekday = "一二三四五六日"[service_date.weekday()]

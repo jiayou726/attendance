@@ -448,6 +448,91 @@
     return value.toFixed(4).replace(/\.?0+$/, '');
   };
 
+
+  // Every occurrence of one ingredient across dishes shares its purchase item ID.
+  // Save once per item and update all visible occurrences after the server commits.
+  const productionGroups = new Map();
+  document.querySelectorAll('[data-production-item]').forEach((editor) => {
+    const id = editor.dataset.productionItem;
+    if (!productionGroups.has(id)) productionGroups.set(id, []);
+    productionGroups.get(id).push(editor);
+  });
+  productionGroups.forEach((editors) => {
+    const primary = editors[0];
+    let committed = primary.querySelector('.production-actual-input')?.value || '';
+    let lastQueued = committed;
+    let saveTimer = null;
+    let saveChain = Promise.resolve();
+    const state = (message) => editors.forEach((editor) => {
+      const label = editor.querySelector('[data-production-save-state]');
+      if (label) label.textContent = message;
+    });
+    const applySaved = (data, submitted = null, force = false) => {
+      committed = String(data.actual ?? committed);
+      editors.forEach((editor) => {
+        const input = editor.querySelector('.production-actual-input');
+        if (input && (force || document.activeElement !== input || input.value === submitted)) {
+          input.value = committed;
+        }
+        if (data.packageQty !== undefined) {
+          const summary = editor.querySelector('[data-production-package]');
+          if (summary) {
+            summary.hidden = !data.packageUnit;
+            summary.textContent = data.packageUnit ? `＝ ${data.packageQty} ${data.packageUnit}` : '';
+          }
+        }
+      });
+    };
+    const save = (input) => {
+      window.clearTimeout(saveTimer);
+      const next = input.value.trim();
+      if (!next || !Number.isFinite(Number(next)) || Number(next) < 0) {
+        state('請輸入有效的非負數量');
+        return;
+      }
+      if (next === lastQueued) return;
+      lastQueued = next;
+      if (next === committed) {
+        state('已儲存');
+        return;
+      }
+      state('儲存中…');
+      saveChain = saveChain.then(async () => {
+        if (next === committed) return;
+        const body = new URLSearchParams({
+          _csrf_token: primary.dataset.productionCsrf,
+          date: primary.dataset.productionDate,
+          actual: next,
+          expected: committed,
+        });
+        const response = await fetch(primary.dataset.productionSaveUrl, { method: 'POST', body });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (response.status === 409 && data.actual !== undefined) {
+            applySaved(data, null, true);
+          }
+          throw new Error(data.message || '儲存失敗');
+        }
+        applySaved(data, next);
+        state('已儲存');
+      }).catch((error) => {
+        lastQueued = null; // let the user retry an unsuccessful edit
+        state(error.message || '儲存失敗');
+      });
+    };
+    editors.forEach((editor) => {
+      const input = editor.querySelector('.production-actual-input');
+      if (!input) return;
+      input.addEventListener('input', () => {
+        state('等待儲存…');
+        window.clearTimeout(saveTimer);
+        saveTimer = window.setTimeout(() => save(input), 850);
+      });
+      input.addEventListener('change', () => save(input));
+      input.addEventListener('blur', () => save(input));
+    });
+  });
+
   const procurementForm = document.querySelector('[data-procurement-autosave]');
   procurementForm?.addEventListener('submit', (event) => event.preventDefault());
   const procurementCsrf = procurementForm?.querySelector('input[name="_csrf_token"]')?.value || '';

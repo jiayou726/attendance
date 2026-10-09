@@ -626,9 +626,9 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "88" in regular and "g/人" in regular
     assert "<b>40</b> 人" in regular
     assert "<b>3.52</b> kg" in regular
-    assert 'class="production-actual-input"' in regular
-    assert 'value="9.5"' in regular
-    assert "＝ 1 箱" in regular
+    assert 'class="production-estimate-input"' in regular
+    assert 'value="3.52"' in regular
+    assert "當日採購總量：9.5 kg" in regular
     assert "冷藏，上午先到" in regular
     assert "匯出 Excel（葷／素分頁）" in regular
     assert "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13" in regular
@@ -656,7 +656,7 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
         assert sheet["F3"].value == headcount
         assert [sheet.cell(4, column).value for column in range(2, 10)] == [
             "材料明細", "單量", "單份用量", "生產用量(總餐數)",
-            "總量", None, "實際叫貨量", None,
+            "總量", None, "本菜預估量", None,
         ]
         assert sheet["J4"].value == "現場備註"
         assert sheet["B5"].value == "骨腿丁"
@@ -665,8 +665,8 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
         assert sheet["E5"].value == "=F3"
         assert sheet["F5"].value == "=D5*E5"
         assert sheet["G5"].value == "kg"
-        assert sheet["H5"].value == 1
-        assert sheet["I5"].value == "箱"
+        assert sheet["H5"].value == (3.52 if sheet_name == "葷食" else 0.264)
+        assert sheet["I5"].value == "kg"
         assert sheet["J5"].value == "冷藏，上午先到"
         assert sheet.auto_filter.ref is None
         assert sheet.tables == {}
@@ -2003,110 +2003,171 @@ def test_file_sqlite_persists_across_app_restart(tmp_path):
         db.drop_all()
 
 
-def test_production_sheet_qty_edits_update_one_shared_procurement_item(app, authed_client):
+
+def test_dish_estimates_aggregate_recipes_and_both_variants(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     assert authed_client.post("/admin/order-tool/recipes", data={
         "name": "另一道骨腿丁", "category": "副菜", "serving_output_g": "80",
     }).status_code == 302
     with app.app_context():
-        second_recipe_id = KitchenRecipe.query.filter_by(name="另一道骨腿丁").one().id
-    assert authed_client.post(f"/admin/order-tool/recipes/{second_recipe_id}/ingredients", data={
+        second = KitchenRecipe.query.filter_by(name="另一道骨腿丁").one().id
+    assert authed_client.post(f"/admin/order-tool/recipes/{second}/ingredients", data={
         "ingredient_id": str(ids["ingredient"]), "grams_per_person": "20",
     }).status_code == 302
-    plan_id = _create_plan(app, authed_client, ids, headcount=40)
-    assert authed_client.post(f"/admin/order-tool/plans/{plan_id}/items", data={
-        "recipe_id": str(second_recipe_id),
-    }).status_code == 302
-    assert authed_client.post("/admin/order-tool/purchases/generate", data={
-        "start": "2026-08-13", "end": "2026-08-13",
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13", "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    saved = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]), "service_date": "2026-08-13",
+        "headcount": "40", "vegetarian_headcount": "3",
+        "regular_recipe_ids": [str(ids["recipe"]), str(second)],
+        "vegetarian_recipe_ids": [str(ids["recipe"])],
+    })
+    assert saved.status_code == 204
+    assert authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": "2026-08-13",
     }).status_code == 302
 
     with app.app_context():
-        items = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).all()
-        assert len(items) == 1
-        item = items[0]
+        item = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).one()
         item_id = item.id
-        original = str(item.actual_order_qty)
-        unit_price = item.unit_price_snapshot
+        baseline = item.actual_order_qty
+        price = item.unit_price_snapshot
         item.package_qty = Decimal("2")
         item.package_unit = "箱"
-        item.package_conversion_snapshot = None
-        item.actual_order_qty = Decimal("20")
-        item.amount = item.actual_order_qty * unit_price
         db.session.commit()
 
-    url = f"/admin/order-tool/summary/production-sheet/items/{item_id}/save"
-    page = authed_client.get("/admin/order-tool/summary/production-sheet?date=2026-08-13").get_data(as_text=True)
+    page = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
     assert page.count(f'data-production-item="{item_id}"') == 2
-    assert page.count('value="20"') >= 2
-    assert page.count("當日總採購量") >= 3
+    assert 'value="3.52"' in page
+    assert 'value="0.8"' in page
+    assert "本菜預估採購量" in page
 
-    response = authed_client.post(url, data={
-        "date": "2026-08-13", "actual": "30", "expected": "20",
+    endpoint = f"/admin/order-tool/summary/production-sheet/items/{item_id}/save"
+    first = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+        "estimate": "5", "expected_estimate": "3.52", "expected_actual": str(baseline),
     })
-    assert response.status_code == 200
-    assert response.json["actual"] == "30"
-    assert response.json["packageQty"] == "3"
-    assert response.json["packageUnit"] == "箱"
+    assert first.status_code == 200, first.get_data(as_text=True)
+    assert first.json["actual"] == "6.064"   # 5 + 0.8 + 0.264
     with app.app_context():
         item = db.session.get(KitchenPurchaseOrderItem, item_id)
-        assert item.actual_order_qty == Decimal("30")
-        assert item.package_qty == Decimal("3")
-        assert item.manual_override is True
-        assert item.amount == Decimal("30") * unit_price
-        assert KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).count() == 1
+        assert order_tool_module._dish_estimate_overrides(item) == {
+            f"regular:{ids['recipe']}": Decimal("5")
+        }
+        assert item.dish_adjustment_qty == Decimal("0")
+        assert item.amount == Decimal("6.064") * price
 
-    page = authed_client.get("/admin/order-tool/summary/production-sheet?date=2026-08-13").get_data(as_text=True)
-    assert page.count('value="30"') >= 2
-    assert page.count("＝ 3 箱") == 2
-    procurement = authed_client.get("/admin/order-tool/summary/procurement?date=2026-08-13").get_data(as_text=True)
-    assert f'name="actual_{item_id}"' in procurement
-    assert 'value="30"' in procurement
+    another = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{second}",
+        "estimate": "2", "expected_estimate": "0.8", "expected_actual": "6.064",
+    })
+    assert another.status_code == 200
+    assert another.json["actual"] == "7.264"
+    regular = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert 'value="5"' in regular and 'value="2"' in regular
+    vegetarian = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13&variant=vegetarian"
+    ).get_data(as_text=True)
+    assert 'value="0.264"' in vegetarian
+    assert "當日採購總量：7.264 kg" in vegetarian
+    procurement = authed_client.get(
+        "/admin/order-tool/summary/procurement?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert f'name="actual_{item_id}"' in procurement and 'value="7.264"' in procurement
     workbook = load_workbook(BytesIO(authed_client.get(
         "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13"
     ).data))
-    sheet = workbook["葷食"]
-    actuals = []
-    for row in sheet:
-        for cell in row:
-            if cell.value == "骨腿丁":
-                actuals.append(sheet.cell(cell.row, cell.column + 6).value)
-    assert actuals == [3.0, 3.0]  # export uses package quantity when set, for both dishes
+    actuals = [
+        workbook["葷食"].cell(cell.row, cell.column + 6).value
+        for row in workbook["葷食"] for cell in row if cell.value == "骨腿丁"
+    ]
+    assert sorted(actuals) == [2, 5]
+    assert workbook["素食"]["H5"].value == 0.264
 
-    stale_procurement = authed_client.post(
-        f"/admin/order-tool/summary/procurement/items/{item_id}/save",
-        data={
-            "expected_actual": "20", "actual": "100",
-            "package_qty": "10", "package_unit": "箱",
-            "delivery_date": "2026-08-13", "delivery_slot": "上午",
-            "supplier_name": "測試肉品",
-        },
-    )
-    assert stale_procurement.status_code == 409
-    assert stale_procurement.json["actual"] == "30"
-
-    stale = authed_client.post(url, data={
-        "date": "2026-08-13", "actual": "100", "expected": "20",
+    stale = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{second}",
+        "estimate": "4", "expected_estimate": "0.8", "expected_actual": "7.264",
     })
     assert stale.status_code == 409
-    assert stale.json["actual"] == "30"
-    assert authed_client.post(url, data={
-        "date": "2026-08-14", "actual": "100", "expected": "30",
-    }).status_code == 409
+    assert stale.json["estimate"] == "2"
     for invalid in ("-1", "nan", "1.00001"):
-        assert authed_client.post(url, data={
-            "date": "2026-08-13", "actual": invalid, "expected": "30",
-        }).status_code == 400
+        response = authed_client.post(endpoint, data={
+            "date": "2026-08-13", "estimate_key": f"regular:{second}",
+            "estimate": invalid, "expected_estimate": "2", "expected_actual": "7.264",
+        })
+        assert response.status_code == 400
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).actual_order_qty == Decimal("7.264")
+
+
+def test_procurement_changes_extra_not_dish_estimates(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=40)
+    authed_client.post("/admin/order-tool/purchases/generate", data={
+        "start": "2026-08-13", "end": "2026-08-13",
+    })
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        item.actual_order_qty = Decimal("10")
+        item.manual_override = True
+        db.session.commit()
+
+    endpoint = f"/admin/order-tool/summary/production-sheet/items/{item_id}/save"
+    saved = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+        "estimate": "4", "expected_estimate": "3.52", "expected_actual": "10",
+    })
+    assert saved.status_code == 200
+    assert saved.json["actual"] == "10.48"
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).dish_adjustment_qty == Decimal("6.48")
+
+    change = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{item_id}/save", data={
+            "actual": "12", "expected_actual": "10.48",
+            "package_qty": "", "package_unit": "", "supplier_name": "測試肉品",
+            "delivery_date": "2026-08-13", "delivery_slot": "上午",
+        },
+    )
+    assert change.status_code == 200, change.get_data(as_text=True)
     with app.app_context():
         item = db.session.get(KitchenPurchaseOrderItem, item_id)
-        assert item.actual_order_qty == Decimal("30")
+        assert item.dish_adjustment_qty == Decimal("8")
+        assert order_tool_module._dish_estimate_overrides(item)[
+            f"regular:{ids['recipe']}"
+        ] == Decimal("4")
+
+    next_edit = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+        "estimate": "5", "expected_estimate": "4", "expected_actual": "12",
+    })
+    assert next_edit.status_code == 200
+    assert next_edit.json["actual"] == "13"
+
+    authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": "2026-08-13",
+    })
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("13")
+        assert item.dish_adjustment_qty == Decimal("8")
+        assert item.manual_override
         item.order.status = "confirmed"
         db.session.commit()
-    assert authed_client.post(url, data={
-        "date": "2026-08-13", "actual": "40", "expected": "30",
-    }).status_code == 409
-    confirmed_page = authed_client.get(
+    rejected = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+        "estimate": "20", "expected_estimate": "5", "expected_actual": "13",
+    })
+    assert rejected.status_code == 409
+    page = authed_client.get(
         "/admin/order-tool/summary/production-sheet?date=2026-08-13"
     ).get_data(as_text=True)
-    assert f'data-production-item="{item_id}"' not in confirmed_page
-    assert "採購單已確認，不可修改" in confirmed_page
+    assert "採購單已確認，不可修改" in page
+    assert f'data-production-item="{item_id}"' not in page

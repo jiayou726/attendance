@@ -357,6 +357,10 @@ class KitchenPurchaseOrderItem(db.Model):
     grams_per_purchase_unit_snapshot = db.Column(db.Numeric(16, 3), nullable=False)
     recommended_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
     actual_order_qty = db.Column(db.Numeric(16, 4), nullable=False, default=0)
+    # 以 variant:recipe_id 為鍵的各菜估量覆寫，數量單位為採購單位。
+    dish_estimates_json = db.Column(db.Text, nullable=False, default="{}")
+    # 菜色預估總量以外的採購調整量，NULL 表示尚未啟用逐菜估量。
+    dish_adjustment_qty = db.Column(db.Numeric(16, 4), nullable=True)
     # 可選包裝換算，例如 24 kg = 2 箱；兩邊數量都保留人工輸入。
     package_qty = db.Column(db.Numeric(16, 4), nullable=True)
     package_unit = db.Column(db.String(20), nullable=True)

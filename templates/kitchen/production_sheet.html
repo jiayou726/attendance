@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">單日備料</div>
     <h1>菜色用量表</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依菜色查看食材理論用量，並對照當日採購總量與現場備註。實際採購量可在此編輯，與採購單共用同一筆數量；同食材跨菜色不重複加總。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依菜色查看食材理論用量，並對照當日採購總量與現場備註。採購人員可逐道菜估算食材，葷、素與其他菜色同食材自動加總回採購單。額外採購量可在採購單調整。</div>
   </div>
   <nav class="week-switcher" aria-label="切換用量日期">
     <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=previous_date.isoformat(), variant=variant) }}">← 前一天</a>
@@ -40,7 +40,7 @@
       <div class="production-dish-meta"><b>{{ dish.headcount }}</b> 人{% if dish.school_names %}<small>{{ dish.school_names|join('、') }}</small>{% endif %}</div>
     </header>
     <div class="table-scroll"><table class="production-usage-table">
-      <thead><tr><th>食材</th><th>每人用量</th><th>供餐人數</th><th>理論總量</th><th>採購單位</th><th>當日總採購量</th><th>現場備註</th></tr></thead>
+      <thead><tr><th>食材</th><th>每人用量</th><th>供餐人數</th><th>理論總量</th><th>採購單位</th><th>本菜預估採購量</th><th>現場備註</th></tr></thead>
       <tbody>
       {% for row in dish.components %}{% set item = row.purchase_item %}
       <tr class="{{ 'is-pending' if row.pending else '' }}">
@@ -50,18 +50,18 @@
         <td><b>{{ trim_decimal(row.theoretical_qty) }}</b> {{ row.theoretical_unit }}{% if row.conversion_missing %}<small class="pending-text">未設定採購換算</small>{% endif %}</td>
         <td>{{ row.purchase_unit or '未設定' }}</td>
         <td class="production-actual">
-          {% if item %}
+          {% if item and not row.conversion_missing and item.source_type != 'manual' %}
             {% if item.order.status == 'draft' %}
-              <div class="production-actual-editor" data-production-item="{{ item.id }}" data-production-date="{{ service_date.isoformat() }}" data-production-csrf="{{ csrf_token() }}" data-production-save-url="{{ url_for('order_tool.production_sheet_item_autosave', item_id=item.id) }}">
-                <label class="input-unit"><input class="production-actual-input" type="number" min="0" step="0.0001" value="{{ trim_decimal(item.actual_order_qty) }}" aria-label="{{ row.ingredient.name }} 當日總採購量" required><span>{{ item.purchase_unit_snapshot }}</span></label>
-                <small data-production-package{% if item.package_qty is none or not item.package_unit %} hidden{% endif %}>{% if item.package_qty is not none and item.package_unit %}＝ {{ trim_decimal(item.package_qty) }} {{ item.package_unit }}{% endif %}</small>
+              <div class="production-actual-editor" data-production-item="{{ item.id }}" data-production-key="{{ row.estimate_key }}" data-production-date="{{ service_date.isoformat() }}" data-production-csrf="{{ csrf_token() }}" data-production-save-url="{{ url_for('order_tool.production_sheet_item_autosave', item_id=item.id) }}" data-production-total="{{ trim_decimal(item.actual_order_qty) }}">
+                <label class="input-unit"><input class="production-estimate-input" type="number" min="0" step="0.0001" value="{{ trim_decimal(row.estimated_qty) }}" aria-label="{{ dish.recipe.name }} {{ row.ingredient.name }} 本菜預估採購量" required><span>{{ item.purchase_unit_snapshot }}</span></label>
                 <small class="production-save-state" data-production-save-state role="status" aria-live="polite">已儲存</small>
               </div>
             {% else %}
-              <b>{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</b>
-              {% if item.package_qty is not none and item.package_unit %}<small>＝ {{ trim_decimal(item.package_qty) }} {{ item.package_unit }}</small>{% endif %}
+              <b>{{ trim_decimal(row.estimated_qty) }} {{ item.purchase_unit_snapshot }}</b>
               <small>採購單已確認，不可修改</small>
             {% endif %}
+            <small class="production-day-total" data-production-day-total="{{ item.id }}">當日採購總量：{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</small>
+          {% elif row.conversion_missing %}<small class="pending-text">請先設定食材採購換算</small>
           {% else %}<span>尚未產生採購單</span>{% endif %}
         </td>
         <td class="production-note">{% if item and item.note %}{{ item.note }}{% else %}<span>—</span>{% endif %}</td>

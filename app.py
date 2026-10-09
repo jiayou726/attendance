@@ -67,6 +67,8 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                     "source_type": "VARCHAR(20) NOT NULL DEFAULT 'menu'",
                     "per_person_amount": "NUMERIC(16, 4)",
                     "school_headcounts": "TEXT NOT NULL DEFAULT '{}'",
+                    "dish_estimates_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "dish_adjustment_qty": "NUMERIC(16, 4)",
                 }
                 for column_name, definition in additions.items():
                     if column_name not in columns:

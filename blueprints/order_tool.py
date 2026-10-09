@@ -4126,6 +4126,20 @@ def procurement_item_autosave(item_id: int):
     if item.order.status != "draft":
         return {"message": "已確認的採購單不可直接修改。"}, 409
 
+    # Old procurement pages must not silently overwrite newer production-sheet edits.
+    expected_raw = request.form.get("expected_actual")
+    if expected_raw is not None:
+        expected = _decimal(expected_raw, default=None)
+        if expected is None:
+            return {"message": "原始數量不正確，請重新整理。"}, 400
+        if expected != item.actual_order_qty:
+            return {
+                "message": "實際採購量已在其他畫面變更，已載入最新數量，請確認後再修改。",
+                "actual": _trim_decimal(item.actual_order_qty),
+                "packageQty": _trim_decimal(item.package_qty) if item.package_qty is not None else "",
+                "packageUnit": item.package_unit or "",
+            }, 409
+
     result, error = _apply_procurement_item_values(
         item,
         actual_raw=request.form.get("actual"),
@@ -4142,6 +4156,7 @@ def procurement_item_autosave(item_id: int):
     supplier = result["supplier"]
     return {
         "message": "已儲存",
+        "actual": _trim_decimal(item.actual_order_qty),
         "supplierName": supplier.name if supplier else "⚠ 未指定供應商",
         "supplierCreated": result["supplier_created"],
         "packageQty": _trim_decimal(item.package_qty) if item.package_qty is not None else "",

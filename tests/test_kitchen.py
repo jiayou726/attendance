@@ -2073,6 +2073,18 @@ def test_production_sheet_qty_edits_update_one_shared_procurement_item(app, auth
                 actuals.append(sheet.cell(cell.row, cell.column + 6).value)
     assert actuals == [3.0, 3.0]  # export uses package quantity when set, for both dishes
 
+    stale_procurement = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{item_id}/save",
+        data={
+            "expected_actual": "20", "actual": "100",
+            "package_qty": "10", "package_unit": "箱",
+            "delivery_date": "2026-08-13", "delivery_slot": "上午",
+            "supplier_name": "測試肉品",
+        },
+    )
+    assert stale_procurement.status_code == 409
+    assert stale_procurement.json["actual"] == "30"
+
     stale = authed_client.post(url, data={
         "date": "2026-08-13", "actual": "100", "expected": "20",
     })

@@ -599,6 +599,7 @@
       supplierName: supplierInput.value.trim(),
     });
     let lastQueuedValues = currentValues();
+    let lastSavedActual = actualInput.value;
     const recalculatePackage = () => {
       const actual = Number(actualInput.value);
       const factor = Number(activeRule?.purchasePerPackage);
@@ -636,19 +637,32 @@
       if (nextValues === lastQueuedValues) return;
       lastQueuedValues = nextValues;
       if (saveState) saveState.textContent = '儲存中…';
-      const body = new URLSearchParams({
-        _csrf_token: procurementCsrf,
+      const values = {
         actual: actualInput.value,
         package_qty: packageInput.value,
         package_unit: packageUnitInput.value,
         delivery_date: deliveryDateInput.value,
         delivery_slot: deliverySlotInput.value,
         supplier_name: supplierInput.value.trim(),
-      });
+      };
       const operation = saveChain.then(async () => {
+        const body = new URLSearchParams({
+          _csrf_token: procurementCsrf,
+          ...values,
+          expected_actual: lastSavedActual,
+        });
         const response = await fetch(row.dataset.autoSaveUrl, { method: 'POST', body });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.message || '儲存失敗');
+        if (!response.ok) {
+          if (response.status === 409 && data.actual !== undefined) {
+            actualInput.value = String(data.actual);
+            packageInput.value = data.packageQty ?? packageInput.value;
+            packageUnitInput.value = data.packageUnit ?? packageUnitInput.value;
+            lastSavedActual = String(data.actual);
+          }
+          throw new Error(data.message || '儲存失敗');
+        }
+        lastSavedActual = String(data.actual ?? values.actual);
         packageInput.value = data.packageQty ?? packageInput.value;
         packageUnitInput.value = data.packageUnit ?? packageUnitInput.value;
         if (data.conversionLabel) hint.textContent = `廠商換算：${data.conversionLabel}`;

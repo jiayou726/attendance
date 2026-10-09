@@ -149,5 +149,5 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,t
 .school-copy-actions{justify-content:flex-end;margin-top:16px}
 .school-copy-actions .btn{min-height:42px}
 .school-copy-result{min-height:22px;margin:9px 0 0;color:#a14d20;font-size:12px}
-.school-copy-feedback{margin:12px 0;padding:12px 14px;border:1px solid #b8dccb;border-radius:10px;background:#f1fbf5;color:#176245;font-size:13px;font-weight:700}
+.school-copy-feedback{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));z-index:1101;width:min(calc(100vw - 28px),480px);transform:translateX(-50%);margin:0;padding:12px 14px;border:1px solid #b8dccb;border-radius:10px;background:#f1fbf5;color:#176245;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(16,50,40,.17)}
 @media(max-width:600px){.school-copy-backdrop{align-items:flex-end;padding:0}.school-copy-panel{width:100%;max-height:88vh;padding:18px 15px calc(20px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0}.school-copy-actions .btn{flex:1}}

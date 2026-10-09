@@ -14,7 +14,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
 
@@ -2946,6 +2946,73 @@ def _procurement_conversion_options(rows):
     return result
 
 
+
+_PURCHASE_ESTIMATE_PRECISION = Decimal("0.0001")
+_PURCHASE_ESTIMATE_LIMIT = Decimal("1000000000000")
+
+
+def _round_estimate(value: Decimal) -> Decimal:
+    return value.quantize(_PURCHASE_ESTIMATE_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def _dish_estimate_overrides(item: KitchenPurchaseOrderItem) -> dict[str, Decimal]:
+    try:
+        raw = json.loads(item.dish_estimates_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for key, value in raw.items():
+        parsed = _decimal(value, default=None)
+        if isinstance(key, str) and parsed is not None and 0 <= parsed < _PURCHASE_ESTIMATE_LIMIT:
+            result[key] = _round_estimate(parsed)
+    return result
+
+
+def _production_estimate_total(item: KitchenPurchaseOrderItem, sheets: dict) -> Decimal:
+    """Sum individual dishes once across both regular and vegetarian."""
+    return _round_estimate(sum((
+        component["estimated_qty"]
+        for dishes in sheets.values() for dish in dishes for component in dish["components"]
+        if component["purchase_item"] is not None
+        and component["purchase_item"].id == item.id
+        and not component["conversion_missing"]
+    ), Decimal("0")))
+
+
+def _set_purchase_estimate_total(item: KitchenPurchaseOrderItem, actual: Decimal) -> None:
+    """Synchronize quantity, amount and package without modifying supplier rules."""
+    actual = _round_estimate(actual)
+    if actual < 0 or actual >= _PURCHASE_ESTIMATE_LIMIT:
+        raise ValueError("加總後採購量不正確，請檢查採購調整量。")
+    if item.package_qty is not None:
+        if item.package_unit and item.package_qty > 0 and item.actual_order_qty > 0:
+            per_package = item.actual_order_qty / item.package_qty
+            item.package_qty = _round_estimate(actual / per_package)
+            if not item.package_conversion_snapshot:
+                item.package_conversion_snapshot = (
+                    f"1{item.package_unit}＝{_trim_decimal(per_package)}{item.purchase_unit_snapshot}"
+                )[:120]
+        else:
+            item.package_qty = None
+            item.package_unit = None
+            item.package_conversion_snapshot = None
+    item.actual_order_qty = actual
+    item.amount = actual * (item.unit_price_snapshot or Decimal("0"))
+    item.manual_override = True
+
+
+def _recalculate_purchase_adjustment(item: KitchenPurchaseOrderItem, actual: Decimal) -> None:
+    """Procurement changes extras, but never overwrites individual dish estimates."""
+    if item.dish_adjustment_qty is None:
+        return
+    sheets = _production_sheet_data(item.order.service_date)
+    item.dish_adjustment_qty = _round_estimate(
+        actual - _production_estimate_total(item, sheets)
+    )
+
+
 def _production_sheet_data(service_date: date):
     """Build a dish-level daily usage sheet without duplicating procurement data."""
     plans = (
@@ -2976,6 +3043,7 @@ def _production_sheet_data(service_date: date):
             if item.ingredient_id:
                 purchase_items.setdefault(item.ingredient_id, item)
 
+    item_overrides = {item.id: _dish_estimate_overrides(item) for item in purchase_items.values()}
     grouped = {"regular": {}, "vegetarian": {}}
     for plan in plans:
         assignments = [
@@ -3009,7 +3077,16 @@ def _production_sheet_data(service_date: date):
                 divisor = ingredient.grams_per_purchase_unit or Decimal("0")
                 has_conversion = divisor > 0
                 purchase_item = purchase_items.get(ingredient.id)
+                estimate_key = f"{variant}:{dish['recipe'].id}"
+                default_qty = _round_estimate(base_amount / divisor) if has_conversion else Decimal("0")
+                estimated_qty = (
+                    item_overrides.get(purchase_item.id, {}).get(estimate_key, default_qty)
+                    if purchase_item is not None else default_qty
+                )
                 components.append({
+                    "estimate_key": estimate_key,
+                    "estimated_qty": estimated_qty,
+                    "estimate_default_qty": default_qty,
                     "ingredient": ingredient,
                     "per_person": per_person,
                     "per_person_unit": ingredient.base_unit or "g",

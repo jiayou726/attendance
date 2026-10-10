@@ -236,7 +236,10 @@ def _production_nav_state():
     return (order.service_date, True) if order else (today, False)
 
 
-@weekly_procurement_bp.app_context_processor
+# Render these navigation values only on weekly procurement pages.  The
+# previous app-wide processor queried the latest order for every template,
+# including unrelated screens, generating thousands of redundant SELECTs.
+@weekly_procurement_bp.context_processor
 def _weekly_template_helpers():
     production_nav_date, production_nav_available = _production_nav_state()
     return {

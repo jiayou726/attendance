@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{% block title %}團膳管理{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='kitchen_mobile.css') }}?v=36">
+  <link rel="stylesheet" href="{{ url_for('static',filename='kitchen_mobile.css') }}?v=37">
   <link rel="stylesheet" href="{{ url_for('static',filename='ai_menu.css') }}?v=1">
   {% block head %}{% endblock %}
 </head>
@@ -21,7 +21,7 @@
       <a href="{{ url_for('order_tool.schools') }}">學校</a>
       <a href="{{ url_for('order_tool.suppliers') }}">廠商</a>
       <a href="{{ url_for('order_tool.procurement') }}">採購叫貨</a>
-      {% if production_nav_available %}<a href="{{ url_for('order_tool.production_sheet',date=production_nav_date.isoformat()) }}">菜色用量表</a>{% else %}<span class="nav-disabled" aria-disabled="true" title="請先產生採購明細">菜色用量表</span>{% endif %}
+      <a href="{{ url_for('order_tool.production_sheet',date=production_nav_date.isoformat()) }}">菜色用量表</a>
       <a href="{{ url_for('order_tool.daily_kitchen_sheet',date=production_nav_date.isoformat()) }}">每日廚房表格</a>
       <a href="{{ url_for('order_tool.ai_menu') }}">AI 菜單</a>
       {% if session.get('kitchen_practice') %}<a href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% endif %}
@@ -34,6 +34,7 @@
   {% block content %}{% endblock %}
 </main>
 <script src="{{ url_for('static',filename='kitchen_ui.js') }}?v=23" defer></script>
+<script src="{{ url_for('static',filename='order_flow_tour_steps.js') }}?v=1" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

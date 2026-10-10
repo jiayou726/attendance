@@ -141,15 +141,15 @@ def test_kitchen_does_not_require_login_but_other_admin_pages_do(client):
     ))
     assert "/summary/production-sheet?date=" in page
     assert "/summary/daily-kitchen-sheet?date=" in page
-    assert '<span class="nav-disabled" aria-disabled="true"' in page
+    assert '<span class="nav-disabled" aria-disabled="true"' not in page
     assert "未來 7 天菜單" not in page
 
-    blocked = client.get(
+    usage = client.get(
         "/admin/order-tool/summary/production-sheet?date=2026-08-13",
         follow_redirects=False,
     )
-    assert blocked.status_code == 302
-    assert "/summary/procurement?date=2026-08-13" in blocked.headers["Location"]
+    assert usage.status_code == 200
+    assert "下一步：採購叫貨" in usage.get_data(as_text=True)
 
     protected = client.get("/admin/not-a-kitchen-page", follow_redirects=False)
     assert protected.status_code == 302
@@ -461,7 +461,8 @@ def test_summary_next_step_builds_school_week_menu_with_headcount(app, authed_cl
     assert "各家學校菜單" in page
     assert "南洋綠咖哩雞" in page
     assert "供餐人數" in page
-    assert "產生採購單" in page
+    assert "下一步：菜色用量表" in page
+    assert 'id="school-usage-next"' in page
     assert "儲存本週菜單與人數" not in page
     assert "data-school-menu-autosave" in page
     assert "今日停餐" in page
@@ -2339,3 +2340,59 @@ def test_copy_school_day_menu_rejects_locked_stopped_and_invalid_targets_atomica
             target_id, TEST_DAY, "regular"
         )
         assert [x.recipe_id for x in unchanged.plan.items] == [extra_id]
+
+
+def test_usage_sheet_is_the_step_before_purchasing(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13",
+        "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    saved = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "40",
+        "vegetarian_headcount": "0",
+        "regular_recipe_ids": str(ids["recipe"]),
+    })
+    assert saved.status_code == 204
+
+    schools = authed_client.get(
+        f"/admin/order-tool/summary/schools?week=2026-08-10&school_id={ids['school']}"
+    ).get_data(as_text=True)
+    assert 'id="school-usage-next"' in schools
+    assert "/admin/order-tool/summary/production-sheet" in schools
+    assert "procurement/generate" not in schools
+
+    sheet = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13"
+    )
+    assert sheet.status_code == 200
+    body = sheet.get_data(as_text=True)
+    assert "南洋綠咖哩雞" in body
+    assert "3.52" in body
+    assert 'id="usage-order-next"' in body
+    assert "下一步：採購叫貨" in body
+    with app.app_context():
+        assert KitchenPurchaseOrder.query.count() == 0
+        totals = order_tool_module._usage_default_qty_by_ingredient(TEST_DAY)
+        assert totals[ids["ingredient"]] == Decimal("3.52")
+
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+        follow_redirects=False,
+    )
+    assert generated.status_code == 302
+    assert "/summary/procurement?date=2026-08-13" in generated.headers["Location"]
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).one()
+        assert item.required_qty == Decimal("3.5200")
+        assert item.recommended_order_qty == Decimal("3.5200")
+        assert item.actual_order_qty == Decimal("3.5200")
+
+    steps = authed_client.get("/static/order_flow_tour_steps.js").get_data(as_text=True)
+    assert "ORDER_FLOW_TOUR_STEPS" in steps
+    for selector in ("#school-usage-next", "#usage-order-next", ".order-confirm-toggle"):
+        assert selector in steps

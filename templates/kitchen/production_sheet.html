@@ -3,9 +3,9 @@
 {% block content %}
 <section class="summary-week-head production-head">
   <div>
-    <div class="eyebrow">單日備料</div>
+    <div class="eyebrow">步驟 3</div>
     <h1>菜色用量表</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依菜色查看食材理論用量，並對照當日採購總量與現場備註。採購人員可逐道菜估算食材，葷、素與其他菜色同食材自動加總回採購單。額外採購量可在採購單調整。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　每一道菜的食材用量，已按各校供餐人數放大。確認後按「下一步：採購叫貨」，採購單會用這裡的數量來算。有草稿時，可以直接改「本菜預估採購量」。</div>
   </div>
   <nav class="week-switcher" aria-label="切換用量日期">
     <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=previous_date.isoformat(), variant=variant) }}">← 前一天</a>
@@ -27,9 +27,15 @@
       <a class="{{ 'active' if variant == 'regular' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='regular') }}">葷食 <b>{{ variant_counts.regular }}</b> 道</a>
       <a class="vegetarian {{ 'active' if variant == 'vegetarian' else '' }}" href="{{ url_for('order_tool.production_sheet', date=service_date.isoformat(), variant='vegetarian') }}">素食 <b>{{ variant_counts.vegetarian }}</b> 道</a>
     </nav>
-    <a class="btn ok" href="{{ url_for('order_tool.production_sheet_export', date=service_date.isoformat()) }}">匯出 Excel（葷／素分頁）</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.production_sheet_export', date=service_date.isoformat()) }}">匯出 Excel（葷／素分頁）</a>
+    <form class="usage-order-next-form" method="post" action="{{ url_for('order_tool.procurement_generate') }}" data-procurement-generate>
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="date" value="{{ service_date.isoformat() }}">
+      <button class="btn ok" id="usage-order-next" type="submit">下一步：採購叫貨</button>
+    </form>
   </div>
 </section>
+<script id="missing-schools-data" type="application/json">{{ missing_schools_by_date|tojson }}</script>
 
 {% if dishes %}
 <div class="production-dish-list">
@@ -62,7 +68,7 @@
             {% endif %}
             <small class="production-day-total" data-production-day-total="{{ item.id }}">當日採購總量：{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</small>
           {% elif row.conversion_missing %}<small class="pending-text">請先設定食材採購換算</small>
-          {% else %}<span>尚未產生採購單</span>{% endif %}
+          {% else %}<b>{{ trim_decimal(row.estimated_qty) }} {{ row.purchase_unit or row.theoretical_unit }}</b><small>按下一步後，會把各菜的這個數量加進採購單。</small>{% endif %}
         </td>
         <td class="production-note">{% if item and item.note %}{{ item.note }}{% else %}<span>—</span>{% endif %}</td>
       </tr>

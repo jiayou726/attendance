@@ -1337,7 +1337,77 @@ _PLAN_REQUIREMENT_LOAD = (
 )
 
 
+def _usage_dish_groups(plans):
+    """Group a day's serving plans the same way 菜色用量表 does.
+
+    One row per meal variant and recipe. Headcount is the sum of every
+    school still serving that dish, so the default purchase quantity is
+    rounded once per dish rather than once per school.
+    """
+    grouped = {"regular": {}, "vegetarian": {}}
+    for plan in plans:
+        assignments = [
+            assignment
+            for assignment in plan.assignments
+            if assignment.service_status == "serving" and assignment.headcount > 0
+        ]
+        people = sum(assignment.headcount for assignment in assignments)
+        if people <= 0:
+            continue
+        variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
+        for menu_item in plan.items:
+            recipe = menu_item.recipe
+            if recipe is None:
+                continue
+            dish = grouped[variant].setdefault(recipe.id, {
+                "recipe": recipe,
+                "headcount": 0,
+                "school_names": set(),
+                "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
+            })
+            dish["headcount"] += people
+            dish["school_names"].update(
+                assignment.school.name for assignment in assignments
+            )
+    return grouped
+
+
+def _usage_default_qty_from_plans(plans) -> dict[int, Decimal]:
+    """Sum each dish's unedited usage-sheet purchase quantity.
+
+    Matches 菜色用量表 before anyone edits a line: per-person amount ×
+    that dish's servings ÷ purchase conversion, half-up to 0.0001.
+    Lines with no amount or no purchase conversion are left out, same as
+    the raw gram total. Edited estimates are not included.
+    """
+    totals: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    for dishes in _usage_dish_groups(plans).values():
+        for dish in dishes.values():
+            for component in dish["recipe"].ingredients:
+                ingredient = component.ingredient
+                if ingredient is None:
+                    continue
+                per_person = component.grams_per_person or Decimal("0")
+                divisor = ingredient.grams_per_purchase_unit or Decimal("0")
+                if per_person <= 0 or divisor <= 0:
+                    continue
+                totals[ingredient.id] += _round_estimate(
+                    per_person * dish["headcount"] / divisor
+                )
+    return totals
+
+
+def _usage_default_qty_by_ingredient(service_date: date) -> dict[int, Decimal]:
+    plans = (
+        KitchenMenuPlan.query.filter_by(service_date=service_date)
+        .options(*_PLAN_REQUIREMENT_LOAD)
+        .all()
+    )
+    return _usage_default_qty_from_plans(plans)
+
+
 def _requirements_from_plans(plans_on_day):
+    usage_totals = _usage_default_qty_from_plans(plans_on_day)
     grouped: dict[str, dict[int, dict]] = defaultdict(dict)
     for plan in plans_on_day:
         serving_assignments = [
@@ -1365,6 +1435,7 @@ def _requirements_from_plans(plans_on_day):
                         "supplier_name": supplier_name,
                         "ingredient": ing,
                         "required_amount": Decimal("0"),
+                        "usage_default_qty": usage_totals.get(ing.id, Decimal("0")),
                         "total_people": 0,
                         "school_names": set(),
                     }
@@ -2842,7 +2913,15 @@ def _generate_date_orders(
             continue
         required_amount = data["required_amount"]
         required_qty = required_amount / units_per_purchase
-        recommended = _round_up_increment(required_qty, increment)
+        # Buy quantity is the usage sheet's unedited total (each dish's
+        # default purchase quantity, already summed on this requirement),
+        # then the same increment round-up as before. required_qty stays
+        # the raw gram total for 「系統需求量」.
+        usage_qty = data.get("usage_default_qty")
+        recommended = _round_up_increment(
+            usage_qty if usage_qty is not None else required_qty,
+            increment,
+        )
         supplier_item = _supplier_item_match(data["supplier_id"], ing.id, ing.name, catalog=supplier_catalog)
         conversion_rule = _package_conversion_rule(
             supplier_item.package_conversion if supplier_item else None,
@@ -3141,27 +3220,7 @@ def _production_sheet_data(service_date: date):
                 purchase_items.setdefault(item.ingredient_id, item)
 
     item_overrides = {item.id: _dish_estimate_overrides(item) for item in purchase_items.values()}
-    grouped = {"regular": {}, "vegetarian": {}}
-    for plan in plans:
-        assignments = [
-            assignment
-            for assignment in plan.assignments
-            if assignment.service_status == "serving" and assignment.headcount > 0
-        ]
-        people = sum(assignment.headcount for assignment in assignments)
-        if people <= 0:
-            continue
-        variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
-        for menu_item in plan.items:
-            recipe = menu_item.recipe
-            dish = grouped[variant].setdefault(recipe.id, {
-                "recipe": recipe,
-                "headcount": 0,
-                "school_names": set(),
-                "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
-            })
-            dish["headcount"] += people
-            dish["school_names"].update(assignment.school.name for assignment in assignments)
+    grouped = _usage_dish_groups(plans)
 
     result = {"regular": [], "vegetarian": []}
     for variant, dishes in grouped.items():
@@ -3523,22 +3582,11 @@ def daily_kitchen_sheet_export():
     )
 
 
-def _production_order_for_date(service_date: date):
-    return (
-        KitchenPurchaseOrder.query.filter(
-            KitchenPurchaseOrder.service_date == service_date,
-            KitchenPurchaseOrder.status != "cancelled",
-            KitchenPurchaseOrder.items.any(),
-        )
-        .order_by(KitchenPurchaseOrder.id.desc())
-        .first()
-    )
-
-
 def _production_nav_state():
+    """Usage sheet is the step before purchasing, so the link is always available."""
     requested_date = _date(request.args.get("date"))
     if requested_date:
-        return requested_date, _production_order_for_date(requested_date) is not None
+        return requested_date, True
     latest_order = (
         KitchenPurchaseOrder.query.filter(
             KitchenPurchaseOrder.status != "cancelled",
@@ -3547,22 +3595,14 @@ def _production_nav_state():
         .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
         .first()
     )
-    return (latest_order.service_date, True) if latest_order else (date.today(), False)
-
-
-def _require_production_order(service_date: date):
-    if _production_order_for_date(service_date):
-        return None
-    flash("請先產生這一天的採購明細，才能查看菜色用量表。", "warning")
-    return redirect(url_for("order_tool.procurement", date=service_date.isoformat()))
+    if latest_order:
+        return latest_order.service_date, True
+    return date.today(), True
 
 
 @order_bp.get("/summary/production-sheet")
 def production_sheet():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
-    blocked = _require_production_order(service_date)
-    if blocked:
-        return blocked
     variant = request.args.get("variant", "regular")
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
@@ -3576,6 +3616,9 @@ def production_sheet():
         variant=variant,
         dishes=sheets[variant],
         variant_counts={key: len(value) for key, value in sheets.items()},
+        missing_schools_by_date={
+            service_date.isoformat(): _missing_school_names_for_date(service_date),
+        },
     )
 
 
@@ -3811,9 +3854,6 @@ def _write_production_export_sheet(sheet, service_date: date, variant_label: str
 @order_bp.get("/summary/production-sheet.xlsx")
 def production_sheet_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
-    blocked = _require_production_order(service_date)
-    if blocked:
-        return blocked
     sheets = _production_sheet_data(service_date)
     workbook = Workbook()
     workbook.calculation.calcMode = "auto"
@@ -4154,10 +4194,7 @@ def procurement_generate():
             "尚有學校未完成菜單勾選：" + "、".join(missing_schools) + "。請先完成後再產生採購單。",
             "warning",
         )
-        return redirect(url_for(
-            "order_tool.school_menus",
-            week=(service_date - timedelta(days=service_date.weekday())).isoformat(),
-        ))
+        return redirect(url_for("order_tool.production_sheet", date=service_date.isoformat()))
     created, blocked = _generate_date_orders(service_date)
     if created:
         flash(f"已重新計算 {service_date.strftime('%m/%d')} 每日採購單。", "success")

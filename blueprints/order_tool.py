@@ -1553,17 +1553,17 @@ def summary():
             "plans": day_plans,
             "draft_plans": [plan for plan in day_plans if plan.status == "draft"],
         })
-    recipes = KitchenRecipe.query.order_by(
-        KitchenRecipe.category, KitchenRecipe.name
-    ).all()
+    recipe_options = [
+        {"id": recipe_id, "name": name, "category": category or "其他"}
+        for recipe_id, name, category in (
+            db.session.query(KitchenRecipe.id, KitchenRecipe.name, KitchenRecipe.category)
+            .order_by(KitchenRecipe.category, KitchenRecipe.name).all()
+        )
+    ]
     return render_template(
         "kitchen/summary.html",
         days=days,
-        recipes=recipes,
-        recipe_options=[
-            {"id": recipe.id, "name": recipe.name, "category": recipe.category or "其他"}
-            for recipe in recipes
-        ],
+        recipe_options=recipe_options,
         categories=CATEGORIES,
         week_start=week_start,
         week_end=week_end,

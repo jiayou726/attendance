@@ -129,6 +129,7 @@
         text: step.text == null ? '' : String(step.text),
         before: typeof step.before === 'function' ? step.before : null,
         advanceOn: advance,
+        optional: step.optional === true,
       };
     });
   }
@@ -361,10 +362,28 @@
     const vv = viewport();
     const rect = el.getBoundingClientRect();
     const pad = 8;
-    const top = Math.max(vv.top + 4, rect.top + vv.top - pad);
-    const bot = Math.min(vv.top + vv.height - 4, rect.bottom + vv.top + pad);
-    const left = Math.max(vv.left + 4, rect.left + vv.left - pad);
-    const right = Math.min(vv.left + vv.width - 4, rect.right + vv.left + pad);
+    // getBoundingClientRect is already in the layout viewport's coordinate
+    // system. Adding visualViewport.offsetTop/Left again displaces the focus
+    // on zoomed mobile browsers (and when the software keyboard opens).
+    let top = Math.max(vv.top + 4, rect.top - pad);
+    let bot = Math.min(vv.top + vv.height - 4, rect.bottom + pad);
+    let left = Math.max(vv.left + 4, rect.left - pad);
+    let right = Math.min(vv.left + vv.width - 4, rect.right + pad);
+    // A target inside an overflow-x table must not be highlighted outside
+    // that table's visible scrollport.
+    for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      const style = window.getComputedStyle(parent);
+      if (!/(auto|scroll|hidden|clip)/.test(style.overflowX + ' ' + style.overflowY)) continue;
+      const bounds = parent.getBoundingClientRect();
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+        top = Math.max(top, bounds.top);
+        bot = Math.min(bot, bounds.bottom);
+      }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+        left = Math.max(left, bounds.left);
+        right = Math.min(right, bounds.right);
+      }
+    }
     const w = right - left;
     const h = bot - top;
     if (w < 8 || h < 8) return null;
@@ -416,9 +435,17 @@
     }
     const tw = tip.offsetWidth;
     const th = tip.offsetHeight;
+    const smallScreen = vv.width <= 720;
     let tipTop;
     let tipLeft;
-    if (!hole) {
+    if (smallScreen) {
+      // Mobile: anchor the instruction panel to the opposite screen edge,
+      // rather than trying to squeeze it beside a wide table cell.
+      tipLeft = vv.left + Math.max(marginLeft, (vv.width - tw) / 2);
+      tipTop = hole && hole.y > vv.top + vv.height / 2
+        ? limitTop
+        : Math.max(limitTop, limitBottom - th);
+    } else if (!hole) {
       tipLeft = vv.left + Math.max(marginLeft, (vv.width - tw) / 2);
       tipTop = vv.top + Math.max(marginTop, (vv.height - th) / 2);
     } else {
@@ -433,7 +460,7 @@
     }
     tip.style.top = tipTop + 'px';
     tip.style.left = tipLeft + 'px';
-    pointArrow(tip, hole);
+    pointArrow(tip, smallScreen ? null : hole);
     moveHole(hole, instant || !holeNow);
     if (instant) {
       void tip.offsetWidth;
@@ -591,6 +618,12 @@
     if (token !== run) return;
     index = to;
     busy = false;
+    // Optional controls (such as 'copy to other schools' when there is only
+    // one school) should not lead to a disconnected, centered pointer.
+    if (step.optional && !currentTarget()) {
+      go(to + 1);
+      return;
+    }
     saveProgress('active', to);
     hideResume();
     if (!ensureRoot()) return;

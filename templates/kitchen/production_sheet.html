@@ -16,6 +16,19 @@
   </nav>
 </section>
 
+{% if not editable_draft and (variant_counts.regular or variant_counts.vegetarian) %}
+<section class="card usage-prepare-card">
+  <div><h2>先建立可編輯的估量草稿</h2>
+    <p class="muted">完成各校勾菜後，按「開始估量」，就能直接改每道菜的「本菜預估採購量」。這只建立內部草稿，不會向廠商送出叫貨。</p>
+  </div>
+  <form method="post" action="{{ url_for('order_tool.production_sheet_prepare') }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="date" value="{{ service_date.isoformat() }}">
+    <button class="btn ok" type="submit" id="usage-prepare">開始估量</button>
+  </form>
+</section>
+{% endif %}
+
 <section class="card production-controls">
   <form method="get" action="{{ url_for('order_tool.production_sheet') }}" class="production-date-form">
     <input type="hidden" name="variant" value="{{ variant }}">

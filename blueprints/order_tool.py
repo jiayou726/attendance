@@ -1639,7 +1639,7 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
         KitchenMenuPlan.service_date.between(week_start, week_end),
         KitchenMenuPlan.meal_type == "午餐",
         db.or_(KitchenMenuPlan.name == "中央菜單", ~KitchenMenuPlan.assignments.any()),
-    ).all()
+    ).options(selectinload(KitchenMenuPlan.items)).all()
     required_dates = {plan.service_date for plan in central_plans if plan.items}
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
@@ -1680,42 +1680,53 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
     return schools, complete_ids, required_dates
 
 
-def _missing_school_names_for_date(service_date: date) -> list[str]:
+def _missing_school_names_by_date(service_dates) -> dict[date, list[str]]:
+    """Resolve one or several dates with the same batched school/plan fetch."""
+    dates = list(dict.fromkeys(service_dates))
+    if not dates:
+        return {}
     schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
-            KitchenMenuPlan.service_date == service_date,
+            KitchenMenuPlan.service_date.in_(dates),
             KitchenMenuPlan.meal_type == "午餐",
             KitchenMenuAssignment.school_id.in_([school.id for school in schools] or [-1]),
         )
         .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
         .all()
     )
-    rows_by_school: dict[int, list[KitchenMenuAssignment]] = defaultdict(list)
+    rows_by_date_school: dict[tuple[date, int], list[KitchenMenuAssignment]] = defaultdict(list)
     for row in assignments:
-        rows_by_school[row.school_id].append(row)
-    completed_ids = set()
-    for school in schools:
-        rows = rows_by_school[school.id]
-        if any(row.service_status == "no_service" for row in rows):
-            completed_ids.add(school.id)
-            continue
-        regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
-        vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
-        if (
-            regular and regular.plan.items and regular.headcount > 0
-            and (
-                (vegetarian and (
-                    vegetarian.headcount == 0
-                    or (vegetarian.plan.items and vegetarian.headcount > 0)
-                ))
-                or (vegetarian is None and school.default_vegetarian_headcount <= 0)
-            )
-        ):
-            completed_ids.add(school.id)
-    return [school.name for school in schools if school.id not in completed_ids]
+        rows_by_date_school[(row.plan.service_date, row.school_id)].append(row)
 
+    missing_by_date = {}
+    for service_date in dates:
+        missing = []
+        for school in schools:
+            rows = rows_by_date_school[(service_date, school.id)]
+            if any(row.service_status == "no_service" for row in rows):
+                continue
+            regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
+            vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
+            complete = (
+                regular and regular.plan.items and regular.headcount > 0
+                and (
+                    (vegetarian and (
+                        vegetarian.headcount == 0
+                        or (vegetarian.plan.items and vegetarian.headcount > 0)
+                    ))
+                    or (vegetarian is None and school.default_vegetarian_headcount <= 0)
+                )
+            )
+            if not complete:
+                missing.append(school.name)
+        missing_by_date[service_date] = missing
+    return missing_by_date
+
+
+def _missing_school_names_for_date(service_date: date) -> list[str]:
+    return _missing_school_names_by_date([service_date])[service_date]
 
 @order_bp.get("/summary/schools")
 def school_menus():
@@ -1820,9 +1831,10 @@ def school_menus():
         complete_school_ids=complete_school_ids,
         required_dates=required_dates,
         missing_schools_by_date={
-            (week_start + timedelta(days=offset)).isoformat():
-                _missing_school_names_for_date(week_start + timedelta(days=offset))
-            for offset in range(7)
+            day.isoformat(): names
+            for day, names in _missing_school_names_by_date(
+                week_start + timedelta(days=offset) for offset in range(7)
+            ).items()
         },
     )
 

@@ -74,8 +74,8 @@ def test_order_tool_loads_tour_engine_without_steps(client):
         ".tour-tip",
         "order-tour-help",
         "order-tour-banner",
-        "font-size: 22px",
-        "font-size: 18px",
+        "font-size: 27px",
+        "font-size: 23px",
     ):
         assert snippet in css, snippet
 

@@ -1081,17 +1081,20 @@ def plan_detail(plan_id: int):
     plan = db.session.get(KitchenMenuPlan, plan_id)
     if not plan:
         abort(404)
-    recipes = KitchenRecipe.query.order_by(
-        KitchenRecipe.category, KitchenRecipe.name
-    ).all()
+    # Search suggestions use only three fields; loading every full ORM recipe
+    # row on each week switch is unnecessary for 1,000+ saved dishes.
+    recipe_options = [
+        {"id": recipe_id, "name": name, "category": category or "其他"}
+        for recipe_id, name, category in (
+            db.session.query(KitchenRecipe.id, KitchenRecipe.name, KitchenRecipe.category)
+            .order_by(KitchenRecipe.category, KitchenRecipe.name)
+            .all()
+        )
+    ]
     return render_template(
         "kitchen/plan_detail.html",
         plan=plan,
-        recipes=recipes,
-        recipe_options=[
-            {"id": recipe.id, "name": recipe.name, "category": recipe.category or "其他"}
-            for recipe in recipes
-        ],
+        recipe_options=recipe_options,
         schools=KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all(),
         total_people=sum(max(x.headcount, 0) for x in plan.assignments if x.service_status == "serving"),
         has_confirmed_orders=_active_confirmed_orders(plan.service_date),
@@ -3599,16 +3602,8 @@ def _production_nav_state():
     requested_date = _date(request.args.get("date"))
     if requested_date:
         return requested_date, True
-    latest_order = (
-        KitchenPurchaseOrder.query.filter(
-            KitchenPurchaseOrder.status != "cancelled",
-            KitchenPurchaseOrder.items.any(),
-        )
-        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
-        .first()
-    )
-    if latest_order:
-        return latest_order.service_date, True
+    # Navigation to the usage sheet should default to today, rather than
+    # run a latest-order database query for *every* kitchen page rendered.
     return date.today(), True
 
 

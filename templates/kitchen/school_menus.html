@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">步驟 2</div>
     <h1>各家學校菜單</h1>
-    <div class="muted">{{ week_start.strftime('%Y/%m/%d') }} — {{ week_end.strftime('%Y/%m/%d') }}　選學校、勾菜色，再填每天實際供餐人數。</div>
+    <div class="muted">{{ week_start.strftime('%Y/%m/%d') }} — {{ week_end.strftime('%Y/%m/%d') }}　選學校、勾菜色、填人數。勾完請按最下面的「下一步：菜色用量表」。</div>
   </div>
   <nav class="week-switcher" aria-label="切換週次">
     <a class="btn secondary" href="{{ url_for('order_tool.summary', week=week_start.isoformat()) }}">← 回總表</a>
@@ -31,19 +31,6 @@
     <div><b>匯出非登合菜名</b><small>套用指定格式，帶入當日正常供餐學校與已勾選菜色。</small></div>
     <div class="field"><label>菜單日期</label><input name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ export_date.isoformat() }}" required></div>
     <button class="btn ok" type="submit">匯出 Excel</button>
-  </form>
-</section>
-
-<section class="card school-next-step">
-  <div>
-    <span class="pill ok">單日採購流程</span>
-    <h2>選一天進入採購明細</h2>
-    <div class="muted">那一天所有學校的菜色與人數都確認後，再產生該日食材需求。</div>
-  </div>
-  <form method="post" action="{{ url_for('order_tool.procurement_generate') }}" class="row" data-procurement-generate>
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <div class="field"><label>採購日期</label><input name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ week_start.isoformat() }}" required></div>
-    <button class="btn ok" type="submit">產生採購單</button>
   </form>
 </section>
 
@@ -140,6 +127,20 @@
 </div>
 <p class="school-copy-feedback" data-copy-feedback role="status" aria-live="polite" hidden></p>
 {% endif %}
+<section class="card school-next-step" id="school-usage-step">
+  <div>
+    <span class="pill ok">下一步</span>
+    <h2>看菜色用量表</h2>
+    <div class="muted">這間學校的菜勾好以後，先看每一道菜要用多少食材，再去叫貨。</div>
+  </div>
+  <form method="get" action="{{ url_for('order_tool.production_sheet') }}" class="row">
+    <div class="field">
+      <label for="school-usage-date">要看的日期</label>
+      <input id="school-usage-date" name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ week_start.isoformat() }}" required>
+    </div>
+    <button class="btn ok" id="school-usage-next" type="submit">下一步：菜色用量表</button>
+  </form>
+</section>
 {% else %}
 <section class="card empty">目前沒有啟用中的學校，請先到「學校」新增。</section>
 {% endif %}

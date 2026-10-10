@@ -3,9 +3,9 @@
 {% block content %}
 <section class="summary-week-head procurement-head">
   <div>
-    <div class="eyebrow">步驟 3</div>
+    <div class="eyebrow">步驟 4</div>
     <h1>食材採購明細</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　依這一天各校勾選菜色、人數與配方自動合併。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　要叫的數量來自菜色用量表：每一道菜的預估量加總後，再依最小叫貨增量進位。你改過的數量會保留。</div>
   </div>
   <nav class="week-switcher" aria-label="切換採購日期">
     <a class="btn secondary" href="{{ url_for('order_tool.procurement', date=previous_date.isoformat()) }}">← 前一天</a>

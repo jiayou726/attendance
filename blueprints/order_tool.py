@@ -3607,8 +3607,15 @@ def production_sheet():
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
     sheets = _production_sheet_data(service_date)
+    editable_draft = any(
+        component["purchase_item"] is not None
+        and component["purchase_item"].order.status == "draft"
+        for dishes in sheets.values() for dish in dishes
+        for component in dish["components"]
+    )
     return render_template(
         "kitchen/production_sheet.html",
+        editable_draft=editable_draft,
         service_date=service_date,
         previous_date=service_date - timedelta(days=1),
         next_date=service_date + timedelta(days=1),
@@ -3621,6 +3628,30 @@ def production_sheet():
         },
     )
 
+
+
+@order_bp.post("/summary/production-sheet/prepare")
+def production_sheet_prepare():
+    """Create/recalculate a safe draft before users edit dish-level amounts.
+
+    Viewing the sheet stays read-only. This explicit POST never sends an
+    order to a supplier, and confirmed purchases remain untouched.
+    """
+    service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    missing_schools = _missing_school_names_for_date(service_date)
+    if missing_schools:
+        flash("請先完成各校菜單，才能修改菜色預估量：" + "、".join(missing_schools), "warning")
+    elif _active_confirmed_orders(service_date):
+        flash("這一天的採購單已確認，菜色用量不可再修改。", "warning")
+    else:
+        created, blocked = _generate_date_orders(service_date)
+        if created:
+            flash("估量草稿已準備好，可直接修改各道菜的預估採購量。", "success")
+        elif blocked:
+            flash("這一天已有已確認的採購單，不會覆蓋。", "warning")
+        else:
+            flash("沒有可估量的食材，請先確認菜色、人數與食材採購換算。", "warning")
+    return redirect(url_for("order_tool.production_sheet", date=service_date.isoformat()))
 
 
 @order_bp.post("/summary/production-sheet/items/<int:item_id>/save")

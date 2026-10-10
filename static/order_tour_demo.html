@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>叫貨操作教學示範</title>
+  <link rel="stylesheet" href="kitchen_mobile.css">
+  <link rel="stylesheet" href="order_tour.css">
+  <style>
+    .demo-note{margin:0 0 16px;color:#24445f;font-size:18px;line-height:1.6}
+    .demo-card h2{margin-bottom:8px}
+    .demo-card p{margin:0 0 12px;font-size:18px;line-height:1.6;color:#24445f}
+    .demo-card label{font-size:18px;color:#17202a}
+    .demo-card input{font-size:18px;margin-top:8px}
+    body[data-page="pick"] .only-usage,
+    body[data-page="pick"] .only-order,
+    body[data-page="usage"] .only-pick,
+    body[data-page="usage"] .only-order,
+    body[data-page="order"] .only-pick,
+    body[data-page="order"] .only-usage{display:none}
+    #demo-order-done{margin-top:12px;color:#157347;font-size:18px;font-weight:800}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top">
+    <h1>團膳管理</h1>
+    <div id="demo-help"></div>
+  </div>
+  <div id="demo-banner"></div>
+  <p class="demo-note">這是導覽引擎的示範，步驟是佔位，還沒有接到真正的叫貨畫面。可以暫停或結束，再用「繼續導覽」接回去。換頁之後也會從下一步繼續。</p>
+
+  <section class="card demo-card only-pick" id="demo-pick">
+    <h2>選菜</h2>
+    <p>佔位。正式流程會先勾選這週的菜，再去看每道菜的用量。</p>
+    <a class="btn" id="demo-pick-btn" href="?page=usage">選好了，去看用量表</a>
+  </section>
+
+  <section class="card demo-card only-usage" id="demo-usage">
+    <h2>菜色用量表</h2>
+    <p>佔位。選完菜以後，在這裡確認每道菜要準備多少。</p>
+    <label>這道菜大約幾份
+      <input id="demo-qty" inputmode="numeric" autocomplete="off" placeholder="例如 120">
+    </label>
+  </section>
+
+  <section class="card demo-card only-order" id="demo-order">
+    <h2>採購叫貨</h2>
+    <p>佔位。用量看完後，在這裡跟廠商叫貨。這個按鈕不會真的送出。</p>
+    <button type="button" class="btn" id="demo-order-btn">這項我已經跟廠商叫了</button>
+    <p id="demo-order-done" hidden>已記下這項叫貨。</p>
+  </section>
+</main>
+<script src="order_tour.js"></script>
+<script>
+/* 佔位步驟，只給這個示範頁。正式步驟是 window.ORDER_FLOW_TOUR_STEPS。 */
+var page = new URLSearchParams(location.search).get('page') || 'pick';
+if (page !== 'usage' && page !== 'order') page = 'pick';
+document.body.dataset.page = page;
+var here = location.pathname;
+function pageUrl(name) { return here + '?page=' + name; }
+var DEMO_STEPS = [
+  {
+    path: pageUrl('pick'),
+    exact: true,
+    selector: '#demo-pick-btn',
+    title: '先選這週的菜',
+    text: '這是示範。請按亮起來的「選好了，去看用量表」。按下去會到下一頁，導覽會接著出現。',
+    advanceOn: 'click'
+  },
+  {
+    path: pageUrl('usage'),
+    exact: true,
+    selector: '#demo-qty',
+    title: '看菜色用量表',
+    text: '這是示範。在亮起來的欄位填這道菜大約幾份。填好會自動到採購叫貨。',
+    advanceOn: 'input'
+  },
+  {
+    path: pageUrl('order'),
+    exact: true,
+    selector: '#demo-order-btn',
+    title: '到採購叫貨',
+    text: '這是示範。用量看完後，按亮起來的按鈕，表示這項已經跟廠商叫過。按鈕不會真的送出訂單。',
+    advanceOn: 'click'
+  },
+  {
+    path: pageUrl('order'),
+    exact: true,
+    selector: null,
+    title: '導覽結束',
+    text: '示範到這裡。真正的說明會等選菜、用量表、採購叫貨接好再寫。之後想再看，按「操作教學」。'
+  }
+];
+var tourOpts = {
+  steps: DEMO_STEPS,
+  progressKey: 'order-tool-tour-demo-progress',
+  storageKey: 'order-tool-tour-demo-dismissed',
+  text: '這是導覽引擎的示範。亮起來的地方可以直接按或填寫，做完會自動到下一步。正式的叫貨步驟還會另外接上。'
+};
+OrderTour.attach(DEMO_STEPS, tourOpts);
+OrderTour.mountHelpButton('#demo-help', tourOpts);
+OrderTour.mountFirstVisitBanner('#demo-banner', tourOpts);
+document.getElementById('demo-order-btn').addEventListener('click', function () {
+  document.getElementById('demo-order-done').hidden = false;
+});
+</script>
+</body>
+</html>

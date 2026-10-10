@@ -14,7 +14,7 @@
     {% else %}<span class="muted">—</span>{% endif %}
   </td>
 {%- endmacro %}
-{% block scripts %}<script>(function(){var link=document.getElementById('public-excel-download'),input=document.getElementById('public-excel-filename');if(!link||!input)return;link.addEventListener('click',function(){var u=new URL(link.href,window.location.origin);u.searchParams.set('filename',input.value.trim()||'公版菜單');link.href=u.toString();});})();</script>{% endblock %}
+{% block scripts %}{{ super() }}<script>(function(){var link=document.getElementById('public-excel-download'),input=document.getElementById('public-excel-filename');if(!link||!input)return;link.addEventListener('click',function(){var u=new URL(link.href,window.location.origin);u.searchParams.set('filename',input.value.trim()||'公版菜單');link.href=u.toString();});})();</script>{% endblock %}
 {% block content %}
 <div class="grid">
 <section class="card span-12">

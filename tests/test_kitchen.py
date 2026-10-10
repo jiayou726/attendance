@@ -2392,7 +2392,14 @@ def test_usage_sheet_is_the_step_before_purchasing(app, authed_client):
         assert item.recommended_order_qty == Decimal("3.5200")
         assert item.actual_order_qty == Decimal("3.5200")
 
+    home = authed_client.get("/admin/order-tool/").get_data(as_text=True)
+    assert "order_tour.js" in home
+    assert "order_flow_tour_steps.js" in home
+    steps_tag = home.split("order_flow_tour_steps.js")[0].rsplit("<script", 1)[-1]
+    assert "defer" not in steps_tag
+
     steps = authed_client.get("/static/order_flow_tour_steps.js").get_data(as_text=True)
     assert "ORDER_FLOW_TOUR_STEPS" in steps
+    assert "advanceOn" in steps
     for selector in ("#school-usage-next", "#usage-order-next", ".order-confirm-toggle"):
         assert selector in steps

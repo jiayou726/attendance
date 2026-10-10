@@ -22,4 +22,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Run kitchen regression tests
-        run: python -m pytest -q tests/test_kitchen.py
+        run: python -m pytest -q tests/test_kitchen.py tests/test_order_tour.py
+      - name: Validate kitchen tour JavaScript
+        run: |
+          node --check static/order_tour.js
+          node --check static/order_flow_tour_steps.js

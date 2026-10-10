@@ -133,7 +133,8 @@
     <h2>看菜色用量表</h2>
     <div class="muted">這間學校的菜勾好以後，先看每一道菜要用多少食材，再去叫貨。</div>
   </div>
-  <form method="get" action="{{ url_for('order_tool.production_sheet') }}" class="row">
+  <form method="post" action="{{ url_for('order_tool.production_sheet_prepare') }}" class="row">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="field">
       <label for="school-usage-date">要看的日期</label>
       <input id="school-usage-date" name="date" type="date" min="{{ week_start.isoformat() }}" max="{{ week_end.isoformat() }}" value="{{ week_start.isoformat() }}" required>

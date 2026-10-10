@@ -1,5 +1,4 @@
-/* 叫貨操作教學。樣式自足，色票對齊 kitchen_mobile.css（--brand / --text）。
-   說明文字刻意放大：標題 20px 以上、內文 17–18px，給第一次使用的人看。 */
+/* 叫貨操作教學：較大文字與觸控目標，手機提示卡以邊緣定位。 */
 
 :root {
   --order-tour-accent: var(--brand, #1769aa);
@@ -148,7 +147,7 @@
 #order-tour .tour-title {
   margin: 0;
   color: var(--order-tour-ink);
-  font-size: 22px;
+  font-size: 27px;
   font-weight: 800;
   line-height: 1.35;
   letter-spacing: .01em;
@@ -162,7 +161,7 @@
 #order-tour .tour-wait {
   margin: 0;
   color: var(--order-tour-ink);
-  font-size: 18px;
+  font-size: 23px;
   font-weight: 500;
   line-height: 1.65;
 }
@@ -199,10 +198,10 @@
 #order-tour .tour-tip button {
   margin: 0;
   font-family: inherit;
-  font-size: 18px;
+  font-size: 21px;
   font-weight: 800;
   line-height: 1.3;
-  min-height: 52px;
+  min-height: 56px;
   padding: 12px 18px;
   border-radius: 12px;
   cursor: pointer;
@@ -267,7 +266,7 @@
   background: var(--order-tour-soft);
   color: var(--order-tour-accent-dark);
   font-family: var(--order-tour-font);
-  font-size: 18px;
+  font-size: 21px;
   font-weight: 800;
   line-height: 1.2;
   cursor: pointer;
@@ -378,6 +377,10 @@ main.wrap > .top > .order-tour-help {
   }
 }
 
+@media (max-width: 720px) {
+  #order-tour .tour-tip { transition: none; }
+}
+
 @media (max-width: 520px) {
   #order-tour .tour-tip {
     width: min(480px, calc(100vw - 20px));
@@ -414,14 +417,14 @@ main.wrap > .top > .order-tour-help {
 }
 
 @media (max-width: 380px) {
-  #order-tour .tour-title { font-size: 20px; }
+  #order-tour .tour-title { font-size: 25px; }
   #order-tour .tour-text,
-  #order-tour .tour-wait,
+  #order-tour .tour-wait { font-size: 22px; }
   #order-tour .tour-tip button,
   .order-tour-banner p,
   .order-tour-banner button,
   .order-tour-help,
-  .order-tour-resume { font-size: 17px; }
+  .order-tour-resume { font-size: 20px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

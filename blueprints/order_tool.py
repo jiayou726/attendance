@@ -1081,17 +1081,20 @@ def plan_detail(plan_id: int):
     plan = db.session.get(KitchenMenuPlan, plan_id)
     if not plan:
         abort(404)
-    recipes = KitchenRecipe.query.order_by(
-        KitchenRecipe.category, KitchenRecipe.name
-    ).all()
+    # Search suggestions use only three fields; loading every full ORM recipe
+    # row on each week switch is unnecessary for 1,000+ saved dishes.
+    recipe_options = [
+        {"id": recipe_id, "name": name, "category": category or "其他"}
+        for recipe_id, name, category in (
+            db.session.query(KitchenRecipe.id, KitchenRecipe.name, KitchenRecipe.category)
+            .order_by(KitchenRecipe.category, KitchenRecipe.name)
+            .all()
+        )
+    ]
     return render_template(
         "kitchen/plan_detail.html",
         plan=plan,
-        recipes=recipes,
-        recipe_options=[
-            {"id": recipe.id, "name": recipe.name, "category": recipe.category or "其他"}
-            for recipe in recipes
-        ],
+        recipe_options=recipe_options,
         schools=KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all(),
         total_people=sum(max(x.headcount, 0) for x in plan.assignments if x.service_status == "serving"),
         has_confirmed_orders=_active_confirmed_orders(plan.service_date),
@@ -1550,17 +1553,17 @@ def summary():
             "plans": day_plans,
             "draft_plans": [plan for plan in day_plans if plan.status == "draft"],
         })
-    recipes = KitchenRecipe.query.order_by(
-        KitchenRecipe.category, KitchenRecipe.name
-    ).all()
+    recipe_options = [
+        {"id": recipe_id, "name": name, "category": category or "其他"}
+        for recipe_id, name, category in (
+            db.session.query(KitchenRecipe.id, KitchenRecipe.name, KitchenRecipe.category)
+            .order_by(KitchenRecipe.category, KitchenRecipe.name).all()
+        )
+    ]
     return render_template(
         "kitchen/summary.html",
         days=days,
-        recipes=recipes,
-        recipe_options=[
-            {"id": recipe.id, "name": recipe.name, "category": recipe.category or "其他"}
-            for recipe in recipes
-        ],
+        recipe_options=recipe_options,
         categories=CATEGORIES,
         week_start=week_start,
         week_end=week_end,
@@ -1639,7 +1642,7 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
         KitchenMenuPlan.service_date.between(week_start, week_end),
         KitchenMenuPlan.meal_type == "午餐",
         db.or_(KitchenMenuPlan.name == "中央菜單", ~KitchenMenuPlan.assignments.any()),
-    ).all()
+    ).options(selectinload(KitchenMenuPlan.items)).all()
     required_dates = {plan.service_date for plan in central_plans if plan.items}
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
@@ -1680,42 +1683,53 @@ def _school_week_completion(week_start: date) -> tuple[list[KitchenSchool], set[
     return schools, complete_ids, required_dates
 
 
-def _missing_school_names_for_date(service_date: date) -> list[str]:
+def _missing_school_names_by_date(service_dates) -> dict[date, list[str]]:
+    """Resolve one or several dates with the same batched school/plan fetch."""
+    dates = list(dict.fromkeys(service_dates))
+    if not dates:
+        return {}
     schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
     assignments = (
         KitchenMenuAssignment.query.join(KitchenMenuPlan)
         .filter(
-            KitchenMenuPlan.service_date == service_date,
+            KitchenMenuPlan.service_date.in_(dates),
             KitchenMenuPlan.meal_type == "午餐",
             KitchenMenuAssignment.school_id.in_([school.id for school in schools] or [-1]),
         )
         .options(selectinload(KitchenMenuAssignment.plan).selectinload(KitchenMenuPlan.items))
         .all()
     )
-    rows_by_school: dict[int, list[KitchenMenuAssignment]] = defaultdict(list)
+    rows_by_date_school: dict[tuple[date, int], list[KitchenMenuAssignment]] = defaultdict(list)
     for row in assignments:
-        rows_by_school[row.school_id].append(row)
-    completed_ids = set()
-    for school in schools:
-        rows = rows_by_school[school.id]
-        if any(row.service_status == "no_service" for row in rows):
-            completed_ids.add(school.id)
-            continue
-        regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
-        vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
-        if (
-            regular and regular.plan.items and regular.headcount > 0
-            and (
-                (vegetarian and (
-                    vegetarian.headcount == 0
-                    or (vegetarian.plan.items and vegetarian.headcount > 0)
-                ))
-                or (vegetarian is None and school.default_vegetarian_headcount <= 0)
-            )
-        ):
-            completed_ids.add(school.id)
-    return [school.name for school in schools if school.id not in completed_ids]
+        rows_by_date_school[(row.plan.service_date, row.school_id)].append(row)
 
+    missing_by_date = {}
+    for service_date in dates:
+        missing = []
+        for school in schools:
+            rows = rows_by_date_school[(service_date, school.id)]
+            if any(row.service_status == "no_service" for row in rows):
+                continue
+            regular = next((row for row in rows if not row.plan.name.endswith("素食菜單")), None)
+            vegetarian = next((row for row in rows if row.plan.name.endswith("素食菜單")), None)
+            complete = (
+                regular and regular.plan.items and regular.headcount > 0
+                and (
+                    (vegetarian and (
+                        vegetarian.headcount == 0
+                        or (vegetarian.plan.items and vegetarian.headcount > 0)
+                    ))
+                    or (vegetarian is None and school.default_vegetarian_headcount <= 0)
+                )
+            )
+            if not complete:
+                missing.append(school.name)
+        missing_by_date[service_date] = missing
+    return missing_by_date
+
+
+def _missing_school_names_for_date(service_date: date) -> list[str]:
+    return _missing_school_names_by_date([service_date])[service_date]
 
 @order_bp.get("/summary/schools")
 def school_menus():
@@ -1820,9 +1834,10 @@ def school_menus():
         complete_school_ids=complete_school_ids,
         required_dates=required_dates,
         missing_schools_by_date={
-            (week_start + timedelta(days=offset)).isoformat():
-                _missing_school_names_for_date(week_start + timedelta(days=offset))
-            for offset in range(7)
+            day.isoformat(): names
+            for day, names in _missing_school_names_by_date(
+                week_start + timedelta(days=offset) for offset in range(7)
+            ).items()
         },
     )
 
@@ -3587,16 +3602,8 @@ def _production_nav_state():
     requested_date = _date(request.args.get("date"))
     if requested_date:
         return requested_date, True
-    latest_order = (
-        KitchenPurchaseOrder.query.filter(
-            KitchenPurchaseOrder.status != "cancelled",
-            KitchenPurchaseOrder.items.any(),
-        )
-        .order_by(KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc())
-        .first()
-    )
-    if latest_order:
-        return latest_order.service_date, True
+    # Navigation to the usage sheet should default to today, rather than
+    # run a latest-order database query for *every* kitchen page rendered.
     return date.today(), True
 
 
@@ -3607,8 +3614,15 @@ def production_sheet():
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
     sheets = _production_sheet_data(service_date)
+    editable_draft = any(
+        component["purchase_item"] is not None
+        and component["purchase_item"].order.status == "draft"
+        for dishes in sheets.values() for dish in dishes
+        for component in dish["components"]
+    )
     return render_template(
         "kitchen/production_sheet.html",
+        editable_draft=editable_draft,
         service_date=service_date,
         previous_date=service_date - timedelta(days=1),
         next_date=service_date + timedelta(days=1),
@@ -3621,6 +3635,30 @@ def production_sheet():
         },
     )
 
+
+
+@order_bp.post("/summary/production-sheet/prepare")
+def production_sheet_prepare():
+    """Create/recalculate a safe draft before users edit dish-level amounts.
+
+    Viewing the sheet stays read-only. This explicit POST never sends an
+    order to a supplier, and confirmed purchases remain untouched.
+    """
+    service_date = _date(request.form.get("date"), default=date.today()) or date.today()
+    missing_schools = _missing_school_names_for_date(service_date)
+    if missing_schools:
+        flash("請先完成各校菜單，才能修改菜色預估量：" + "、".join(missing_schools), "warning")
+    elif _active_confirmed_orders(service_date):
+        flash("這一天的採購單已確認，菜色用量不可再修改。", "warning")
+    else:
+        created, blocked = _generate_date_orders(service_date)
+        if created:
+            flash("估量草稿已準備好，可直接修改各道菜的預估採購量。", "success")
+        elif blocked:
+            flash("這一天已有已確認的採購單，不會覆蓋。", "warning")
+        else:
+            flash("沒有可估量的食材，請先確認菜色、人數與食材採購換算。", "warning")
+    return redirect(url_for("order_tool.production_sheet", date=service_date.isoformat()))
 
 
 @order_bp.post("/summary/production-sheet/items/<int:item_id>/save")

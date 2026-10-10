@@ -8,13 +8,14 @@
   var ROOT = "/admin/order-tool";
   var FLOW_KEY = "order-tool-tour-progress";
 
-  function step(path, exact, selector, title, text, advanceOn) {
+  function step(path, exact, selector, title, text, advanceOn, optional) {
     var row = { selector: selector, title: title, text: text };
     if (path) {
       row.path = path;
       row.exact = exact !== false;
     }
     if (advanceOn) row.advanceOn = advanceOn;
+    if (optional) row.optional = true;
     return row;
   }
 
@@ -38,14 +39,14 @@
     step(ROOT + "/summary/schools", true, ".school-week-grid .school-dish-check", "勾菜", "勾這間學校這天吃的菜，自動儲存。", "change"),
     step(ROOT + "/summary/schools", true, ".school-week-grid label.headcount-box", "填人數", "填這天吃幾人；有素食也填「素食人數」。", { event: "input", selector: ".school-week-grid label.headcount-box input" }),
     step(ROOT + "/summary/schools", true, ".school-no-service-toggle", "停餐", "這天沒供餐就勾，不會算進叫貨。"),
-    step(ROOT + "/summary/schools", true, ".school-copy-day-btn", "一樣就複製", "勾其他學校，按「確認複製」。"),
+    step(ROOT + "/summary/schools", true, ".school-copy-day-btn", "一樣就複製", "其他學校吃一樣的菜時，點「複製菜色到其他學校」並確認。", null, true),
     step(ROOT + "/summary/schools", true, "#school-usage-date", "選日子", "選剛勾好菜的那一天。", "change"),
-    step(ROOT + "/summary/schools", true, "#school-usage-next", "看用量", "按這裡，看每道菜要用多少。", "click"),
+    step(ROOT + "/summary/schools", true, "#school-usage-next", "看用量", "選好日期按這裡，系統準備可編輯的估量草稿。先選完所有學校才可估量。", "click"),
   ];
 
   var USAGE = [
     step(ROOT + "/summary/production-sheet", true, ".production-variant-switch", "葷素切換", "按「葷食」或「素食」分開看。"),
-    step(ROOT + "/summary/production-sheet", true, ".production-actual, .production-empty", "核對用量", "數量不對直接改，自動儲存。"),
+    step(ROOT + "/summary/production-sheet", true, ".production-estimate-input, .production-actual, .production-empty", "核對用量", "先檢查各道菜的食材數量。若還不能修改，請先按「開始估量」建立草稿；修改後會自動儲存。"),
     step(ROOT + "/summary/production-sheet", true, "#usage-order-next", "去叫貨", "按這裡，採購單照這些數量算。", "click"),
   ];
 

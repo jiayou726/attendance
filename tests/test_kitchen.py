@@ -2342,6 +2342,84 @@ def test_copy_school_day_menu_rejects_locked_stopped_and_invalid_targets_atomica
         assert [x.recipe_id for x in unchanged.plan.items] == [extra_id]
 
 
+def test_usage_sheet_prepares_editable_estimates_before_procurement(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13", "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    saved = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "40", "vegetarian_headcount": "0",
+        "regular_recipe_ids": str(ids["recipe"]),
+    })
+    assert saved.status_code == 204
+    school_page = authed_client.get(
+        "/admin/order-tool/summary/schools?week=2026-08-10"
+    ).get_data(as_text=True)
+    assert 'action="/admin/order-tool/summary/production-sheet/prepare"' in school_page
+
+    preview = authed_client.get(
+        "/admin/order-tool/summary/production-sheet?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert "南洋綠咖哩雞" in preview
+    assert 'id="usage-prepare"' in preview
+    assert 'class="production-estimate-input"' not in preview
+    with app.app_context():
+        assert KitchenPurchaseOrder.query.count() == 0
+
+    prepared = authed_client.post(
+        "/admin/order-tool/summary/production-sheet/prepare",
+        data={"date": "2026-08-13"}, follow_redirects=True
+    )
+    assert prepared.status_code == 200
+    assert "估量草稿已準備好" in prepared.get_data(as_text=True)
+    assert 'class="production-estimate-input"' in prepared.get_data(as_text=True)
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        assert item.order.status == "draft"
+        assert item.ordered is False
+
+    edited = authed_client.post(
+        f"/admin/order-tool/summary/production-sheet/items/{item_id}/save",
+        data={
+            "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+            "estimate": "6", "expected_estimate": "3.52", "expected_actual": "3.52",
+        },
+    )
+    assert edited.status_code == 200, edited.get_data(as_text=True)
+    assert edited.json["actual"] == "6"
+
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"}
+    )
+    assert generated.status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("6")
+        assert item.order.status == "draft"
+        assert item.ordered is False
+
+
+def test_usage_sheet_prepare_blocks_incomplete_school(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    authed_client.post("/admin/order-tool/summary/dishes", data={
+        "service_date": "2026-08-13", "week": "2026-08-10",
+        "recipe_id": str(ids["recipe"]),
+    })
+    resp = authed_client.post(
+        "/admin/order-tool/summary/production-sheet/prepare",
+        data={"date": "2026-08-13"}, follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert "請先完成各校菜單" in resp.get_data(as_text=True)
+    with app.app_context():
+        assert KitchenPurchaseOrder.query.count() == 0
+
+
 def test_usage_sheet_is_the_step_before_purchasing(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={

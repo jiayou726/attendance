@@ -278,6 +278,11 @@
   background: #d9ebf8;
 }
 
+main.wrap > .top > .order-tour-help {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .order-tour-banner {
   display: flex;
   align-items: center;

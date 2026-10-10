@@ -2401,5 +2401,25 @@ def test_usage_sheet_is_the_step_before_purchasing(app, authed_client):
     steps = authed_client.get("/static/order_flow_tour_steps.js").get_data(as_text=True)
     assert "ORDER_FLOW_TOUR_STEPS" in steps
     assert "advanceOn" in steps
+    assert steps.count("step(") == 93
     for selector in ("#school-usage-next", "#usage-order-next", ".order-confirm-toggle"):
         assert selector in steps
+    for phrase in (
+        "從這開始",
+        "每週叫貨都從「開啟總表」開始。",
+        "最後看整週",
+        "整週叫完，到「總覽」按「查看週採購單」。",
+        "儲存這道菜",
+        "按這裡下載依廠商分好的 Excel。",
+        "操作教學",
+        "order-tool-tour-",
+    ):
+        assert phrase in steps
+
+    tags = authed_client.get("/admin/order-tool/recipe-tags")
+    assert tags.status_code == 200
+    tags_body = tags.get_data(as_text=True)
+    assert "菜色標記" in tags_body
+    assert "回 AI 菜單" in tags_body
+    assert "建議" in tags_body
+    assert "ai_menu_index" not in tags_body

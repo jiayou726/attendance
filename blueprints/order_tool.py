@@ -1440,11 +1440,18 @@ def _requirements_from_plans(plans_on_day):
                         "required_amount": Decimal("0"),
                         "usage_default_qty": usage_totals.get(ing.id, Decimal("0")),
                         "total_people": 0,
+                        "counted_assignment_ids": set(),
                         "school_names": set(),
                     }
                     grouped[supplier_key][ing.id] = current
                 current["required_amount"] += base_amount
-                current["total_people"] += people
+                # 同一批用餐者若吃了多道含此食材的菜，人數只能算一次。
+                # 採購量仍按每道菜各自累加。
+                for assignment in serving_assignments:
+                    if assignment.id in current["counted_assignment_ids"]:
+                        continue
+                    current["counted_assignment_ids"].add(assignment.id)
+                    current["total_people"] += max(assignment.headcount, 0)
                 current["school_names"].update(
                     assignment.school.name for assignment in serving_assignments
                 )

@@ -586,6 +586,57 @@ def test_school_menu_saves_regular_and_vegetarian_separately_and_combines_procur
         assert ingredient_row["school_names"] == {"內小"}
 
 
+def test_shared_ingredient_headcount_counts_each_diner_once(app, authed_client):
+    """總供餐人次 is people served, not people multiplied by every dish using the ingredient."""
+    ids = _seed_core_via_routes(app, authed_client)
+    assert authed_client.post("/admin/order-tool/recipes", data={
+        "name": "青菜炒醬油", "category": "青菜", "serving_output_g": "80",
+    }).status_code == 302
+    with app.app_context():
+        second = KitchenRecipe.query.filter_by(name="青菜炒醬油").one().id
+    assert authed_client.post(f"/admin/order-tool/recipes/{second}/ingredients", data={
+        "ingredient_id": str(ids["ingredient"]), "grams_per_person": "10",
+    }).status_code == 302
+    for recipe_id in (ids["recipe"], second):
+        assert authed_client.post("/admin/order-tool/summary/dishes", data={
+            "service_date": "2026-08-13", "week": "2026-08-10", "recipe_id": str(recipe_id),
+        }).status_code == 302
+    saved = authed_client.post("/admin/order-tool/summary/schools/save-day", data={
+        "school_id": str(ids["school"]),
+        "service_date": "2026-08-13",
+        "headcount": "100",
+        "vegetarian_headcount": "8",
+        "regular_recipe_ids": [str(ids["recipe"]), str(second)],
+        "vegetarian_recipe_ids": [str(ids["recipe"])],
+    })
+    assert saved.status_code == 204
+
+    with app.app_context():
+        requirements = order_tool_module._requirements_for_date(TEST_DAY)
+        ingredient_row = next(iter(next(iter(requirements.values())).values()))
+        # 100 regular diners eat both dishes and 8 vegetarian diners eat one.
+        # Adding the plan headcount once per dish reports 208.
+        assert ingredient_row["total_people"] == 108
+        assert ingredient_row["school_names"] == {"內小"}
+        assert ingredient_row["required_amount"] == Decimal("10504.000")
+
+    assert authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+    ).status_code == 302
+    page = authed_client.get(
+        "/admin/order-tool/summary/procurement?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert ">108</b> 人次" in page
+    assert ">208</b> 人次" not in page
+    assert '<small class="included-schools"><span>包含學校（1）</span>內小</small>' in page
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(ingredient_id=ids["ingredient"]).one()
+        # Demand still adds every dish: 88g×100 + 10g×100 + 88g×8.
+        assert item.required_grams == Decimal("10504.000")
+        assert item.actual_order_qty == Decimal("10.5040")
+
+
 def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     authed_client.post("/admin/order-tool/summary/dishes", data={

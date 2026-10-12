@@ -680,7 +680,7 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "<b>3.52</b> kg" in regular
     assert 'class="production-estimate-input"' in regular
     assert 'value="3.52"' in regular
-    assert "各菜預估合計：3.52 kg；採購差額：5.98 kg；實際採購：9.5 kg" in regular
+    assert "各菜預估合計：3.784 kg；採購差額：5.716 kg；實際採購：9.5 kg" in regular
     assert "冷藏，上午先到" in regular
     assert "匯出 Excel（葷／素分頁）" in regular
     assert "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13" in regular

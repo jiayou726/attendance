@@ -3621,11 +3621,13 @@ def production_sheet():
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
     sheets = _production_sheet_data(service_date)
-    estimate_totals = {
-        component["purchase_item"].id: _production_estimate_total(component["purchase_item"], sheets)
-        for dishes in sheets.values() for dish in dishes for component in dish["components"]
-        if component["purchase_item"] is not None
-    }
+    estimate_totals = defaultdict(lambda: Decimal("0"))
+    for dishes in sheets.values():
+        for dish in dishes:
+            for component in dish["components"]:
+                item = component["purchase_item"]
+                if item is not None and not component["conversion_missing"]:
+                    estimate_totals[item.id] += component["estimated_qty"]
     editable_draft = any(
         component["purchase_item"] is not None
         and component["purchase_item"].order.status == "draft"

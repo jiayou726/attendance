@@ -506,14 +506,27 @@
     form.addEventListener('submit', async (event) => {
       if (form.dataset.ready === 'true') return;
       event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      if (button?.disabled) return;
+      if (button) button.disabled = true;
+      // Do not leave this page while any estimate input is waiting to save.
+      productionEditors.forEach((editor) => editor.flush());
+      await Promise.all([...productionGroups.values()].map((group) => group.queue));
+      if (productionEditors.some((editor) => editor.hasUnsettled())) {
+        if (button) button.disabled = false;
+        window.alert('尚有菜色預估量未儲存，請檢查欄位提示後再前往採購叫貨。');
+        return;
+      }
       await Promise.allSettled([...pendingSchoolMenuSaves]);
       const serviceDate = form.querySelector('input[name="date"]')?.value || '';
       const names = missingSchools[serviceDate] || [];
       if (names.length) {
+        if (button) button.disabled = false;
         window.alert(`尚有學校未完成菜單勾選：${names.join('、')}。請先完成後再產生採購單。`);
         return;
       }
       form.dataset.ready = 'true';
+      if (button) button.disabled = false;
       form.requestSubmit();
     });
   });
@@ -627,22 +640,6 @@
     });
   });
 
-  const productionNextForm = document.querySelector('[data-procurement-generate]');
-  productionNextForm?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const button = productionNextForm.querySelector('button[type="submit"]');
-    if (button?.disabled) return;
-    if (button) button.disabled = true;
-    productionEditors.forEach((editor) => editor.flush());
-    await Promise.all([...productionGroups.values()].map((group) => group.queue));
-    if (productionEditors.some((editor) => editor.hasUnsettled())) {
-      if (button) button.disabled = false;
-      window.alert('尚有菜色預估量未儲存，請檢查欄位提示後再前往採購叫貨。');
-      return;
-    }
-    // Native submit bypasses this handler, and avoids racing with autosave.
-    productionNextForm.submit();
-  });
   if (productionEditors.length) {
     window.addEventListener('beforeunload', (event) => {
       if (!productionEditors.some((editor) => editor.hasUnsettled())) return;

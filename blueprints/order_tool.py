@@ -3717,18 +3717,11 @@ def production_sheet_item_autosave(item_id: int):
     prior_total = _production_estimate_total(item, sheets)
     next_estimate_total = _round_estimate(prior_total + estimate - previous)
     if estimate != previous:
-        if item.dish_adjustment_qty is None:
-            # Older orders may have genuine manual quantities. Do not mistake
-            # automatic increment rounding or supplier-only edits for an extra.
-            has_legacy_qty_edit = (
-                item.manual_override
-                and _round_estimate(item.actual_order_qty) != _round_estimate(item.recommended_order_qty)
-            )
-            item.dish_adjustment_qty = (
-                _round_estimate(item.actual_order_qty - prior_total)
-                if has_legacy_qty_edit else Decimal("0")
-            )
-        next_qty = _round_estimate(next_estimate_total + item.dish_adjustment_qty)
+        # The usage sheet is the source of truth when a dish is edited.
+        # Any procurement-only quantity adjustment is reset here, so the
+        # purchase amount equals the sum of the same ingredient across dishes.
+        item.dish_adjustment_qty = Decimal("0")
+        next_qty = next_estimate_total
         try:
             _set_purchase_estimate_total(item, next_qty)
         except ValueError as exc:

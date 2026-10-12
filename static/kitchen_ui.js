@@ -534,22 +534,32 @@
   };
 
 
-  // Independent per-dish estimates, serialized by purchase-item ID.
+  // Each dish is editable, but all saves for the same ingredient are ordered.
   const productionGroups = new Map();
+  const productionEditors = [];
   document.querySelectorAll('[data-production-key]').forEach((editor) => {
     const id = editor.dataset.productionItem;
     if (!productionGroups.has(id)) {
-      productionGroups.set(id, { editors: [], queue: Promise.resolve(), total: editor.dataset.productionTotal });
+      productionGroups.set(id, {
+        editors: [], queue: Promise.resolve(), pending: 0,
+        total: editor.dataset.productionTotal,
+        estimateTotal: editor.dataset.productionEstimateTotal,
+        adjustment: editor.dataset.productionAdjustment,
+      });
     }
     productionGroups.get(id).editors.push(editor);
   });
   productionGroups.forEach((group, itemId) => {
-    const updateTotal = (actual) => {
-      group.total = String(actual);
+    const updateTotal = (data) => {
+      group.total = String(data.actual);
+      group.estimateTotal = String(data.estimateTotal);
+      group.adjustment = String(data.adjustment);
       document.querySelectorAll('[data-production-day-total]').forEach((node) => {
         if (node.dataset.productionDayTotal !== itemId) return;
         const unit = group.editors[0]?.querySelector('.input-unit span')?.textContent || '';
-        node.textContent = `當日採購總量：${group.total} ${unit}`;
+        const difference = Number(group.adjustment) !== 0
+          ? `；採購差額：${group.adjustment} ${unit}` : '';
+        node.textContent = `各菜預估合計：${group.estimateTotal} ${unit}${difference}；實際採購：${group.total} ${unit}`;
       });
     };
     group.editors.forEach((editor) => {
@@ -559,21 +569,29 @@
       let committed = input.value;
       let queued = committed;
       let timer = null;
+      let failed = false;
       const save = () => {
         window.clearTimeout(timer);
+        timer = null;
         const next = input.value.trim();
-        if (!next || !Number.isFinite(Number(next)) || Number(next) < 0) {
-          if (status) status.textContent = '請輸入有效的非負數量';
+        if (!next || !input.checkValidity() || !Number.isFinite(Number(next)) || Number(next) < 0) {
+          failed = true;
+          if (status) status.textContent = '數量須為非負數，最多四位小數';
           return;
         }
-        if (next === queued) return;
-        queued = next;
-        if (next === committed) {
+        if (next === queued && !failed) return;
+        if (next === committed && group.pending === 0 && !failed) {
+          queued = next;
           if (status) status.textContent = '已儲存';
           return;
         }
+        queued = next;
+        failed = false;
+        group.pending += 1;
         if (status) status.textContent = '儲存中…';
         group.queue = group.queue.then(async () => {
+          // Re-check after previous saves: a user can type 5 then revert to 3.
+          if (next === committed) return;
           const body = new URLSearchParams({
             _csrf_token: editor.dataset.productionCsrf,
             date: editor.dataset.productionDate,
@@ -586,13 +604,14 @@
           const data = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(data.message || '儲存失敗，請重新整理');
           committed = String(data.estimate);
-          updateTotal(data.actual);
-          if (document.activeElement !== input || input.value === next) input.value = committed;
+          updateTotal(data);
+          if (input.value.trim() === next) input.value = committed;
           if (status) status.textContent = '已儲存';
         }).catch((error) => {
-          queued = null; // retries are permitted after a stale-page conflict
+          failed = true;
+          queued = null;
           if (status) status.textContent = error.message || '儲存失敗';
-        });
+        }).finally(() => { group.pending -= 1; });
       };
       input.addEventListener('input', () => {
         if (status) status.textContent = '等待儲存…';
@@ -601,8 +620,36 @@
       });
       input.addEventListener('change', save);
       input.addEventListener('blur', save);
+      productionEditors.push({
+        flush: save,
+        hasUnsettled: () => timer !== null || group.pending > 0 || failed || input.value.trim() !== committed,
+      });
     });
   });
+
+  const productionNextForm = document.querySelector('[data-procurement-generate]');
+  productionNextForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = productionNextForm.querySelector('button[type="submit"]');
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    productionEditors.forEach((editor) => editor.flush());
+    await Promise.all([...productionGroups.values()].map((group) => group.queue));
+    if (productionEditors.some((editor) => editor.hasUnsettled())) {
+      if (button) button.disabled = false;
+      window.alert('尚有菜色預估量未儲存，請檢查欄位提示後再前往採購叫貨。');
+      return;
+    }
+    // Native submit bypasses this handler, and avoids racing with autosave.
+    productionNextForm.submit();
+  });
+  if (productionEditors.length) {
+    window.addEventListener('beforeunload', (event) => {
+      if (!productionEditors.some((editor) => editor.hasUnsettled())) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
+  }
 
   const procurementForm = document.querySelector('[data-procurement-autosave]');
   procurementForm?.addEventListener('submit', (event) => event.preventDefault());

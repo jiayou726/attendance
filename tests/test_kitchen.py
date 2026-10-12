@@ -680,7 +680,7 @@ def test_daily_production_sheet_splits_meal_variants_and_shows_purchase_total(ap
     assert "<b>3.52</b> kg" in regular
     assert 'class="production-estimate-input"' in regular
     assert 'value="3.52"' in regular
-    assert "當日採購總量：9.5 kg" in regular
+    assert "各菜預估合計：3.784 kg；採購差額：5.716 kg；實際採購：9.5 kg" in regular
     assert "冷藏，上午先到" in regular
     assert "匯出 Excel（葷／素分頁）" in regular
     assert "/admin/order-tool/summary/production-sheet.xlsx?date=2026-08-13" in regular
@@ -2128,7 +2128,7 @@ def test_dish_estimates_aggregate_recipes_and_both_variants(app, authed_client):
         "/admin/order-tool/summary/production-sheet?date=2026-08-13&variant=vegetarian"
     ).get_data(as_text=True)
     assert 'value="0.264"' in vegetarian
-    assert "當日採購總量：7.264 kg" in vegetarian
+    assert "各菜預估合計：7.264 kg；實際採購：7.264 kg" in vegetarian
     procurement = authed_client.get(
         "/admin/order-tool/summary/procurement?date=2026-08-13"
     ).get_data(as_text=True)
@@ -2159,7 +2159,7 @@ def test_dish_estimates_aggregate_recipes_and_both_variants(app, authed_client):
         assert db.session.get(KitchenPurchaseOrderItem, item_id).actual_order_qty == Decimal("7.264")
 
 
-def test_procurement_changes_extra_not_dish_estimates(app, authed_client):
+def test_usage_sheet_edit_overwrites_procurement_quantity_and_clears_adjustment(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     _create_plan(app, authed_client, ids, headcount=40)
     authed_client.post("/admin/order-tool/purchases/generate", data={
@@ -2178,13 +2178,15 @@ def test_procurement_changes_extra_not_dish_estimates(app, authed_client):
         "estimate": "4", "expected_estimate": "3.52", "expected_actual": "10",
     })
     assert saved.status_code == 200
-    assert saved.json["actual"] == "10.48"
+    assert saved.json["actual"] == "4"
+    assert saved.json["estimateTotal"] == "4"
+    assert saved.json["adjustment"] == "0"
     with app.app_context():
-        assert db.session.get(KitchenPurchaseOrderItem, item_id).dish_adjustment_qty == Decimal("6.48")
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).dish_adjustment_qty == Decimal("0")
 
     change = authed_client.post(
         f"/admin/order-tool/summary/procurement/items/{item_id}/save", data={
-            "actual": "12", "expected_actual": "10.48",
+            "actual": "12", "expected_actual": "4",
             "package_qty": "", "package_unit": "", "supplier_name": "測試肉品",
             "delivery_date": "2026-08-13", "delivery_slot": "上午",
         },
@@ -2202,21 +2204,23 @@ def test_procurement_changes_extra_not_dish_estimates(app, authed_client):
         "estimate": "5", "expected_estimate": "4", "expected_actual": "12",
     })
     assert next_edit.status_code == 200
-    assert next_edit.json["actual"] == "13"
+    assert next_edit.json["actual"] == "5"
+    assert next_edit.json["estimateTotal"] == "5"
+    assert next_edit.json["adjustment"] == "0"
 
     authed_client.post("/admin/order-tool/summary/procurement/generate", data={
         "date": "2026-08-13",
     })
     with app.app_context():
         item = db.session.get(KitchenPurchaseOrderItem, item_id)
-        assert item.actual_order_qty == Decimal("13")
-        assert item.dish_adjustment_qty == Decimal("8")
+        assert item.actual_order_qty == Decimal("5")
+        assert item.dish_adjustment_qty == Decimal("0")
         assert item.manual_override
         item.order.status = "confirmed"
         db.session.commit()
     rejected = authed_client.post(endpoint, data={
         "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
-        "estimate": "20", "expected_estimate": "5", "expected_actual": "13",
+        "estimate": "20", "expected_estimate": "5", "expected_actual": "5",
     })
     assert rejected.status_code == 409
     page = authed_client.get(
@@ -2391,6 +2395,93 @@ def test_copy_school_day_menu_rejects_locked_stopped_and_invalid_targets_atomica
             target_id, TEST_DAY, "regular"
         )
         assert [x.recipe_id for x in unchanged.plan.items] == [extra_id]
+
+
+
+def test_supplier_only_edit_does_not_create_hidden_purchase_adjustment(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=40)
+    with app.app_context():
+        ingredient = db.session.get(KitchenIngredient, ids["ingredient"])
+        ingredient.order_increment = Decimal("1")
+        db.session.commit()
+
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": "2026-08-13"},
+    )
+    assert generated.status_code == 302
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        assert item.actual_order_qty == Decimal("4")  # increment rounding
+        assert item.dish_adjustment_qty is None
+
+    # Only the supplier changes; submitted actual is unchanged.
+    saved = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{item_id}/save",
+        data={
+            "actual": "4", "expected_actual": "4",
+            "package_qty": "", "package_unit": "",
+            "supplier_name": "測試肉品",
+            "delivery_date": "2026-08-13", "delivery_slot": "上午",
+        },
+    )
+    assert saved.status_code == 200, saved.get_data(as_text=True)
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.dish_adjustment_qty is None
+
+    # Editing the usage sheet replaces the rounded 4 with exact dish subtotal.
+    endpoint = f"/admin/order-tool/summary/production-sheet/items/{item_id}/save"
+    edited = authed_client.post(endpoint, data={
+        "date": "2026-08-13", "estimate_key": f"regular:{ids['recipe']}",
+        "estimate": "3.6", "expected_estimate": "3.52", "expected_actual": "4",
+    })
+    assert edited.status_code == 200, edited.get_data(as_text=True)
+    assert edited.json["actual"] == "3.6"
+    assert edited.json["estimateTotal"] == "3.6"
+    assert edited.json["adjustment"] == "0"
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("3.6")
+        assert item.dish_adjustment_qty == Decimal("0")
+
+    # Recalculation preserves the edited estimate instead of restoring rounding.
+    authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": "2026-08-13",
+    })
+    procurement = authed_client.get(
+        "/admin/order-tool/summary/procurement?date=2026-08-13"
+    ).get_data(as_text=True)
+    assert f'name="actual_{item_id}"' in procurement
+    assert 'value="3.6"' in procurement
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).actual_order_qty == Decimal("3.6")
+
+
+def test_procurement_rejects_more_than_four_decimal_places(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=40)
+    authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": "2026-08-13",
+    })
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        original = item.actual_order_qty
+    response = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{item_id}/save",
+        data={
+            "actual": "3.52001", "expected_actual": "3.52",
+            "package_qty": "", "package_unit": "",
+            "supplier_name": "測試肉品",
+            "delivery_date": "2026-08-13", "delivery_slot": "上午",
+        },
+    )
+    assert response.status_code == 400
+    with app.app_context():
+        assert db.session.get(KitchenPurchaseOrderItem, item_id).actual_order_qty == original
 
 
 def test_usage_sheet_prepares_editable_estimates_before_procurement(app, authed_client):

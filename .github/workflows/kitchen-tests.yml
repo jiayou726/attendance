@@ -27,3 +27,4 @@ jobs:
         run: |
           node --check static/order_tour.js
           node --check static/order_flow_tour_steps.js
+          node --check static/kitchen_ui.js

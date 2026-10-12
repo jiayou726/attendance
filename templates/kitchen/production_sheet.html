@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">步驟 3</div>
     <h1>菜色用量表</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　每一道菜的食材用量，已按各校供餐人數放大。確認後按「下一步：採購叫貨」，採購單會用這裡的數量來算。有草稿時，可以直接改「本菜預估採購量」。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　各菜預估量會加總到採購單。公斤等單位可能有正常的小數；若採購單另外改過數量，下方會顯示差額。按「下一步」會先完成未儲存的估量。</div>
   </div>
   <nav class="week-switcher" aria-label="切換用量日期">
     <a class="btn secondary" href="{{ url_for('order_tool.production_sheet', date=previous_date.isoformat(), variant=variant) }}">← 前一天</a>
@@ -71,7 +71,7 @@
         <td class="production-actual">
           {% if item and not row.conversion_missing and item.source_type != 'manual' %}
             {% if item.order.status == 'draft' %}
-              <div class="production-actual-editor" data-production-item="{{ item.id }}" data-production-key="{{ row.estimate_key }}" data-production-date="{{ service_date.isoformat() }}" data-production-csrf="{{ csrf_token() }}" data-production-save-url="{{ url_for('order_tool.production_sheet_item_autosave', item_id=item.id) }}" data-production-total="{{ trim_decimal(item.actual_order_qty) }}">
+              <div class="production-actual-editor" data-production-item="{{ item.id }}" data-production-key="{{ row.estimate_key }}" data-production-date="{{ service_date.isoformat() }}" data-production-csrf="{{ csrf_token() }}" data-production-save-url="{{ url_for('order_tool.production_sheet_item_autosave', item_id=item.id) }}" data-production-total="{{ trim_decimal(item.actual_order_qty) }}" data-production-estimate-total="{{ trim_decimal(estimate_totals[item.id]) }}" data-production-adjustment="{{ trim_decimal(item.actual_order_qty - estimate_totals[item.id]) }}">
                 <label class="input-unit"><input class="production-estimate-input" type="number" min="0" step="0.0001" value="{{ trim_decimal(row.estimated_qty) }}" aria-label="{{ dish.recipe.name }} {{ row.ingredient.name }} 本菜預估採購量" required><span>{{ item.purchase_unit_snapshot }}</span></label>
                 <small class="production-save-state" data-production-save-state role="status" aria-live="polite">已儲存</small>
               </div>
@@ -79,7 +79,7 @@
               <b>{{ trim_decimal(row.estimated_qty) }} {{ item.purchase_unit_snapshot }}</b>
               <small>採購單已確認，不可修改</small>
             {% endif %}
-            <small class="production-day-total" data-production-day-total="{{ item.id }}">當日採購總量：{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</small>
+            <small class="production-day-total" data-production-day-total="{{ item.id }}">各菜預估合計：{{ trim_decimal(estimate_totals[item.id]) }} {{ item.purchase_unit_snapshot }}{% if item.actual_order_qty != estimate_totals[item.id] %}；採購差額：{{ trim_decimal(item.actual_order_qty - estimate_totals[item.id]) }} {{ item.purchase_unit_snapshot }}{% endif %}；實際採購：{{ trim_decimal(item.actual_order_qty) }} {{ item.purchase_unit_snapshot }}</small>
           {% elif row.conversion_missing %}<small class="pending-text">請先設定食材採購換算</small>
           {% else %}<b>{{ trim_decimal(row.estimated_qty) }} {{ row.purchase_unit or row.theoretical_unit }}</b><small>按下一步後，會把各菜的這個數量加進採購單。</small>{% endif %}
         </td>

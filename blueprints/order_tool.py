@@ -3202,8 +3202,8 @@ def _set_purchase_estimate_total(item: KitchenPurchaseOrderItem, actual: Decimal
 
 
 def _recalculate_purchase_adjustment(item: KitchenPurchaseOrderItem, actual: Decimal) -> None:
-    """Procurement changes extras, but never overwrites individual dish estimates."""
-    if item.dish_adjustment_qty is None:
+    """Keep procurement-only quantity changes, not supplier/date-only edits."""
+    if item.dish_adjustment_qty is None and actual == item.actual_order_qty:
         return
     sheets = _production_sheet_data(item.order.service_date)
     item.dish_adjustment_qty = _round_estimate(
@@ -3621,6 +3621,13 @@ def production_sheet():
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
     sheets = _production_sheet_data(service_date)
+    estimate_totals = defaultdict(lambda: Decimal("0"))
+    for dishes in sheets.values():
+        for dish in dishes:
+            for component in dish["components"]:
+                item = component["purchase_item"]
+                if item is not None and not component["conversion_missing"]:
+                    estimate_totals[item.id] += component["estimated_qty"]
     editable_draft = any(
         component["purchase_item"] is not None
         and component["purchase_item"].order.status == "draft"
@@ -3630,6 +3637,7 @@ def production_sheet():
     return render_template(
         "kitchen/production_sheet.html",
         editable_draft=editable_draft,
+        estimate_totals=estimate_totals,
         service_date=service_date,
         previous_date=service_date - timedelta(days=1),
         next_date=service_date + timedelta(days=1),
@@ -3708,17 +3716,14 @@ def production_sheet_item_autosave(item_id: int):
             "estimate": _trim_decimal(previous), "actual": _trim_decimal(item.actual_order_qty),
         }, 409
 
+    prior_total = _production_estimate_total(item, sheets)
+    next_estimate_total = _round_estimate(prior_total + estimate - previous)
     if estimate != previous:
-        prior_total = _production_estimate_total(item, sheets)
-        if item.dish_adjustment_qty is None:
-            # Preserve legacy manual adjustments, but not automatic order rounding.
-            item.dish_adjustment_qty = (
-                _round_estimate(item.actual_order_qty - prior_total)
-                if item.manual_override else Decimal("0")
-            )
-        next_qty = _round_estimate(
-            prior_total + estimate - previous + item.dish_adjustment_qty
-        )
+        # The usage sheet is the source of truth when a dish is edited.
+        # Any procurement-only quantity adjustment is reset here, so the
+        # purchase amount equals the sum of the same ingredient across dishes.
+        item.dish_adjustment_qty = Decimal("0")
+        next_qty = next_estimate_total
         try:
             _set_purchase_estimate_total(item, next_qty)
         except ValueError as exc:
@@ -3734,8 +3739,9 @@ def production_sheet_item_autosave(item_id: int):
     return {
         "message": "已儲存",
         "estimate": _trim_decimal(estimate),
+        "estimateTotal": _trim_decimal(next_estimate_total),
         "actual": _trim_decimal(item.actual_order_qty),
-        "adjustment": _trim_decimal(item.dish_adjustment_qty or Decimal("0")),
+        "adjustment": _trim_decimal(item.actual_order_qty - next_estimate_total),
         "packageQty": _trim_decimal(item.package_qty) if item.package_qty is not None else "",
         "packageUnit": item.package_unit or "",
     }
@@ -4304,12 +4310,15 @@ def _apply_procurement_item_values(
     if supplier_name.startswith("⚠") or supplier_name == "未指定供應商":
         supplier_name = ""
 
-    if actual is None or actual < 0:
-        return None, f"「{item.ingredient_name_snapshot}」的實際採購量不正確。"
+    if (actual is None or actual < 0 or actual >= _PURCHASE_ESTIMATE_LIMIT
+            or actual != _round_estimate(actual)):
+        return None, f"「{item.ingredient_name_snapshot}」的實際採購量最多四位小數。"
     if package_qty_text and package_qty is None:
         return None, f"「{item.ingredient_name_snapshot}」的包裝數量不正確。"
-    if package_qty is not None and package_qty < 0:
-        return None, f"「{item.ingredient_name_snapshot}」的包裝數量不可小於 0。"
+    if (package_qty is not None and
+            (package_qty < 0 or package_qty >= _PURCHASE_ESTIMATE_LIMIT
+             or package_qty != _round_estimate(package_qty))):
+        return None, f"「{item.ingredient_name_snapshot}」的包裝數量須為非負數且最多四位小數。"
     if not delivery_date or delivery_slot not in ("上午", "下午"):
         return None, f"「{item.ingredient_name_snapshot}」的交貨日期或時段不正確。"
 

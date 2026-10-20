@@ -1,10 +1,14 @@
+from io import BytesIO
+
+from openpyxl import Workbook
+
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, text
 
 from app import create_app
 from extensions import db
-from models import KitchenMenuPlan, KitchenSchool
+from models import KitchenMenuPlan, KitchenRecipe, KitchenSchool
 from services.practice_database import cleanup_expired_accounts, list_accounts, workspace_engine
 
 
@@ -147,3 +151,73 @@ def test_admin_link_can_reset_and_delete_account(tmp_path):
     assert response.status_code == 302
     with app.app_context():
         assert list_accounts() == []
+
+
+def test_practice_excel_import_new_recipe_stays_private(tmp_path):
+    """Excel imports may introduce dishes absent from the formal recipe catalog."""
+    app = _app(tmp_path)
+    with app.app_context():
+        db.session.add(KitchenRecipe(name="正式既有菜", category="主菜"))
+        db.session.commit()
+
+    client = app.test_client()
+    _login(client, "菜單匯入練習者")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "一般菜單"
+    sheet.append(["日期", "星期", "主菜", "湯品"])
+    sheet.append(["2026/10/22", "四", "正式既有菜", "練習新湯品"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    imported = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (output, "2026年10月練習菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert imported.status_code == 200
+    assert "匯入完成" in imported.get_data(as_text=True)
+    assert "練習新湯品" in imported.get_data(as_text=True)
+
+    with app.app_context():
+        # The formal master catalog has not been modified by a practice user.
+        assert KitchenRecipe.query.filter_by(name="練習新湯品").count() == 0
+        assert KitchenRecipe.query.filter_by(name="正式既有菜").count() == 1
+        engine = workspace_engine(list_accounts()[0])
+        with engine.connect() as connection:
+            private_recipes = connection.execute(
+                select(KitchenRecipe.__table__)
+            ).mappings().all()
+            private_plans = connection.execute(
+                select(KitchenMenuPlan.__table__)
+            ).mappings().all()
+        assert {row["name"] for row in private_recipes} == {"正式既有菜", "練習新湯品"}
+        assert len(private_plans) == 1
+
+    # The same account can safely import the same workbook again: no duplicates.
+    repeated = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_practice_menu_file(), "2026年10月練習菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert repeated.status_code == 200
+    assert "略過" in repeated.get_data(as_text=True)
+    with app.app_context():
+        engine = workspace_engine(list_accounts()[0])
+        with engine.connect() as connection:
+            assert len(connection.execute(select(KitchenRecipe.__table__)).all()) == 2
+
+
+def _practice_menu_file():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "一般菜單"
+    sheet.append(["日期", "星期", "主菜", "湯品"])
+    sheet.append(["2026/10/22", "四", "正式既有菜", "練習新湯品"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output

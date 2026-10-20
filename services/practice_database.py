@@ -344,6 +344,69 @@ def touch_current_account() -> dict | None:
 
 
 
+def _ensure_postgres_recipe_overlay(connection, engine, workspace_key: str) -> None:
+    """Let practice menus create private dishes while formal recipes remain read-only.
+
+    The existing kitchen_recipe view continues to expose live formal recipes.
+    Locally-created practice recipes use negative IDs and live only in the
+    account's private table. An INSTEAD OF INSERT trigger handles ORM INSERT
+    ... RETURNING without permitting UPDATE or DELETE on the shared view.
+    """
+    schema = _quote(engine, _assert_workspace_key(workspace_key))
+    if inspect(connection).has_table("practice_recipe_overlay", schema=workspace_key):
+        return
+
+    # LIKE tracks the formal catalog's columns, including any additive fields.
+    # Never copy its SERIAL default: that would consume the *formal* ID sequence.
+    connection.execute(text(f"""
+        CREATE TABLE {schema}.practice_recipe_overlay (
+            LIKE public.kitchen_recipe INCLUDING CONSTRAINTS,
+            PRIMARY KEY (id), UNIQUE (name)
+        )
+    """))
+    connection.execute(text(f"""
+        CREATE SEQUENCE {schema}.practice_recipe_id_seq
+        AS integer INCREMENT BY -1 MINVALUE -2147483648
+        MAXVALUE -1 START WITH -1
+    """))
+    # CREATE OR REPLACE retains the original view's column names/types, so
+    # existing ORM relationships and workspace menu items still work.
+    connection.execute(text(f"""
+        CREATE OR REPLACE VIEW {schema}.kitchen_recipe
+        WITH (security_invoker=true) AS
+        SELECT * FROM public.kitchen_recipe
+        UNION ALL
+        SELECT * FROM {schema}.practice_recipe_overlay
+    """))
+    connection.execute(text(f"""
+        CREATE FUNCTION {schema}.insert_practice_recipe()
+        RETURNS trigger LANGUAGE plpgsql AS $practice_insert$
+        BEGIN
+            IF NEW.id IS NOT NULL THEN
+                RAISE EXCEPTION 'Practice recipe IDs must be generated';
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.kitchen_recipe WHERE name = NEW.name) THEN
+                RAISE EXCEPTION 'Recipe already exists in the formal catalog';
+            END IF;
+            NEW.id := nextval('{workspace_key}.practice_recipe_id_seq');
+            NEW.active := COALESCE(NEW.active, FALSE);
+            NEW.created_at := COALESCE(NEW.created_at, NOW());
+            NEW.updated_at := COALESCE(NEW.updated_at, NOW());
+            INSERT INTO {schema}.practice_recipe_overlay SELECT NEW.*;
+            RETURN NEW;
+        END
+        $practice_insert$;
+    """))
+    connection.execute(text(f"""
+        CREATE TRIGGER insert_practice_recipe
+        INSTEAD OF INSERT ON {schema}.kitchen_recipe
+        FOR EACH ROW EXECUTE FUNCTION {schema}.insert_practice_recipe()
+    """))
+    connection.execute(text(
+        f"REVOKE ALL ON FUNCTION {schema}.insert_practice_recipe() FROM PUBLIC"
+    ))
+
+
 def _ensure_workspace_estimate_columns(account: dict) -> None:
     """Idempotently upgrade operational columns in an existing named workspace."""
     engine = _practice_engine()
@@ -366,6 +429,8 @@ def _ensure_workspace_estimate_columns(account: dict) -> None:
             connection.execute(text(
                 f"ALTER TABLE {table} ADD COLUMN dish_adjustment_qty NUMERIC(16, 4)"
             ))
+        if is_postgres:
+            _ensure_postgres_recipe_overlay(connection, engine, key)
     cache.add(key)
 
 

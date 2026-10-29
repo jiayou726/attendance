@@ -2574,14 +2574,24 @@ def summary_import():
     # together and create plan items in one final batch.
     try:
         days = parsed["days"]
-        existing_plans = KitchenMenuPlan.query.options(
-            selectinload(KitchenMenuPlan.items)
-        ).filter(
+        existing_plans = KitchenMenuPlan.query.filter(
             KitchenMenuPlan.service_date.in_([day["date"] for day in days]),
             KitchenMenuPlan.meal_type == "午餐",
             KitchenMenuPlan.name == "中央菜單",
         ).order_by(KitchenMenuPlan.id).all()
         plans_by_date = {plan.service_date: plan for plan in existing_plans}
+        # Load all existing links with a direct, explicit query rather than
+        # relying on the relationship collection in a translated PostgreSQL
+        # practice schema. That collection could appear partially populated
+        # on a second request and re-add dishes for most dates.
+        existing_recipe_ids_by_plan = defaultdict(set)
+        if existing_plans:
+            for plan_id, recipe_id in db.session.query(
+                KitchenMenuPlanItem.plan_id, KitchenMenuPlanItem.recipe_id
+            ).filter(
+                KitchenMenuPlanItem.plan_id.in_([plan.id for plan in existing_plans])
+            ).all():
+                existing_recipe_ids_by_plan[plan_id].add(recipe_id)
         all_recipes = KitchenRecipe.query.order_by(KitchenRecipe.id).all()
         recipes_by_name, recipes_by_alias = _menu_recipe_indexes(all_recipes)
         added_items = 0
@@ -2608,7 +2618,7 @@ def summary_import():
                 db.session.add(plan)
                 plans_by_date[service_date] = plan
 
-            existing_recipe_ids = {item.recipe_id for item in plan.items}
+            existing_recipe_ids = set(existing_recipe_ids_by_plan.get(plan.id, set()))
             queued_recipe_objects = set()
             sort_order = len(existing_recipe_ids)
             day_added = 0

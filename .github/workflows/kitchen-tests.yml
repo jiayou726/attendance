@@ -54,5 +54,11 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Initialize Supabase-compatible roles in disposable PostgreSQL
+        env:
+          PGPASSWORD: practice_test
+        run: |
+          psql -h localhost -U practice_test -d practice_test_db -c "CREATE ROLE anon NOLOGIN;"
+          psql -h localhost -U practice_test -d practice_test_db -c "CREATE ROLE authenticated NOLOGIN;"
       - name: Check private PostgreSQL recipe overlay and full menu import
         run: python -m pytest -q tests/test_practice_database.py -k postgres

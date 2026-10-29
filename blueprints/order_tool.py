@@ -2661,15 +2661,36 @@ def summary_import():
             if day_added:
                 imported_days += 1
 
-        # Flush only once for all new recipes and plans. In PostgreSQL this
-        # also obtains private negative recipe IDs from the workspace trigger.
+        # PostgreSQL INSTEAD OF INSERT views return generated IDs, but
+        # bulk-insert RETURNING order is not always correlated with ORM input
+        # objects. Always re-read durable IDs by unique business keys after
+        # the first flush; never use plan.id / recipe.id from these objects to
+        # link menu items or the dishes can end up assigned to wrong dates.
         db.session.flush()
-        db.session.add_all([
-            KitchenMenuPlanItem(
-                plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order
-            )
-            for plan, recipe, sort_order in pending_items
-        ])
+        if pending_items:
+            wanted_dates = {plan.service_date for plan, _, _ in pending_items}
+            wanted_names = {recipe.name for _, recipe, _ in pending_items}
+            plan_id_by_date = dict(db.session.query(
+                KitchenMenuPlan.service_date, KitchenMenuPlan.id,
+            ).filter(
+                KitchenMenuPlan.service_date.in_(wanted_dates),
+                KitchenMenuPlan.meal_type == "午餐",
+                KitchenMenuPlan.name == "中央菜單",
+            ).all())
+            recipe_id_by_name = dict(db.session.query(
+                KitchenRecipe.name, KitchenRecipe.id,
+            ).filter(KitchenRecipe.name.in_(wanted_names)).all())
+            if (len(plan_id_by_date) != len(wanted_dates)
+                    or len(recipe_id_by_name) != len(wanted_names)):
+                raise RuntimeError("Imported plan or recipe IDs could not be resolved")
+            db.session.add_all([
+                KitchenMenuPlanItem(
+                    plan_id=plan_id_by_date[plan.service_date],
+                    recipe_id=recipe_id_by_name[recipe.name],
+                    sort_order=sort_order,
+                )
+                for plan, recipe, sort_order in pending_items
+            ])
         db.session.commit()
     except Exception:
         db.session.rollback()

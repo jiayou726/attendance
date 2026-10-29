@@ -347,7 +347,4 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
         follow_redirects=True,
     )
     repeated_page = repeated.get_data(as_text=True)
-    assert "0 天新增 0 道菜" in repeated_page, [
-        line.strip()[:300] for line in repeated_page.splitlines()
-        if any(term in line for term in ("匯入", "資料庫", "失敗", "略過"))
-    ][:16]
+    assert "0 天新增 0 道菜" in repeated_page, repeated_page.partition('class="flash')[2][:1000]

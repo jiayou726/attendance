@@ -2682,7 +2682,12 @@ def summary_import():
             ).filter(KitchenRecipe.name.in_(wanted_names)).all())
             if (len(plan_id_by_date) != len(wanted_dates)
                     or len(recipe_id_by_name) != len(wanted_names)):
-                raise RuntimeError("Imported plan or recipe IDs could not be resolved")
+                raise RuntimeError(
+                    f"Imported key resolution incomplete: plans={len(plan_id_by_date)}/{len(wanted_dates)}, "
+                    f"recipes={len(recipe_id_by_name)}/{len(wanted_names)}, "
+                    f"missing_dates={list(wanted_dates - plan_id_by_date.keys())[:3]}, "
+                    f"missing_recipes={list(wanted_names - recipe_id_by_name.keys())[:3]}"
+                )
             db.session.add_all([
                 KitchenMenuPlanItem(
                     plan_id=plan_id_by_date[plan.service_date],

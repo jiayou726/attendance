@@ -345,6 +345,17 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
             assert len(set(plan_ids)) == 21, {
                 plan_id: plan_ids.count(plan_id) for plan_id in set(plan_ids)
             }
+            plan = KitchenMenuPlan.__table__
+            item = db.metadata.tables["kitchen_menu_plan_item"]
+            recipe = KitchenRecipe.__table__
+            links = connection.execute(
+                select(plan.c.service_date, recipe.c.name)
+                .select_from(plan.join(item, plan.c.id == item.c.plan_id)
+                                 .join(recipe, recipe.c.id == item.c.recipe_id))
+            ).all()
+            mismatched = [(str(day), name) for day, name in links
+                          if not name.endswith(str(day.day))]
+            assert not mismatched, mismatched[:30]
 
     repeated = client.post(
         "/admin/order-tool/summary/import",

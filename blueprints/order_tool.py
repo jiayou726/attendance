@@ -2593,12 +2593,6 @@ def summary_import():
             ).all():
                 existing_recipe_ids_by_plan[plan_id].add(recipe_id)
         all_recipes = KitchenRecipe.query.order_by(KitchenRecipe.id).all()
-        if current_app.testing and session.get("kitchen_practice"):
-            print("DEBUG_IMPORT_LOOKUP", "plans", [
-                (p.id, str(p.service_date), p.status) for p in existing_plans
-            ], "existing_by_plan", {
-                k: sorted(v) for k, v in existing_recipe_ids_by_plan.items()
-            }, "recipes", [(r.name, r.id) for r in all_recipes[:8]], flush=True)
         recipes_by_name, recipes_by_alias = _menu_recipe_indexes(all_recipes)
         added_items = 0
         existing_items = parsed["duplicate_count"]

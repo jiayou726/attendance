@@ -357,6 +357,8 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
                           if not name.endswith(str(day.day))]
             assert not mismatched, mismatched[:30]
 
+    with client.session_transaction() as cookie:
+        print("DEBUG_SESSION_REPEAT", {key: cookie.get(key) for key in ("kitchen_practice", "practice_account_id", "practice_workspace_key")}, flush=True)
     repeated = client.post(
         "/admin/order-tool/summary/import",
         data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},

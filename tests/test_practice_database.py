@@ -339,6 +339,12 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
             assert connection.execute(select(func.count()).select_from(
                 db.metadata.tables["kitchen_menu_plan_item"]
             )).scalar_one() == 126
+            plan_ids = connection.execute(select(
+                db.metadata.tables["kitchen_menu_plan_item"].c.plan_id
+            )).scalars().all()
+            assert len(set(plan_ids)) == 21, {
+                plan_id: plan_ids.count(plan_id) for plan_id in set(plan_ids)
+            }
 
     repeated = client.post(
         "/admin/order-tool/summary/import",

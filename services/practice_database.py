@@ -236,6 +236,11 @@ def _drop_workspace(connection, engine, workspace_key: str) -> None:
         connection.execute(text(
             f"DROP SCHEMA IF EXISTS {_quote(engine, workspace_key)} CASCADE"
         ))
+        # Execution-option engines share their underlying connection pool;
+        # remove the wrapper, but never dispose the formal database pool.
+        current_app.extensions.setdefault(
+            "practice_postgres_workspace_engines", {}
+        ).pop(workspace_key, None)
         return
     current_app.extensions.setdefault("practice_estimate_schema_checked", set()).discard(workspace_key)
     cached = _sqlite_engine_cache().pop(workspace_key, None)
@@ -442,7 +447,17 @@ def workspace_engine(account: dict | None = None):
     _ensure_workspace_estimate_columns(account)
     if _is_postgres(engine):
         schema = _assert_workspace_key(account["workspace_key"])
-        return engine.execution_options(schema_translate_map={None: schema})
+        # Keep the *same* OptionEngine identity throughout the request.
+        # SQLAlchemy Session keys transactional connections by bind identity:
+        # constructing a fresh execution_options() wrapper for each get_bind()
+        # creates independent connections. PostgreSQL reads then cannot see
+        # uncommitted menu plans / recipes flushed on a different connection.
+        cache = current_app.extensions.setdefault("practice_postgres_workspace_engines", {})
+        if schema not in cache:
+            cache[schema] = engine.execution_options(
+                schema_translate_map={None: schema}
+            )
+        return cache[schema]
     return _sqlite_account_engine(engine, account["workspace_key"])
 
 

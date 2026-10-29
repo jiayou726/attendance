@@ -1,4 +1,7 @@
 from io import BytesIO
+import os
+
+import pytest
 
 from openpyxl import Workbook
 
@@ -221,3 +224,144 @@ def _practice_menu_file():
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def _realistic_november_menu():
+    """Match the uploaded 中平 November template: offset date column,
+    six dish columns, and a separate ingredient-description row per day.
+    """
+    from datetime import date
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "中平115.11月"
+    sheet.append([None] * 16)
+    sheet.append([None, "日期", "星期", "主食", "主菜", "副菜", "副菜", "青菜", "湯品",
+                  "全穀雜糧類(份)", "豆魚蛋肉類(份)", "蔬菜類(份)", "油脂類(份)",
+                  "其他類(份)", "熱量(大卡)", "三章1Q"])
+    for day in range(1, 31):
+        d = date(2026, 11, day)
+        if d.weekday() >= 5:
+            continue
+        sheet.append([
+            None, datetime(2026, 11, day), "一" if d.weekday() == 0 else "大塊肉",
+            f"飯{day}", f"主菜{day}", f"副菜甲{day}", f"副菜乙{day}",
+            f"青菜{day}", f"湯{day}", 5.6, 2.2, 2, 2.2, None, 706, "V",
+        ])
+        sheet.append([None, None, None, None, "豬肉Q.洋蔥Q/燒",
+                      "豆腐.菇Q/煮", "玉米粒S/煮", None, "雞蛋Q"])
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def test_practice_import_month_template_is_complete_and_idempotent(tmp_path):
+    app = _app(tmp_path)
+    client = app.test_client()
+    _login(client, "完整月份匯入")
+    response = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "匯入完成" in page
+    assert "21 天新增 126 道菜" in page
+
+    with app.app_context():
+        assert KitchenMenuPlan.query.count() == 0  # Formal database stays untouched.
+        assert KitchenRecipe.query.count() == 0
+        engine = workspace_engine(list_accounts()[0])
+        with engine.connect() as connection:
+            assert connection.execute(select(func.count()).select_from(
+                KitchenMenuPlan.__table__
+            )).scalar_one() == 21
+            assert connection.execute(select(func.count()).select_from(
+                KitchenRecipe.__table__
+            )).scalar_one() == 126
+
+    again = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "0 天新增 0 道菜" in again.get_data(as_text=True)
+
+
+@pytest.mark.skipif(not os.environ.get("PRACTICE_POSTGRES_TEST_URL"),
+                    reason="Requires dedicated disposable PostgreSQL for integration tests")
+def test_practice_postgres_excel_import_uses_private_recipe_overlay():
+    # Never point this test at a shared or production database.
+    postgres_url = os.environ["PRACTICE_POSTGRES_TEST_URL"]
+    app = create_app({
+        "TESTING": True,
+        "SECRET_KEY": "postgres-practice-test-secret",
+        "SQLALCHEMY_DATABASE_URI": postgres_url,
+        "SQLALCHEMY_BINDS": {"practice": postgres_url},
+        "AUTO_CREATE_DB": True,
+        "KITCHEN_CSRF_ENABLED": False,
+        "PRACTICE_ACCOUNT_LIMIT": 20,
+        "PRACTICE_ACCOUNT_TTL_DAYS": 10,
+        "PRACTICE_ACCOUNTS_ENABLED": True,
+        "PRODUCTION": False,
+    })
+    with app.app_context():
+        db.session.add(KitchenRecipe(name="正式既有菜", category="主菜"))
+        db.session.commit()
+    client = app.test_client()
+    _login(client, "PostgreSQL 練習匯入")
+    response = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "21 天新增 126 道菜" in page
+
+    with app.app_context():
+        assert KitchenRecipe.query.count() == 1  # No formal recipes created.
+        assert KitchenMenuPlan.query.count() == 0
+        account = list_accounts()[0]
+        engine = workspace_engine(account)
+        with engine.connect() as connection:
+            private_recipes = connection.execute(select(KitchenRecipe.__table__)).mappings().all()
+            assert len(private_recipes) == 127
+            assert sum(row["id"] < 0 for row in private_recipes) == 126
+            assert connection.execute(select(func.count()).select_from(
+                KitchenMenuPlan.__table__
+            )).scalar_one() == 21
+            assert connection.execute(select(func.count()).select_from(
+                db.metadata.tables["kitchen_menu_plan_item"]
+            )).scalar_one() == 126
+            plan_ids = connection.execute(select(
+                db.metadata.tables["kitchen_menu_plan_item"].c.plan_id
+            )).scalars().all()
+            assert len(set(plan_ids)) == 21, {
+                plan_id: plan_ids.count(plan_id) for plan_id in set(plan_ids)
+            }
+            plan = KitchenMenuPlan.__table__
+            item = db.metadata.tables["kitchen_menu_plan_item"]
+            recipe = KitchenRecipe.__table__
+            links = connection.execute(
+                select(plan.c.service_date, recipe.c.name)
+                .select_from(plan.join(item, plan.c.id == item.c.plan_id)
+                                 .join(recipe, recipe.c.id == item.c.recipe_id))
+            ).all()
+            mismatched = [(str(day), name) for day, name in links
+                          if not name.endswith(str(day.day))]
+            assert not mismatched, mismatched[:30]
+
+    repeated = client.post(
+        "/admin/order-tool/summary/import",
+        data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    repeated_page = repeated.get_data(as_text=True)
+    assert "0 天新增 0 道菜" in repeated_page, repeated_page.partition('class="flash')[2][:1000]

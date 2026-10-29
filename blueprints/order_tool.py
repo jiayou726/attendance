@@ -2442,8 +2442,12 @@ def _parse_menu_date(value, inferred_year: int, inferred_month: int | None) -> d
 
 def _find_menu_header(sheet):
     best = None
-    for row_number in range(1, min(sheet.max_row, 30) + 1):
-        headers = [_menu_text(sheet.cell(row_number, column).value) for column in range(1, sheet.max_column + 1)]
+    # ReadOnlyWorksheet.cell() re-parses the sheet XML on every access.
+    # Stream header rows once instead of reopening the  Excel hundreds of times.
+    for row_number, row in enumerate(
+        sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 30), values_only=True), start=1
+    ):
+        headers = [_menu_text(value) for value in row]
         date_columns = [index + 1 for index, value in enumerate(headers) if "日期" in value]
         weekday_columns = [index + 1 for index, value in enumerate(headers) if "星期" in value or "週次" in value]
         dish_columns = [index + 1 for index, value in enumerate(headers) if _menu_category(value)]
@@ -2503,9 +2507,11 @@ def parse_menu_workbook(raw: bytes, filename: str, sheet_kind: str = "regular") 
                 current_category = detected
             column_categories[column] = current_category
 
-        for row_number in range(header_row + 1, sheet.max_row + 1):
+        # Stream row values: repeated .cell() lookups are especially expensive
+        # for real-world multi-week read-only Excel workbooks.
+        for row in sheet.iter_rows(min_row=header_row + 1, values_only=True):
             service_date = _parse_menu_date(
-                sheet.cell(row_number, date_column).value,
+                row[date_column - 1] if len(row) >= date_column else None,
                 inferred_year,
                 inferred_month,
             )
@@ -2513,7 +2519,7 @@ def parse_menu_workbook(raw: bytes, filename: str, sheet_kind: str = "regular") 
                 continue
             row_dishes = []
             for column in range(first_dish, last_dish + 1):
-                name = _menu_text(sheet.cell(row_number, column).value)
+                name = _menu_text(row[column - 1] if len(row) >= column else None)
                 if not name or name.startswith("="):
                     continue
                 row_dishes.append({"name": name[:120], "category": column_categories[column]})
@@ -2561,67 +2567,139 @@ def summary_import():
         flash(str(exc), "error")
         return redirect(url_for("order_tool.summary"))
 
-    all_recipes = KitchenRecipe.query.order_by(KitchenRecipe.id).all()
-    recipes_by_name, recipes_by_alias = _menu_recipe_indexes(all_recipes)
-    added_items = 0
-    existing_items = parsed["duplicate_count"]
-    created_recipes = 0
-    normalized_matches = 0
-    locked_days = 0
-    imported_days = 0
-    for day in parsed["days"]:
-        service_date = day["date"]
-        plan = KitchenMenuPlan.query.filter_by(
-            service_date=service_date, meal_type="午餐", name="中央菜單", status="draft"
-        ).order_by(KitchenMenuPlan.id).first()
-        if plan is None:
-            locked_plan = KitchenMenuPlan.query.filter_by(
-                service_date=service_date, meal_type="午餐", name="中央菜單"
-            ).first()
-            if locked_plan:
+    # The previous implementation flushed once per dish and per new day.
+    # A month of real menus may contain >100 dishes, causing hundreds of
+    # round trips to the production database and request timeouts.
+    # Resolve/collect everything first, then flush new plans and recipes
+    # together and create plan items in one final batch.
+    try:
+        days = parsed["days"]
+        existing_plans = KitchenMenuPlan.query.filter(
+            KitchenMenuPlan.service_date.in_([day["date"] for day in days]),
+            KitchenMenuPlan.meal_type == "午餐",
+            KitchenMenuPlan.name == "中央菜單",
+        ).order_by(KitchenMenuPlan.id).all()
+        plans_by_date = {plan.service_date: plan for plan in existing_plans}
+        # Load all existing links with a direct, explicit query rather than
+        # relying on the relationship collection in a translated PostgreSQL
+        # practice schema. That collection could appear partially populated
+        # on a second request and re-add dishes for most dates.
+        existing_recipe_ids_by_plan = defaultdict(set)
+        if existing_plans:
+            for plan_id, recipe_id in db.session.query(
+                KitchenMenuPlanItem.plan_id, KitchenMenuPlanItem.recipe_id
+            ).filter(
+                KitchenMenuPlanItem.plan_id.in_([plan.id for plan in existing_plans])
+            ).all():
+                existing_recipe_ids_by_plan[plan_id].add(recipe_id)
+        all_recipes = KitchenRecipe.query.order_by(KitchenRecipe.id).all()
+        recipes_by_name, recipes_by_alias = _menu_recipe_indexes(all_recipes)
+        added_items = 0
+        existing_items = parsed["duplicate_count"]
+        created_recipes = 0
+        normalized_matches = 0
+        locked_days = 0
+        imported_days = 0
+        pending_items = []
+
+        for day in days:
+            service_date = day["date"]
+            plan = plans_by_date.get(service_date)
+            if plan is not None and plan.status != "draft":
                 locked_days += 1
                 continue
-            plan = KitchenMenuPlan(
-                service_date=service_date,
-                meal_type="午餐",
-                name="中央菜單",
-                status="draft",
-            )
-            db.session.add(plan)
-            db.session.flush()
-        existing_recipe_ids = {item.recipe_id for item in plan.items}
-        day_added = 0
-        for dish in day["dishes"]:
-            recipe, cleaned_name = _resolve_imported_recipe(
-                dish["name"], recipes_by_name, recipes_by_alias
-            )
-            if recipe is None:
-                recipe = KitchenRecipe(
-                    name=cleaned_name,
-                    category=dish["category"] if dish["category"] in CATEGORIES else "其他",
-                    active=False,
+            if plan is None:
+                plan = KitchenMenuPlan(
+                    service_date=service_date,
+                    meal_type="午餐",
+                    name="中央菜單",
+                    status="draft",
                 )
-                db.session.add(recipe)
-                db.session.flush()
-                recipes_by_name[_menu_name_key(recipe.name)].append(recipe)
-                recipes_by_alias[_menu_alias_key(recipe.name)].append(recipe)
-                created_recipes += 1
-            elif recipe.name != cleaned_name:
-                normalized_matches += 1
-            if recipe.id in existing_recipe_ids:
-                existing_items += 1
-                continue
-            db.session.add(KitchenMenuPlanItem(
-                plan_id=plan.id,
-                recipe_id=recipe.id,
-                sort_order=len(existing_recipe_ids),
-            ))
-            existing_recipe_ids.add(recipe.id)
-            added_items += 1
-            day_added += 1
-        if day_added:
-            imported_days += 1
-    db.session.commit()
+                db.session.add(plan)
+                plans_by_date[service_date] = plan
+
+            existing_recipe_ids = set(existing_recipe_ids_by_plan.get(plan.id, set()))
+            queued_recipe_objects = set()
+            sort_order = len(existing_recipe_ids)
+            day_added = 0
+            for dish in day["dishes"]:
+                recipe, cleaned_name = _resolve_imported_recipe(
+                    dish["name"], recipes_by_name, recipes_by_alias
+                )
+                if recipe is None:
+                    recipe = KitchenRecipe(
+                        name=cleaned_name,
+                        category=dish["category"] if dish["category"] in CATEGORIES else "其他",
+                        active=False,
+                    )
+                    db.session.add(recipe)
+                    recipes_by_name[_menu_name_key(recipe.name)].append(recipe)
+                    recipes_by_alias[_menu_alias_key(recipe.name)].append(recipe)
+                    created_recipes += 1
+                elif recipe.name != cleaned_name:
+                    normalized_matches += 1
+
+                # Unsaved recipes have id=None, so deduplicate by object
+                # identity as well as by IDs already present in the plan.
+                if (recipe.id is not None and recipe.id in existing_recipe_ids
+                        or id(recipe) in queued_recipe_objects):
+                    existing_items += 1
+                    continue
+                queued_recipe_objects.add(id(recipe))
+                if recipe.id is not None:
+                    existing_recipe_ids.add(recipe.id)
+                pending_items.append((plan, recipe, sort_order))
+                sort_order += 1
+                added_items += 1
+                day_added += 1
+            if day_added:
+                imported_days += 1
+
+        # PostgreSQL INSTEAD OF INSERT views return generated IDs, but
+        # bulk-insert RETURNING order is not always correlated with ORM input
+        # objects. Always re-read durable IDs by unique business keys after
+        # the first flush; never use plan.id / recipe.id from these objects to
+        # link menu items or the dishes can end up assigned to wrong dates.
+        db.session.flush()
+        if pending_items:
+            wanted_dates = {plan.service_date for plan, _, _ in pending_items}
+            wanted_names = {recipe.name for _, recipe, _ in pending_items}
+            plan_id_by_date = dict(db.session.query(
+                KitchenMenuPlan.service_date, KitchenMenuPlan.id,
+            ).filter(
+                KitchenMenuPlan.service_date.in_(wanted_dates),
+                KitchenMenuPlan.meal_type == "午餐",
+                KitchenMenuPlan.name == "中央菜單",
+            ).all())
+            recipe_id_by_name = dict(db.session.query(
+                KitchenRecipe.name, KitchenRecipe.id,
+            ).filter(KitchenRecipe.name.in_(wanted_names)).all())
+            if (len(plan_id_by_date) != len(wanted_dates)
+                    or len(recipe_id_by_name) != len(wanted_names)):
+                raise RuntimeError(
+                    f"Imported key resolution incomplete: plans={len(plan_id_by_date)}/{len(wanted_dates)}, "
+                    f"recipes={len(recipe_id_by_name)}/{len(wanted_names)}, "
+                    f"missing_dates={list(wanted_dates - plan_id_by_date.keys())[:3]}, "
+                    f"missing_recipes={list(wanted_names - recipe_id_by_name.keys())[:3]}"
+                )
+            db.session.add_all([
+                KitchenMenuPlanItem(
+                    plan_id=plan_id_by_date[plan.service_date],
+                    recipe_id=recipe_id_by_name[recipe.name],
+                    sort_order=sort_order,
+                )
+                for plan, recipe, sort_order in pending_items
+            ])
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Menu Excel import failed; practice=%s, file=%s",
+            bool(session.get("kitchen_practice")),
+            upload.filename,
+        )
+        flash("菜單匯入失敗，資料已回復、未部分寫入。請聯絡管理者查看伺服器記錄。", "error")
+        return redirect(url_for("order_tool.summary"))
 
     first_day = parsed["days"][0]["date"]
     sheet_names = "、".join(parsed["sheet_names"])

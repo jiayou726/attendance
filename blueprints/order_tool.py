@@ -1141,7 +1141,13 @@ def plan_item_add(plan_id: int):
         return redirect(url_for("order_tool.plan_detail", plan_id=plan_id))
     if not KitchenMenuPlanItem.query.filter_by(plan_id=plan_id, recipe_id=recipe_id).first():
         max_order = max((x.sort_order for x in plan.items), default=-1)
-        db.session.add(KitchenMenuPlanItem(plan_id=plan_id, recipe_id=recipe_id, sort_order=max_order + 1))
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=plan_id, recipe_id=recipe_id, sort_order=max_order + 1,
+            ingredients_override_json=(
+                _central_recipe_overrides(plan.service_date, plan.meal_type).get(recipe_id)
+                if plan.name != "中央菜單" and not plan.name.endswith("素食菜單") else None
+            ),
+        ))
         db.session.commit()
         flash("菜色已加入。", "success")
     else:
@@ -1266,7 +1272,7 @@ def plan_copy(plan_id: int):
     db.session.add(copy)
     db.session.flush()
     for x in source.items:
-        db.session.add(KitchenMenuPlanItem(plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order))
+        db.session.add(KitchenMenuPlanItem(plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order, ingredients_override_json=x.ingredients_override_json))
     for x in source.assignments:
         db.session.add(KitchenMenuAssignment(plan_id=copy.id, school_id=x.school_id, headcount=x.headcount))
     db.session.commit()
@@ -2045,7 +2051,7 @@ def school_menu_copy_day():
     if any(row and row.service_status == "no_service" for row in source_assignments.values()):
         return {"message": "來源學校當天停餐，無法複製菜色。"}, 409
     selected = {
-        variant: [item.recipe_id for item in sorted(
+        variant: [(item.recipe_id, item.ingredients_override_json) for item in sorted(
             assignment.plan.items, key=lambda entry: entry.sort_order
         )] if assignment else []
         for variant, assignment in source_assignments.items()
@@ -2082,9 +2088,10 @@ def school_menu_copy_day():
             for old_item in list(plan.items):
                 db.session.delete(old_item)
             db.session.flush()
-            for order, recipe_id in enumerate(recipe_ids):
+            for order, (recipe_id, override_json) in enumerate(recipe_ids):
                 db.session.add(KitchenMenuPlanItem(
                     plan_id=plan.id, recipe_id=recipe_id, sort_order=order,
+                    ingredients_override_json=override_json,
                 ))
     db.session.commit()
     return {
@@ -2145,6 +2152,8 @@ def school_menu_save_day():
                     db.session.delete(assignment.plan)
                 return
             plan = _editable_school_plan(school, service_date, variant)
+            existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+            central_overrides = _central_recipe_overrides(service_date) if variant == "regular" else {}
             for item in list(plan.items):
                 db.session.delete(item)
             db.session.flush()
@@ -2153,7 +2162,10 @@ def school_menu_save_day():
             ).all()
             for sort_order, recipe in enumerate(recipes):
                 db.session.add(KitchenMenuPlanItem(
-                    plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order
+                    plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order,
+                    ingredients_override_json=(
+                        existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                    ),
                 ))
             row = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
             row.headcount = people
@@ -2197,6 +2209,8 @@ def school_menu_save_day():
     if plan.status != "draft":
         db.session.rollback()
         return {"message": "這一天已確認，無法修改。"}, 409
+    existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+    central_overrides = _central_recipe_overrides(service_date)
     for item in list(plan.items):
         db.session.delete(item)
     db.session.flush()
@@ -2208,6 +2222,9 @@ def school_menu_save_day():
             plan_id=plan.id,
             recipe_id=recipe.id,
             sort_order=sort_order,
+            ingredients_override_json=(
+                existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+            ),
         ))
     assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
     assignment.headcount = headcount
@@ -2259,6 +2276,8 @@ def school_menus_save():
         if plan.status != "draft":
             locked_days += 1
             continue
+        existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+        central_overrides = _central_recipe_overrides(service_date)
         for item in list(plan.items):
             db.session.delete(item)
         db.session.flush()
@@ -2270,6 +2289,9 @@ def school_menus_save():
                 plan_id=plan.id,
                 recipe_id=recipe.id,
                 sort_order=sort_order,
+                ingredients_override_json=(
+                    existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                ),
             ))
         assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
         assignment.headcount = headcount

@@ -3660,11 +3660,13 @@ def _daily_kitchen_sheet_data(service_date: date):
                 "small_bento": 0,
                 "school_counts": {},
                 "ingredient_versions": set(),
+                "ingredient_name_versions": set(),
             })
-            dish["ingredient_versions"].add(tuple(sorted(
+            effective_components = _menu_item_components(menu_item)
+            dish["ingredient_versions"].add(_bom_signature(effective_components))
+            dish["ingredient_name_versions"].add(tuple(sorted(
                 component.ingredient.name
-                for component in _menu_item_components(menu_item)
-                if component.ingredient
+                for component in effective_components if component.ingredient
             )))
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
@@ -3704,7 +3706,7 @@ def _daily_kitchen_sheet_data(service_date: date):
             if len(dish["ingredient_versions"]) > 1:
                 default_ingredients = "不同學校配方不同，請依菜色用量表分別備料"
             else:
-                default_ingredients = "、".join(next(iter(dish["ingredient_versions"]), ()))
+                default_ingredients = "、".join(next(iter(dish["ingredient_name_versions"]), ()))
             dish["ingredient_default"] = default_ingredients
             note = notes.get((variant, dish["recipe"].id))
             dish["ingredients_text"] = (

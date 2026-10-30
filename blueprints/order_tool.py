@@ -1376,12 +1376,15 @@ def _menu_item_components(item: KitchenMenuPlanItem):
         ingredient_id = _int(row.get("ingredient_id"), default=0) or 0
         ingredient = db.session.get(KitchenIngredient, ingredient_id)
         amount = _decimal(row.get("grams_per_person"), default=Decimal("0"))
-        if not ingredient or amount is None or amount <= 0:
+        if not ingredient or amount is None or amount < 0:
             continue
         components.append(SimpleNamespace(
             ingredient=ingredient, ingredient_id=ingredient_id,
-            grams_per_person=amount, quantity_status="manual",
-            source_note="本次菜單專用配方",
+            grams_per_person=amount,
+            quantity_status=(
+                "pending" if amount == 0 else row.get("quantity_status", "manual")
+            ),
+            source_note=row.get("source_note") or "本次菜單專用配方",
         ))
     return components
 
@@ -1396,7 +1399,15 @@ def _bom_signature(components) -> str:
 
 def _menu_item_override_payload(components) -> str:
     return json.dumps([
-        {"ingredient_id": row.ingredient_id, "grams_per_person": _trim_decimal(row.grams_per_person)}
+        {
+            "ingredient_id": row.ingredient_id,
+            "grams_per_person": _trim_decimal(row.grams_per_person),
+            "quantity_status": (
+                "pending" if (row.grams_per_person or Decimal("0")) <= 0
+                else getattr(row, "quantity_status", "manual")
+            ),
+            "source_note": getattr(row, "source_note", "本次菜單專用配方"),
+        }
         for row in sorted(components, key=lambda x: x.ingredient_id)
     ], ensure_ascii=False, separators=(",", ":"))
 

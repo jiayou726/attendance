@@ -8,6 +8,7 @@ Recipe BOM（每人 AP 數量，可用 g 或 個）→ 中央菜單 → 學校�
 from __future__ import annotations
 
 from copy import copy
+import hashlib
 import json
 import secrets
 import re
@@ -17,6 +18,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import (
     Blueprint,
@@ -1340,21 +1342,70 @@ _PLAN_REQUIREMENT_LOAD = (
 )
 
 
-def _usage_dish_groups(plans):
-    """Group a day's serving plans the same way 菜色用量表 does.
 
-    One row per meal variant and recipe. Headcount is the sum of every
-    school still serving that dish, so the default purchase quantity is
-    rounded once per dish rather than once per school.
-    """
+def _menu_item_components(item: KitchenMenuPlanItem):
+    """Use the menu-specific ingredient snapshot, or the shared master by default."""
+    if item.ingredients_override_json is None:
+        return item.recipe.ingredients
+    try:
+        rows = json.loads(item.ingredients_override_json)
+    except (TypeError, ValueError):
+        current_app.logger.warning("Invalid recipe override on menu item %s", item.id)
+        return item.recipe.ingredients
+    if not isinstance(rows, list):
+        return item.recipe.ingredients
+    components = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ingredient_id = _int(row.get("ingredient_id"), default=0) or 0
+        ingredient = db.session.get(KitchenIngredient, ingredient_id)
+        amount = _decimal(row.get("grams_per_person"), default=Decimal("0"))
+        if not ingredient or amount is None or amount <= 0:
+            continue
+        components.append(SimpleNamespace(
+            ingredient=ingredient, ingredient_id=ingredient_id,
+            grams_per_person=amount, quantity_status="manual",
+            source_note="本次菜單專用配方",
+        ))
+    return components
+
+
+def _bom_signature(components) -> str:
+    values = sorted(
+        (row.ingredient_id, _trim_decimal(row.grams_per_person))
+        for row in components
+    )
+    return json.dumps(values, separators=(",", ":"))
+
+
+def _menu_item_override_payload(components) -> str:
+    return json.dumps([
+        {"ingredient_id": row.ingredient_id, "grams_per_person": _trim_decimal(row.grams_per_person)}
+        for row in sorted(components, key=lambda x: x.ingredient_id)
+    ], ensure_ascii=False, separators=(",", ":"))
+
+
+def _central_recipe_overrides(service_date: date, meal_type: str = "午餐") -> dict[int, str]:
+    """Central daily recipe versions used when schools first adopt a dish."""
+    central = KitchenMenuPlan.query.filter_by(
+        service_date=service_date, meal_type=meal_type, name="中央菜單"
+    ).options(selectinload(KitchenMenuPlan.items)).first()
+    return {
+        item.recipe_id: item.ingredients_override_json
+        for item in central.items if item.ingredients_override_json is not None
+    } if central else {}
+
+
+def _usage_dish_groups(plans):
+    """Separate servings with different formulas even when dish names match."""
     grouped = {"regular": {}, "vegetarian": {}}
     for plan in plans:
         assignments = [
-            assignment
-            for assignment in plan.assignments
-            if assignment.service_status == "serving" and assignment.headcount > 0
+            row for row in plan.assignments
+            if row.service_status == "serving" and row.headcount > 0
         ]
-        people = sum(assignment.headcount for assignment in assignments)
+        people = sum(row.headcount for row in assignments)
         if people <= 0:
             continue
         variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
@@ -1362,16 +1413,20 @@ def _usage_dish_groups(plans):
             recipe = menu_item.recipe
             if recipe is None:
                 continue
-            dish = grouped[variant].setdefault(recipe.id, {
-                "recipe": recipe,
-                "headcount": 0,
-                "school_names": set(),
+            components = _menu_item_components(menu_item)
+            signature = _bom_signature(components)
+            key = (recipe.id, signature)
+            dish = grouped[variant].setdefault(key, {
+                "recipe": recipe, "headcount": 0, "school_names": set(),
+                "components_source": components,
+                "estimate_key": f"{variant}:{recipe.id}",
                 "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
             })
+            if signature != _bom_signature(recipe.ingredients):
+                digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+                dish["estimate_key"] = f"{variant}:{recipe.id}:local-{digest}"
             dish["headcount"] += people
-            dish["school_names"].update(
-                assignment.school.name for assignment in assignments
-            )
+            dish["school_names"].update(row.school.name for row in assignments)
     return grouped
 
 
@@ -1386,7 +1441,7 @@ def _usage_default_qty_from_plans(plans) -> dict[int, Decimal]:
     totals: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
     for dishes in _usage_dish_groups(plans).values():
         for dish in dishes.values():
-            for component in dish["recipe"].ingredients:
+            for component in dish["components_source"]:
                 ingredient = component.ingredient
                 if ingredient is None:
                     continue
@@ -1425,7 +1480,7 @@ def _requirements_from_plans(plans_on_day):
             recipe = menu_item.recipe
             if not recipe:
                 continue
-            for component in recipe.ingredients:
+            for component in _menu_item_components(menu_item):
                 ing = component.ingredient
                 if not ing or (component.grams_per_person or Decimal("0")) <= 0:
                     continue
@@ -1505,7 +1560,7 @@ def _summary_data(service_date: date):
         if not any(x.service_status == "serving" and x.headcount > 0 for x in plan.assignments):
             continue
         for item in plan.items:
-            for component in item.recipe.ingredients:
+            for component in _menu_item_components(item):
                 if (component.grams_per_person or Decimal("0")) > 0:
                     continue
                 key = (item.recipe_id, component.ingredient_id)
@@ -3367,14 +3422,14 @@ def _production_sheet_data(service_date: date):
     for variant, dishes in grouped.items():
         for dish in sorted(dishes.values(), key=lambda row: row["sort_key"]):
             components = []
-            for component in dish["recipe"].ingredients:
+            for component in dish["components_source"]:
                 ingredient = component.ingredient
                 per_person = component.grams_per_person or Decimal("0")
                 base_amount = per_person * dish["headcount"]
                 divisor = ingredient.grams_per_purchase_unit or Decimal("0")
                 has_conversion = divisor > 0
                 purchase_item = purchase_items.get(ingredient.id)
-                estimate_key = f"{variant}:{dish['recipe'].id}"
+                estimate_key = dish["estimate_key"]
                 default_qty = _round_estimate(base_amount / divisor) if has_conversion else Decimal("0")
                 estimated_qty = (
                     item_overrides.get(purchase_item.id, {}).get(estimate_key, default_qty)
@@ -4133,7 +4188,7 @@ def procurement():
             continue
         for menu_item in plan.items:
             if any(component.quantity_status == "pending" or (component.grams_per_person or 0) <= 0
-                   for component in menu_item.recipe.ingredients):
+                   for component in _menu_item_components(menu_item)):
                 pending_recipes.add(menu_item.recipe.name)
     school_headcounts = defaultdict(int)
     for plan in plans:

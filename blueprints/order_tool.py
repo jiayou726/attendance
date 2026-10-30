@@ -3659,7 +3659,13 @@ def _daily_kitchen_sheet_data(service_date: date):
                 "bento": 0,
                 "small_bento": 0,
                 "school_counts": {},
+                "ingredient_versions": set(),
             })
+            dish["ingredient_versions"].add(tuple(sorted(
+                component.ingredient.name
+                for component in _menu_item_components(menu_item)
+                if component.ingredient
+            )))
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
                     CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
@@ -3695,7 +3701,11 @@ def _daily_kitchen_sheet_data(service_date: date):
                 dish["combo"] += transferred
             # Keep the live menu-derived counts separately from any deliberate edits.
             dish["auto_counts"] = {field: dish[field] for field in _DAILY_COUNT_FIELDS}
-            default_ingredients = _recipe_ingredient_names(dish["recipe"])
+            if len(dish["ingredient_versions"]) > 1:
+                default_ingredients = "不同學校配方不同，請依菜色用量表分別備料"
+            else:
+                default_ingredients = "、".join(next(iter(dish["ingredient_versions"]), ()))
+            dish["ingredient_default"] = default_ingredients
             note = notes.get((variant, dish["recipe"].id))
             dish["ingredients_text"] = (
                 note.ingredients_text if note and note.ingredients_text else default_ingredients
@@ -3823,7 +3833,7 @@ def daily_kitchen_sheet():
 
             if ingredients_field in request.form:
                 ingredients_text = request.form.get(ingredients_field, "").strip()[:2000]
-                note.ingredients_text = ingredients_text or _recipe_ingredient_names(dish["recipe"])
+                note.ingredients_text = ingredients_text or dish["ingredient_default"]
 
             overrides = _daily_count_overrides(note)
             if reset_field in request.form:

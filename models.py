@@ -232,6 +232,9 @@ class KitchenMenuPlanItem(db.Model):
         nullable=False,
     )
     sort_order = db.Column(db.Integer, nullable=False, default=0)
+    # NULL uses the shared master BOM. A JSON array is this menu item's
+    # independent BOM snapshot; modifying it never edits KitchenRecipeIngredient.
+    ingredients_override_json = db.Column(db.Text, nullable=True)
 
     plan = db.relationship("KitchenMenuPlan", back_populates="items")
     recipe = db.relationship("KitchenRecipe")

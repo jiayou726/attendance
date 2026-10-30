@@ -2975,7 +2975,8 @@ def _generate_date_orders(
     if not ingredient_rows:
         for old_order in existing_orders:
             has_manual_items = any(
-                (item.source_type or "menu") == "manual" for item in old_order.items
+                (item.source_type or "menu") == "manual" or item.manual_override or item.ordered
+                for item in old_order.items
             )
             if old_order.status == "draft" and not has_manual_items:
                 db.session.delete(old_order)
@@ -3088,7 +3089,7 @@ def _generate_date_orders(
         db.session.flush()
         sheets = _production_sheet_data(service_date)
         for item in active_estimates:
-            if item not in db.session.deleted and not item.ordered:
+            if item not in db.session.deleted and not item.ordered and not item.manual_override:
                 total = _production_estimate_total(item, sheets)
                 next_qty = total + item.dish_adjustment_qty
                 if next_qty < 0:
@@ -3166,7 +3167,13 @@ def _refresh_stale_draft_procurement(service_date: date) -> None:
         for order in orders for item in order.items
         if (item.source_type or "menu") == "menu"
     }
-    changed = set(expected) != set(existing) or any(
+    # Intentionally retained ordered or manually overridden lines with removed
+    # recipes must not trigger a pointless resync on every subsequent GET.
+    removable = {
+        ingredient_id for ingredient_id, item in existing.items()
+        if ingredient_id not in expected and not item.ordered and not item.manual_override
+    }
+    changed = bool(set(expected) - set(existing) or removable) or any(
         item.required_grams != expected[ingredient_id]["required_amount"]
         for ingredient_id, item in existing.items()
         if ingredient_id in expected
@@ -4086,6 +4093,7 @@ def _write_production_export_sheet(sheet, service_date: date, variant_label: str
 @order_bp.get("/summary/production-sheet.xlsx")
 def production_sheet_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     sheets = _production_sheet_data(service_date)
     workbook = Workbook()
     workbook.calculation.calcMode = "auto"

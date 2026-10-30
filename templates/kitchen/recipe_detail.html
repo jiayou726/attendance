@@ -2,6 +2,7 @@
 {% block title %}{{ recipe.name }}{% endblock %}
 {% block content %}
 <script id="ingredient-search-data" type="application/json">{{ ingredient_options|tojson }}</script>
+<div class="notice">注意：這裡是「共用標準配方」，修改後所有未設定專用配方的菜單都會受到影響。只想調整某一天，請回「每週菜單總表」點該天的菜名。</div>
 <div class="top">
   <div><h1>{{ recipe.name }}</h1><div class="muted">每人 AP 採購配方；食材可各自使用 g/人 或 個/人。打菜量 {{ recipe.serving_output_g if recipe.serving_output_g is not none else '-' }} g/人。</div>
     <form class="recipe-category-form no-print" method="post" action="{{ url_for('order_tool.recipe_category_update', recipe_id=recipe.id) }}">

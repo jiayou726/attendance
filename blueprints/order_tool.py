@@ -3065,7 +3065,8 @@ def _generate_date_orders(
             item.purchase_unit_snapshot = ing.purchase_unit
             item.grams_per_purchase_unit_snapshot = units_per_purchase
             item.recommended_order_qty = recommended
-            if not item.manual_override:
+            # Once ordered or manually adjusted, preserve the actual called quantity.
+            if not item.manual_override and not item.ordered:
                 item.actual_order_qty = recommended
                 item.package_qty = package_qty
                 item.package_unit = conversion_rule["package_unit"] if conversion_rule else None
@@ -3074,7 +3075,7 @@ def _generate_date_orders(
                 item.amount = item.actual_order_qty * item.unit_price_snapshot
 
     for ingredient_id, item in existing_items.items():
-        if ingredient_id not in seen_ingredient_ids:
+        if ingredient_id not in seen_ingredient_ids and not item.manual_override and not item.ordered:
             db.session.delete(item)
 
     for old_order in existing_orders:
@@ -3087,7 +3088,7 @@ def _generate_date_orders(
         db.session.flush()
         sheets = _production_sheet_data(service_date)
         for item in active_estimates:
-            if item not in db.session.deleted:
+            if item not in db.session.deleted and not item.ordered:
                 total = _production_estimate_total(item, sheets)
                 next_qty = total + item.dish_adjustment_qty
                 if next_qty < 0:
@@ -3139,6 +3140,39 @@ def _procurement_export_sort_key(row, service_date: date):
         delivery_slot,
         _purchase_item_sort_key(item),
     )
+
+
+def _refresh_stale_draft_procurement(service_date: date) -> None:
+    """Refresh an existing draft's menu requirements; never create an order on GET.
+
+    Draft lines are snapshots, so a later school-menu edit makes their raw
+    requirements stale. Only recalculate when changed, and preserve ordered
+    lines and manually overridden actual purchase quantities.
+    """
+    orders = (
+        KitchenPurchaseOrder.query.filter_by(service_date=service_date)
+        .options(selectinload(KitchenPurchaseOrder.items))
+        .all()
+    )
+    if not orders or any(order.status != "draft" for order in orders):
+        return
+    requirements = _requirements_for_date(service_date)
+    expected = {
+        data["ingredient"].id: data
+        for supplier_rows in requirements.values() for data in supplier_rows.values()
+    }
+    existing = {
+        item.ingredient_id: item
+        for order in orders for item in order.items
+        if (item.source_type or "menu") == "menu"
+    }
+    changed = set(expected) != set(existing) or any(
+        item.required_grams != expected[ingredient_id]["required_amount"]
+        for ingredient_id, item in existing.items()
+        if ingredient_id in expected
+    )
+    if changed:
+        _generate_date_orders(service_date, requirements=requirements, existing_orders=orders)
 
 
 def _procurement_rows(service_date: date):
@@ -3763,6 +3797,7 @@ def _production_nav_state():
 @order_bp.get("/summary/production-sheet")
 def production_sheet():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     variant = request.args.get("variant", "regular")
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
@@ -4075,6 +4110,7 @@ def production_sheet_export():
 @order_bp.get("/summary/procurement")
 def procurement():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     rows = _procurement_rows(service_date)
     suppliers = KitchenSupplier.query.filter_by(active=True).order_by(KitchenSupplier.name).all()
     schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
@@ -4275,6 +4311,7 @@ def procurement_manual_item_create():
 @order_bp.get("/summary/procurement.xlsx")
 def procurement_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     rows = sorted(
         _procurement_rows(service_date),
         key=lambda row: _procurement_export_sort_key(row, service_date),

@@ -1,0 +1,97 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}{{ item.recipe.name }}｜本次菜單配方{% endblock %}
+{% block content %}
+<section class="summary-week-head">
+  <div>
+    <div class="eyebrow">本次菜單專用配方</div>
+    <h1>{{ item.recipe.name }}</h1>
+    <p class="muted">{{ plan.service_date.strftime('%Y/%m/%d') }}・{{ plan.meal_type }}・{{ plan.name }}</p>
+    <p class="muted">這裡修改只影響此張菜單，不會改掉菜色主檔，也不會改到其他日期。若是當日中央菜單，尚未另外調整配方的葷食學校會沿用這次修改。</p>
+  </div>
+  <nav class="week-switcher">
+    <a class="btn secondary" href="{{ url_for('order_tool.summary', week=week_start.isoformat()) }}">← 回每週菜單總表</a>
+    <a class="btn secondary" href="{{ url_for('order_tool.plan_detail', plan_id=plan.id) }}">查看此張菜單</a>
+  </nav>
+</section>
+{% if locked %}
+<div class="notice">菜單或當日採購已確認，因此目前只能查看配方，不能修改。</div>
+{% elif item.ingredients_override_json is not none %}
+<div class="notice">目前使用「本次菜單專用配方」，與共用標準配方獨立。可按下方按鈕恢復共用標準配方。</div>
+{% else %}
+<div class="notice">目前沿用共用標準配方。修改任何食材或克數後，會為這次菜單建立自己的配方，不會影響其他日期。</div>
+{% endif %}
+<div class="grid">
+  <section class="card span-8">
+    <h2>這次菜單使用的食材</h2>
+    {% if components %}
+    <div class="table-scroll"><table>
+      <thead><tr><th>食材</th><th>每人用量</th><th>來源</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for component in components %}
+      <tr>
+        <td>{{ component.ingredient.name }}</td>
+        <td>
+          {% if not locked %}
+          <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" class="row center-y">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="save">
+            <input type="hidden" name="ingredient_id" value="{{ component.ingredient_id }}">
+            <input style="max-width:120px" name="grams_per_person" type="number" min="0.001" step="0.001" value="{{ trim_decimal(component.grams_per_person) }}" required>
+            <span>{{ component.ingredient.base_unit or 'g' }}/人</span>
+            <button class="btn secondary" type="submit">更新本次</button>
+          </form>
+          {% else %}
+          {{ trim_decimal(component.grams_per_person) }} {{ component.ingredient.base_unit or 'g' }}/人
+          {% endif %}
+        </td>
+        <td>{{ '本次專用' if item.ingredients_override_json is not none else '標準配方' }}</td>
+        <td>
+          {% if not locked %}
+          <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" onsubmit="return confirm('只從這次菜單移除這項食材？')">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="ingredient_id" value="{{ component.ingredient_id }}">
+            <button class="btn danger" type="submit">移除本次</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted">本次菜單尚未設定食材。</p>
+    {% endif %}
+    <p class="muted">每人 g 類生料合計：{{ trim_decimal(total_g) }} g</p>
+    {% if item.ingredients_override_json is not none and not locked %}
+    <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" onsubmit="return confirm('確定清除本次菜單的特殊食材和克數，恢復共用標準配方？')">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="reset">
+      <button class="btn secondary" type="submit">恢復共用標準配方</button>
+    </form>
+    {% endif %}
+  </section>
+  <section class="card span-4">
+    <h2>加入／更換本次食材</h2>
+    {% if not locked and ingredients %}
+    <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" class="main-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save">
+      <div class="field"><label>食材</label>
+        <select name="ingredient_id" required>
+          <option value="">請選擇食材</option>
+          {% for ingredient in ingredients %}
+          <option value="{{ ingredient.id }}">{{ ingredient.name }}（{{ ingredient.base_unit or 'g' }}/人）</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>每人用量</label>
+        <input type="number" name="grams_per_person" min="0.001" step="0.001" required placeholder="例如 65">
+      </div>
+      <button class="btn ok" type="submit">儲存到本次菜單</button>
+      <p class="muted">如果選到已存在的食材，只會更新這次的克數；不會重複新增食材或修改共用配方。</p>
+    </form>
+    {% else %}<p class="muted">此菜單目前不能編輯。</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

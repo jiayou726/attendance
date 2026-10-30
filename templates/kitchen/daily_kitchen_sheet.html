@@ -5,7 +5,7 @@
   <div>
     <div class="eyebrow">單日出餐</div>
     <h1>每日廚房表格</h1>
-    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　葷食班級數會從學校清單自動帶入，素食不自動帶入；當天仍可修改；食材備註與出餐數字也會自動儲存。</div>
+    <div class="muted">{{ service_date.strftime('%Y/%m/%d') }}　葷食班級數會從學校清單自動帶入，素食不自動帶入；當天仍可修改；未調整的出餐數會跟著各校菜單更新；只儲存你實際修改的欄位。舊版已存的人數會先保留，可逐道按「恢復依菜單計算」。</div>
   </div>
   <nav class="week-switcher" aria-label="切換日期">
     <a class="btn secondary" href="{{ url_for('order_tool.daily_kitchen_sheet', date=previous_date.isoformat()) }}">← 前一天</a>
@@ -38,12 +38,12 @@
       <tbody>
       {% for dish in sheets[variant] %}
       <tr data-daily-count-row>
-        <td><span class="dish-category">{{ dish.recipe.category or '其他' }}</span><b>{{ dish.recipe.name }}</b></td>
+        <td><span class="dish-category">{{ dish.recipe.category or '其他' }}</span><b>{{ dish.recipe.name }}</b><div><small class="muted" data-daily-count-mode>{% if dish.manual_count_fields %}人數有保留的人工／舊版數字{% else %}人數跟隨菜單{% endif %}</small></div><button class="btn secondary" type="button" data-daily-reset-row {% if not dish.manual_count_fields %}hidden{% endif %}>恢復依菜單計算</button></td>
         <td><textarea data-daily-save-field name="ingredients_{{ variant }}_{{ dish.recipe.id }}" rows="2" maxlength="2000" placeholder="例：{{ dish.ingredients_text }}（20K）">{{ dish.ingredients_text }}</textarea>{% if not dish.ingredients_text %}<small class="muted">尚未設定食材，不影響班級數與出餐數字自動儲存。</small>{% endif %}</td>
-        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="combo_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.combo }}" required aria-label="{{ dish.recipe.name }}合菜數量"></td>
+        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="combo_{{ variant }}_{{ dish.recipe.id }}" data-daily-auto-count="{{ dish.auto_counts.combo }}" type="number" min="0" step="1" value="{{ dish.combo }}" required aria-label="{{ dish.recipe.name }}合菜數量"></td>
         <td class="daily-class-count"><ul class="daily-school-class-list">{% for school in dish.school_rows %}<li><div><b>{{ school.name }}</b><span>{{ school.headcount }} 人</span></div><label><span>班級數</span><input class="daily-count-input" data-daily-class-count data-daily-save-field name="class_count_{{ variant }}_{{ dish.recipe.id }}_{{ school.id }}" type="number" min="0" step="1" value="{{ school.class_count if school.class_count is not none else '' }}" aria-label="{{ dish.recipe.name }}－{{ school.name }}班級數"></label></li>{% endfor %}<li class="daily-class-total"><b>總班級數</b><strong data-daily-class-total>{{ dish.class_count_total }}</strong></li></ul></td>
-        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="bento_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.bento }}" required aria-label="{{ dish.recipe.name }}便當數量"></td>
-        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="small_bento_{{ variant }}_{{ dish.recipe.id }}" type="number" min="0" step="1" value="{{ dish.small_bento }}" required aria-label="{{ dish.recipe.name }}小便當數量"></td>
+        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="bento_{{ variant }}_{{ dish.recipe.id }}" data-daily-auto-count="{{ dish.auto_counts.bento }}" type="number" min="0" step="1" value="{{ dish.bento }}" required aria-label="{{ dish.recipe.name }}便當數量"></td>
+        <td><input class="daily-count-input" data-daily-count data-daily-save-field name="small_bento_{{ variant }}_{{ dish.recipe.id }}" data-daily-auto-count="{{ dish.auto_counts.small_bento }}" type="number" min="0" step="1" value="{{ dish.small_bento }}" required aria-label="{{ dish.recipe.name }}小便當數量"></td>
         <td><b data-daily-total>{{ dish.total }}</b></td>
       </tr>
       {% endfor %}

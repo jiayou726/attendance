@@ -267,6 +267,10 @@ class KitchenDailyDishNote(db.Model):
     class_count = db.Column(db.Integer, nullable=True)
     bento_count = db.Column(db.Integer, nullable=True)
     small_bento_count = db.Column(db.Integer, nullable=True)
+    # NULL = legacy row: its saved counts may be deliberate adjustments.
+    # JSON list = exactly the fields deliberately overridden by a user.
+    # Empty list means all serving counts always follow the school menus.
+    count_override_fields = db.Column(db.Text, nullable=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     recipe = db.relationship("KitchenRecipe")

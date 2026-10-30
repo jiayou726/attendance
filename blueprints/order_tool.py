@@ -139,6 +139,7 @@ def _template_helpers():
         "status_label": _status_label,
         "order_total": _order_total,
         "recipe_total_g": _recipe_total_g,
+        "menu_item_total_g": _menu_item_total_g,
         "component_cost": _component_cost,
         "trim_decimal": _trim_decimal,
         "base_unit_label": _base_unit_label,
@@ -1347,6 +1348,14 @@ _PLAN_REQUIREMENT_LOAD = (
     .selectinload(KitchenIngredient.supplier),
 )
 
+
+
+def _menu_item_total_g(item: KitchenMenuPlanItem) -> Decimal:
+    return sum(
+        (row.grams_per_person or Decimal("0"))
+        for row in _menu_item_components(item)
+        if row.ingredient and (row.ingredient.base_unit or "g") == "g"
+    )
 
 
 def _menu_item_components(item: KitchenMenuPlanItem):

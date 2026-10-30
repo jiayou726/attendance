@@ -863,11 +863,13 @@
     const saveState = dailyKitchenForm.querySelector('[data-daily-kitchen-save-state]');
     const fields = [...dailyKitchenForm.querySelectorAll('[data-daily-save-field]')];
     const numericFields = fields.filter((field) => field.matches('input[type="number"]'));
+    const dirty = new Map();
     let saveTimer = null;
     let saveChain = Promise.resolve();
-    let lastSaved = new URLSearchParams(new FormData(dailyKitchenForm)).toString();
+    let pendingSaves = 0;
 
     dailyKitchenForm.addEventListener('submit', (event) => event.preventDefault());
+
     const save = () => {
       window.clearTimeout(saveTimer);
       saveTimer = null;
@@ -875,13 +877,16 @@
         if (saveState) saveState.textContent = '請修正數字';
         return;
       }
-      const body = new URLSearchParams(new FormData(dailyKitchenForm));
-      const serialized = body.toString();
-      if (serialized === lastSaved) {
-        if (saveState) saveState.textContent = '已儲存';
-        return;
-      }
+      if (!dirty.size) return;
+      const changes = new Map(dirty);
+      dirty.clear();
+      const body = new URLSearchParams();
+      body.set('_csrf_token', dailyKitchenForm.querySelector('[name="_csrf_token"]')?.value || '');
+      body.set('date', dailyKitchenForm.querySelector('[name="date"]')?.value || '');
+      changes.forEach((value, name) => body.set(name, value));
       if (saveState) saveState.textContent = '儲存中…';
+      pendingSaves += 1;
+
       const operation = saveChain.then(async () => {
         const response = await fetch(dailyKitchenForm.action, {
           method: 'POST',
@@ -891,12 +896,18 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.message || '儲存失敗');
-        lastSaved = serialized;
-        if (saveState) saveState.textContent = data.message || '已儲存';
+        pendingSaves -= 1;
+        if (!pendingSaves && !dirty.size && saveState) {
+          saveState.textContent = data.message || '已儲存';
+        }
       });
       saveChain = operation.catch((error) => {
-        const message = error.message || '請重新整理後再試';
-        if (saveState) saveState.textContent = `儲存失敗：${message}`;
+        pendingSaves -= 1;
+        // Requeue failed changes, without overwriting newer input.
+        changes.forEach((value, name) => {
+          if (!dirty.has(name)) dirty.set(name, value);
+        });
+        if (saveState) saveState.textContent = `儲存失敗：${error.message || '請重新整理後再試'}`;
       });
     };
     const scheduleSave = () => {
@@ -904,9 +915,47 @@
       window.clearTimeout(saveTimer);
       saveTimer = window.setTimeout(save, 400);
     };
+    const markChanged = (field) => {
+      dirty.set(field.name, field.value);
+      if (field.hasAttribute('data-daily-count')) {
+        const row = field.closest('[data-daily-count-row]');
+        const resetButton = row?.querySelector('[data-daily-reset-row]');
+        const status = row?.querySelector('[data-daily-count-mode]');
+        if (resetButton) resetButton.hidden = false;
+        if (status) status.textContent = '人數已調整（可恢復依菜單計算）';
+      }
+    };
     fields.forEach((field) => {
-      field.addEventListener('input', scheduleSave);
-      field.addEventListener('change', save);
+      field.addEventListener('input', () => {
+        markChanged(field);
+        scheduleSave();
+      });
+      field.addEventListener('change', () => {
+        markChanged(field);
+        save();
+      });
+    });
+    dailyKitchenForm.querySelectorAll('[data-daily-reset-row]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const row = button.closest('[data-daily-count-row]');
+        if (!row) return;
+        const counts = [...row.querySelectorAll('[data-daily-auto-count]')];
+        if (!counts.length) return;
+        counts.forEach((field) => {
+          field.value = field.dataset.dailyAutoCount;
+          // Remove any pending manual change for the same field.
+          dirty.delete(field.name);
+          field.dispatchEvent(new Event('input', { bubbles: false }));
+          dirty.delete(field.name);
+        });
+        const sample = counts[0].name;
+        const suffix = sample.replace(/^(combo|bento|small_bento)_/, '');
+        dirty.set(`reset_counts_${suffix}`, '1');
+        const status = row.querySelector('[data-daily-count-mode]');
+        if (status) status.textContent = '人數跟隨菜單';
+        button.hidden = true;
+        save();
+      });
     });
   }
 

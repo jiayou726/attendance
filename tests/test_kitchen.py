@@ -878,7 +878,9 @@ def test_daily_kitchen_sheet_counts_saves_notes_and_exports(app, authed_client):
         ).all()
         regular_note = next(note for note in notes if note.variant == "regular")
         assert regular_note.class_count == 49
-        assert '"' + str(school_ids["新勢"]) + '": 10' in regular_note.school_class_counts
+        # Unedited class defaults are no longer frozen by the unrelated note save.
+        assert str(school_ids["新勢"]) not in __import__("json").loads(regular_note.school_class_counts)
+        assert set(__import__("json").loads(regular_note.count_override_fields)) == {"combo", "bento", "small_bento"}
 
     exported = authed_client.get(
         "/admin/order-tool/summary/daily-kitchen-sheet.xlsx?date=2026-08-13"
@@ -2643,3 +2645,177 @@ def test_usage_sheet_is_the_step_before_purchasing(app, authed_client):
     assert "回 AI 菜單" in tags_body
     assert "建議" in tags_body
     assert "ai_menu_index" not in tags_body
+
+
+def test_daily_kitchen_unedited_counts_follow_menu_after_note_autosave(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        school = db.session.get(KitchenSchool, ids["school"])
+        school.default_class_count = 5
+        vegetables = KitchenRecipe(name="產銷履歷蔬菜測試", category="青菜")
+        db.session.add(vegetables)
+        db.session.flush()
+        plan = KitchenMenuPlan(service_date=TEST_DAY, meal_type="午餐", name="內小菜單")
+        db.session.add(plan)
+        db.session.flush()
+        for index, recipe_id in enumerate((ids["recipe"], vegetables.id)):
+            db.session.add(KitchenMenuPlanItem(
+                plan_id=plan.id, recipe_id=recipe_id, sort_order=index,
+            ))
+        assignment = KitchenMenuAssignment(
+            plan_id=plan.id, school_id=ids["school"], headcount=40,
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        vegetable_id = vegetables.id
+        assignment_id = assignment.id
+
+    original = order_tool_module._daily_count_overrides(None)
+    assert original == set()
+    # Editing ingredients or the class count must not save the current meal counts.
+    response = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={
+            "date": TEST_DAY.isoformat(),
+            f"ingredients_regular_{ids['recipe']}": "骨腿丁（新備註）",
+            f"class_count_regular_{ids['recipe']}_{ids['school']}": "6",
+        },
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert response.status_code == 200
+    with app.app_context():
+        note = KitchenDailyDishNote.query.filter_by(
+            service_date=TEST_DAY, variant="regular", recipe_id=ids["recipe"],
+        ).one()
+        assert (note.combo_count, note.bento_count, note.small_bento_count) == (None, None, None)
+        assert note.count_override_fields == "[]"
+        db.session.get(KitchenMenuAssignment, assignment_id).headcount = 58
+        db.session.commit()
+        dishes = order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"]
+        by_id = {dish["recipe"].id: dish for dish in dishes}
+        assert by_id[ids["recipe"]]["total"] == 58
+        assert by_id[vegetable_id]["total"] == 58
+        assert by_id[ids["recipe"]]["class_count_total"] == 6
+
+    # Explicitly adjusting one count affects only that dish and that category.
+    adjusted = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={"date": TEST_DAY.isoformat(), f"combo_regular_{ids['recipe']}": "61"},
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert adjusted.status_code == 200
+    with app.app_context():
+        db.session.get(KitchenMenuAssignment, assignment_id).headcount = 63
+        db.session.commit()
+        dishes = order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"]
+        by_id = {dish["recipe"].id: dish for dish in dishes}
+        assert by_id[ids["recipe"]]["combo"] == 61
+        assert by_id[vegetable_id]["combo"] == 63
+        assert by_id[ids["recipe"]]["manual_count_fields"] == {"combo"}
+
+    reset = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={"date": TEST_DAY.isoformat(), f"reset_counts_regular_{ids['recipe']}": "1"},
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert reset.status_code == 200
+    with app.app_context():
+        note = KitchenDailyDishNote.query.filter_by(
+            service_date=TEST_DAY, variant="regular", recipe_id=ids["recipe"],
+        ).one()
+        assert note.combo_count is None
+        assert note.count_override_fields == "[]"
+        rice = next(dish for dish in order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"]
+                    if dish["recipe"].id == ids["recipe"])
+        assert rice["combo"] == 63
+        assert rice["manual_count_fields"] == set()
+
+
+def test_daily_kitchen_legacy_counts_untouched_until_explicit_reset(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=40)
+    with app.app_context():
+        db.session.add(KitchenDailyDishNote(
+            service_date=TEST_DAY, variant="regular", recipe_id=ids["recipe"],
+            ingredients_text="舊備註",
+            combo_count=35, bento_count=0, small_bento_count=0,
+            # NULL marks legacy data whose actual manual-edit intent is unknown.
+            count_override_fields=None,
+        ))
+        db.session.commit()
+
+    # Changing unrelated notes cannot convert or silently overwrite legacy counts.
+    response = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={"date": TEST_DAY.isoformat(), f"ingredients_regular_{ids['recipe']}": "新備註"},
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert response.status_code == 200
+    with app.app_context():
+        dish = order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"][0]
+        assert dish["combo"] == 35
+        note = KitchenDailyDishNote.query.filter_by(
+            service_date=TEST_DAY, variant="regular", recipe_id=ids["recipe"],
+        ).one()
+        assert set(__import__("json").loads(note.count_override_fields)) == {
+            "combo", "bento", "small_bento"
+        }
+    page = authed_client.get(
+        f"/admin/order-tool/summary/daily-kitchen-sheet?date={TEST_DAY.isoformat()}"
+    ).get_data(as_text=True)
+    assert "恢復依菜單計算" in page
+    assert 'data-daily-auto-count="40"' in page
+
+    reset = authed_client.post(
+        "/admin/order-tool/summary/daily-kitchen-sheet",
+        data={"date": TEST_DAY.isoformat(), f"reset_counts_regular_{ids['recipe']}": "1"},
+        headers={"X-Requested-With": "daily-kitchen-autosave"},
+    )
+    assert reset.status_code == 200
+    with app.app_context():
+        assert order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"][0]["combo"] == 40
+
+
+def test_draft_procurement_refreshes_menu_without_overwriting_manual_or_ordered(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    plan_id = _create_plan(app, authed_client, ids, headcount=40)
+    generated = authed_client.post(
+        "/admin/order-tool/summary/procurement/generate",
+        data={"date": TEST_DAY.isoformat()},
+    )
+    assert generated.status_code == 302
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(
+            ingredient_id=ids["ingredient"],
+        ).one()
+        assert item.required_grams == Decimal("3520")
+        saved_actual = item.actual_order_qty
+        db.session.get(KitchenMenuAssignment, KitchenMenuAssignment.query.filter_by(
+            plan_id=plan_id, school_id=ids["school"],
+        ).one().id).headcount = 50
+        item.ordered = True
+        db.session.commit()
+    refreshed = authed_client.get(
+        f"/admin/order-tool/summary/procurement?date={TEST_DAY.isoformat()}"
+    )
+    assert refreshed.status_code == 200
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(
+            ingredient_id=ids["ingredient"],
+        ).one()
+        assert item.required_grams == Decimal("4400")
+        assert item.actual_order_qty == saved_actual
+        item.ordered = False
+        item.manual_override = True
+        item.actual_order_qty = Decimal("17")
+        KitchenMenuAssignment.query.filter_by(
+            plan_id=plan_id, school_id=ids["school"],
+        ).one().headcount = 60
+        db.session.commit()
+    authed_client.get(f"/admin/order-tool/summary/procurement?date={TEST_DAY.isoformat()}")
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.filter_by(
+            ingredient_id=ids["ingredient"],
+        ).one()
+        assert item.required_grams == Decimal("5280")
+        assert item.actual_order_qty == Decimal("17")

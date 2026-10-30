@@ -94,6 +94,11 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                     "ALTER TABLE kitchen_daily_dish_note "
                     "ADD COLUMN school_class_counts TEXT NOT NULL DEFAULT '{}'"
                 ))
+            if "count_override_fields" not in daily_note_columns:
+                connection.execute(text(
+                    "ALTER TABLE kitchen_daily_dish_note "
+                    "ADD COLUMN count_override_fields TEXT"
+                ))
 
         # AI 菜單只增加營養欄位與自己的草稿表；全部 checkfirst / 欄位存在檢查。
         ai_models.ensure_schema(db.engine)

@@ -2975,7 +2975,8 @@ def _generate_date_orders(
     if not ingredient_rows:
         for old_order in existing_orders:
             has_manual_items = any(
-                (item.source_type or "menu") == "manual" for item in old_order.items
+                (item.source_type or "menu") == "manual" or item.manual_override or item.ordered
+                for item in old_order.items
             )
             if old_order.status == "draft" and not has_manual_items:
                 db.session.delete(old_order)
@@ -3065,7 +3066,8 @@ def _generate_date_orders(
             item.purchase_unit_snapshot = ing.purchase_unit
             item.grams_per_purchase_unit_snapshot = units_per_purchase
             item.recommended_order_qty = recommended
-            if not item.manual_override:
+            # Once ordered or manually adjusted, preserve the actual called quantity.
+            if not item.manual_override and not item.ordered:
                 item.actual_order_qty = recommended
                 item.package_qty = package_qty
                 item.package_unit = conversion_rule["package_unit"] if conversion_rule else None
@@ -3074,7 +3076,7 @@ def _generate_date_orders(
                 item.amount = item.actual_order_qty * item.unit_price_snapshot
 
     for ingredient_id, item in existing_items.items():
-        if ingredient_id not in seen_ingredient_ids:
+        if ingredient_id not in seen_ingredient_ids and not item.manual_override and not item.ordered:
             db.session.delete(item)
 
     for old_order in existing_orders:
@@ -3087,7 +3089,7 @@ def _generate_date_orders(
         db.session.flush()
         sheets = _production_sheet_data(service_date)
         for item in active_estimates:
-            if item not in db.session.deleted:
+            if item not in db.session.deleted and not item.ordered and not item.manual_override:
                 total = _production_estimate_total(item, sheets)
                 next_qty = total + item.dish_adjustment_qty
                 if next_qty < 0:
@@ -3139,6 +3141,45 @@ def _procurement_export_sort_key(row, service_date: date):
         delivery_slot,
         _purchase_item_sort_key(item),
     )
+
+
+def _refresh_stale_draft_procurement(service_date: date) -> None:
+    """Refresh an existing draft's menu requirements; never create an order on GET.
+
+    Draft lines are snapshots, so a later school-menu edit makes their raw
+    requirements stale. Only recalculate when changed, and preserve ordered
+    lines and manually overridden actual purchase quantities.
+    """
+    orders = (
+        KitchenPurchaseOrder.query.filter_by(service_date=service_date)
+        .options(selectinload(KitchenPurchaseOrder.items))
+        .all()
+    )
+    if not orders or any(order.status != "draft" for order in orders):
+        return
+    requirements = _requirements_for_date(service_date)
+    expected = {
+        data["ingredient"].id: data
+        for supplier_rows in requirements.values() for data in supplier_rows.values()
+    }
+    existing = {
+        item.ingredient_id: item
+        for order in orders for item in order.items
+        if (item.source_type or "menu") == "menu"
+    }
+    # Intentionally retained ordered or manually overridden lines with removed
+    # recipes must not trigger a pointless resync on every subsequent GET.
+    removable = {
+        ingredient_id for ingredient_id, item in existing.items()
+        if ingredient_id not in expected and not item.ordered and not item.manual_override
+    }
+    changed = bool(set(expected) - set(existing) or removable) or any(
+        item.required_grams != expected[ingredient_id]["required_amount"]
+        for ingredient_id, item in existing.items()
+        if ingredient_id in expected
+    )
+    if changed:
+        _generate_date_orders(service_date, requirements=requirements, existing_orders=orders)
 
 
 def _procurement_rows(service_date: date):
@@ -3387,6 +3428,29 @@ def _recipe_ingredient_names(recipe: KitchenRecipe) -> str:
     )
 
 
+_DAILY_COUNT_FIELDS = ("combo", "bento", "small_bento")
+
+
+def _daily_count_overrides(note: KitchenDailyDishNote | None) -> set[str]:
+    """Explicit edits only; preserve unknown legacy values until the user resets them."""
+    if note is None:
+        return set()
+    if note.count_override_fields is None:
+        # Older autosaves wrote every count, including values that were never edited.
+        # They are ambiguous; do not discard a possible intentional adjustment.
+        return {
+            field for field in _DAILY_COUNT_FIELDS
+            if getattr(note, f"{field}_count") is not None
+        }
+    try:
+        fields = json.loads(note.count_override_fields)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(fields, list):
+        return set()
+    return {field for field in fields if field in _DAILY_COUNT_FIELDS}
+
+
 def _daily_kitchen_sheet_data(service_date: date):
     """產生「每日廚房表格」，人數依學校實際勾選的菜色分流。"""
     plans = (
@@ -3457,13 +3521,19 @@ def _daily_kitchen_sheet_data(service_date: date):
                 transferred = 60
                 dish["small_bento"] -= transferred
                 dish["combo"] += transferred
+            # Keep the live menu-derived counts separately from any deliberate edits.
+            dish["auto_counts"] = {field: dish[field] for field in _DAILY_COUNT_FIELDS}
             default_ingredients = _recipe_ingredient_names(dish["recipe"])
             note = notes.get((variant, dish["recipe"].id))
             dish["ingredients_text"] = (
                 note.ingredients_text if note and note.ingredients_text else default_ingredients
             )
-            if note and note.combo_count is not None:
-                dish["combo"] = note.combo_count
+            overrides = _daily_count_overrides(note)
+            dish["manual_count_fields"] = overrides
+            for field in overrides:
+                saved = getattr(note, f"{field}_count")
+                if saved is not None:
+                    dish[field] = saved
             saved_class_counts = {}
             if note and note.school_class_counts:
                 try:
@@ -3472,10 +3542,6 @@ def _daily_kitchen_sheet_data(service_date: date):
                         saved_class_counts = decoded_class_counts
                 except (TypeError, ValueError):
                     saved_class_counts = {}
-            if note and note.bento_count is not None:
-                dish["bento"] = note.bento_count
-            if note and note.small_bento_count is not None:
-                dish["small_bento"] = note.small_bento_count
             dish["school_rows"] = sorted(
                 dish["school_counts"].values(),
                 key=lambda row: row["name"].casefold(),
@@ -3496,7 +3562,8 @@ def _daily_kitchen_sheet_data(service_date: date):
                     )
             # 舊版只有一個總班級數；僅在單一學校時可無歧義地沿用。
             if (
-                note and note.class_count is not None and not saved_class_counts
+                note and note.count_override_fields is None
+                and note.class_count is not None and not saved_class_counts
                 and len(dish["school_rows"]) == 1
             ):
                 dish["school_rows"][0]["class_count"] = note.class_count
@@ -3519,34 +3586,42 @@ def daily_kitchen_sheet():
         updates = []
         for variant, dishes in sheets.items():
             for dish in dishes:
-                field_name = f"ingredients_{variant}_{dish['recipe'].id}"
-                if field_name not in request.form:
+                recipe_id = dish["recipe"].id
+                suffix = f"{variant}_{recipe_id}"
+                ingredients_field = f"ingredients_{suffix}"
+                reset_field = f"reset_counts_{suffix}"
+                count_fields = {
+                    key: f"{key}_{suffix}" for key in _DAILY_COUNT_FIELDS
+                    if f"{key}_{suffix}" in request.form
+                }
+                class_fields = {
+                    str(school["id"]): f"class_count_{suffix}_{school['id']}"
+                    for school in dish["school_rows"]
+                    if f"class_count_{suffix}_{school['id']}" in request.form
+                }
+                if not (ingredients_field in request.form or reset_field in request.form
+                        or count_fields or class_fields):
                     continue
-                ingredients_text = request.form.get(field_name, "").strip()[:2000]
-                if not ingredients_text:
-                    ingredients_text = _recipe_ingredient_names(dish["recipe"])
+
                 counts = {}
-                for key in ("combo", "bento", "small_bento"):
-                    value = _int(
-                        request.form.get(f"{key}_{variant}_{dish['recipe'].id}"),
-                        default=None,
-                    )
+                for key, name in count_fields.items():
+                    value = _int(request.form.get(name), default=None)
                     if value is None or value < 0:
                         db.session.rollback()
+                        message = "合菜、便當與小便當數量必須是 0 以上的整數。"
                         if autosave:
-                            return {"message": "合菜、便當與小便當數量必須是 0 以上的整數。"}, 400
-                        flash("合菜、便當與小便當數量必須是 0 以上的整數。", "error")
+                            return {"message": message}, 400
+                        flash(message, "error")
                         return redirect(url_for(
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
                         ))
                     counts[key] = value
-                school_class_counts = {}
-                for school in dish["school_rows"]:
-                    class_count_text = request.form.get(
-                        f"class_count_{variant}_{dish['recipe'].id}_{school['id']}", ""
-                    ).strip()
-                    class_count = _int(class_count_text, default=None) if class_count_text else None
-                    if class_count_text and (class_count is None or class_count < 0):
+
+                class_counts = {}
+                for school_id, name in class_fields.items():
+                    raw = request.form.get(name, "").strip()
+                    value = _int(raw, default=None) if raw else None
+                    if raw and (value is None or value < 0):
                         db.session.rollback()
                         message = "各校班級數必須留空，或填寫 0 以上的整數。"
                         if autosave:
@@ -3555,11 +3630,11 @@ def daily_kitchen_sheet():
                         return redirect(url_for(
                             "order_tool.daily_kitchen_sheet", date=service_date.isoformat()
                         ))
-                    # 連空白也保存成 null，才能區分「使用者刻意留空」與舊資料根本沒存過。
-                    school_class_counts[str(school["id"])] = class_count
-                updates.append((variant, dish, ingredients_text, counts, school_class_counts))
+                    class_counts[school_id] = value
+                updates.append((variant, dish, ingredients_field, reset_field,
+                                counts, class_counts))
 
-        for variant, dish, ingredients_text, counts, school_class_counts in updates:
+        for variant, dish, ingredients_field, reset_field, counts, class_counts in updates:
             note = KitchenDailyDishNote.query.filter_by(
                 service_date=service_date,
                 variant=variant,
@@ -3570,21 +3645,55 @@ def daily_kitchen_sheet():
                     service_date=service_date,
                     variant=variant,
                     recipe_id=dish["recipe"].id,
+                    count_override_fields="[]",
                 )
                 db.session.add(note)
-            note.ingredients_text = ingredients_text
-            note.combo_count = counts["combo"]
-            note.school_class_counts = json.dumps(
-                school_class_counts, ensure_ascii=False, sort_keys=True
-            )
-            numeric_class_counts = [
-                value for value in school_class_counts.values()
-                if isinstance(value, int) and value >= 0
-            ]
-            note.class_count = sum(numeric_class_counts) if numeric_class_counts else None
-            note.bento_count = counts["bento"]
-            note.small_bento_count = counts["small_bento"]
-        db.session.commit()
+
+            if ingredients_field in request.form:
+                ingredients_text = request.form.get(ingredients_field, "").strip()[:2000]
+                note.ingredients_text = ingredients_text or _recipe_ingredient_names(dish["recipe"])
+
+            overrides = _daily_count_overrides(note)
+            if reset_field in request.form:
+                # Reset explicitly, never silently erase unknown legacy adjustments.
+                overrides.clear()
+                for key in _DAILY_COUNT_FIELDS:
+                    setattr(note, f"{key}_count", None)
+            for key, value in counts.items():
+                if value == dish["auto_counts"][key]:
+                    overrides.discard(key)
+                    setattr(note, f"{key}_count", None)
+                else:
+                    overrides.add(key)
+                    setattr(note, f"{key}_count", value)
+            note.count_override_fields = json.dumps(sorted(overrides))
+
+            if class_counts:
+                try:
+                    saved = json.loads(note.school_class_counts or "{}")
+                except (TypeError, ValueError):
+                    saved = {}
+                if not isinstance(saved, dict):
+                    saved = {}
+                for school in dish["school_rows"]:
+                    school_id = str(school["id"])
+                    if school_id not in class_counts:
+                        continue
+                    value = class_counts[school_id]
+                    automatic = school["default_class_count"] if variant == "regular" else None
+                    if value == automatic:
+                        saved.pop(school_id, None)
+                    else:
+                        saved[school_id] = value
+                note.school_class_counts = json.dumps(saved, ensure_ascii=False, sort_keys=True)
+                values = [
+                    saved.get(str(school["id"]),
+                              school["default_class_count"] if variant == "regular" else None)
+                    for school in dish["school_rows"]
+                ]
+                note.class_count = sum(value for value in values if isinstance(value, int)) or None
+        if updates:
+            db.session.commit()
         if autosave:
             return {"message": "已儲存"}
         flash("每日廚房表格的食材與數字已儲存，現在可以匯出 Excel。", "success")
@@ -3695,6 +3804,7 @@ def _production_nav_state():
 @order_bp.get("/summary/production-sheet")
 def production_sheet():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     variant = request.args.get("variant", "regular")
     if variant not in {"regular", "vegetarian"}:
         variant = "regular"
@@ -3983,6 +4093,7 @@ def _write_production_export_sheet(sheet, service_date: date, variant_label: str
 @order_bp.get("/summary/production-sheet.xlsx")
 def production_sheet_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     sheets = _production_sheet_data(service_date)
     workbook = Workbook()
     workbook.calculation.calcMode = "auto"
@@ -4007,6 +4118,7 @@ def production_sheet_export():
 @order_bp.get("/summary/procurement")
 def procurement():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     rows = _procurement_rows(service_date)
     suppliers = KitchenSupplier.query.filter_by(active=True).order_by(KitchenSupplier.name).all()
     schools = KitchenSchool.query.filter_by(active=True).order_by(KitchenSchool.name).all()
@@ -4207,6 +4319,7 @@ def procurement_manual_item_create():
 @order_bp.get("/summary/procurement.xlsx")
 def procurement_export():
     service_date = _date(request.args.get("date"), default=date.today()) or date.today()
+    _refresh_stale_draft_procurement(service_date)
     rows = sorted(
         _procurement_rows(service_date),
         key=lambda row: _procurement_export_sort_key(row, service_date),

@@ -256,7 +256,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
 
     page = authed_client.get("/admin/order-tool/summary?week=2026-08-10").get_data(as_text=True)
     assert "南洋綠咖哩雞" in page
-    assert f"/recipes/{ids['recipe']}?week=2026-08-10" in page
+    assert f"/admin/order-tool/summary/dishes/{item.id}/recipe" in page
 
     response = authed_client.post("/admin/order-tool/summary/dishes", data={
         "service_date": "2026-08-14",

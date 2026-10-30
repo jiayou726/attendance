@@ -2354,6 +2354,92 @@ def summary_dish_add():
     return redirect(redirect_to)
 
 
+
+@order_bp.route("/summary/dishes/<int:row_id>/recipe", methods=["GET", "POST"])
+def menu_item_recipe(row_id: int):
+    """Edit one menu occurrence without changing the global recipe."""
+    item = db.session.get(KitchenMenuPlanItem, row_id)
+    if item is None:
+        abort(404)
+    plan = item.plan
+    week_start = plan.service_date - timedelta(days=plan.service_date.weekday())
+    redirect_to = url_for("order_tool.menu_item_recipe", row_id=row_id)
+    if request.method == "POST":
+        if plan.status != "draft" or _active_confirmed_orders(plan.service_date):
+            flash("菜單或採購單已確認，不能修改本次配方。", "error")
+            return redirect(redirect_to)
+        action = request.form.get("action", "save")
+        if action not in {"save", "remove", "reset"}:
+            abort(400)
+        ingredient_id = _int(request.form.get("ingredient_id"), default=0) or 0
+        original = item.ingredients_override_json
+        if action == "reset":
+            payload = None
+        else:
+            components = list(_menu_item_components(item))
+            if action == "save":
+                ingredient = db.session.get(KitchenIngredient, ingredient_id)
+                amount = _decimal(request.form.get("grams_per_person"))
+                if ingredient is None or (not ingredient.active and not any(
+                    row.ingredient_id == ingredient_id for row in components
+                )) or amount is None or amount <= 0:
+                    flash("請選擇有效食材，並輸入大於 0 的每人用量。", "error")
+                    return redirect(redirect_to)
+                components = [row for row in components if row.ingredient_id != ingredient_id]
+                components.append(SimpleNamespace(
+                    ingredient_id=ingredient_id, grams_per_person=amount,
+                ))
+            else:
+                if not any(row.ingredient_id == ingredient_id for row in components):
+                    flash("這道菜沒有該食材。", "error")
+                    return redirect(redirect_to)
+                components = [row for row in components if row.ingredient_id != ingredient_id]
+            payload = (
+                None if _bom_signature(components) == _bom_signature(item.recipe.ingredients)
+                else _menu_item_override_payload(components)
+            )
+        item.ingredients_override_json = payload
+        # Central day's recipe is the default for schools that adopt it.
+        # Existing school-specific versions take precedence.
+        if plan.name == "中央菜單" and original != payload:
+            other_items = (
+                KitchenMenuPlanItem.query.join(KitchenMenuPlan)
+                .filter(
+                    KitchenMenuPlanItem.recipe_id == item.recipe_id,
+                    KitchenMenuPlanItem.id != item.id,
+                    KitchenMenuPlan.service_date == plan.service_date,
+                    KitchenMenuPlan.meal_type == plan.meal_type,
+                    KitchenMenuPlan.status == "draft",
+                )
+                .options(selectinload(KitchenMenuPlanItem.plan))
+                .all()
+            )
+            for other in other_items:
+                if other.plan.name.endswith("素食菜單"):
+                    continue
+                if other.ingredients_override_json in (None, original):
+                    other.ingredients_override_json = payload
+        db.session.commit()
+        flash("已儲存本次菜單專用配方；共用標準配方及其他日期不受影響。", "success")
+        return redirect(redirect_to)
+
+    components = _menu_item_components(item)
+    ingredients = KitchenIngredient.query.filter_by(active=True).order_by(
+        KitchenIngredient.name
+    ).all()
+    return render_template(
+        "kitchen/menu_item_recipe.html",
+        item=item, plan=plan, components=components,
+        ingredients=ingredients, week_start=week_start,
+        locked=plan.status != "draft" or bool(_active_confirmed_orders(plan.service_date)),
+        total_g=sum(
+            (row.grams_per_person or Decimal("0"))
+            for row in components
+            if row.ingredient and (row.ingredient.base_unit or "g") == "g"
+        ),
+    )
+
+
 @order_bp.post("/summary/dishes/<int:row_id>/delete")
 def summary_dish_delete(row_id: int):
     row = db.session.get(KitchenMenuPlanItem, row_id)

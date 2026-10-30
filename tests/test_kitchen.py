@@ -2958,6 +2958,7 @@ def test_central_daily_recipe_updates_default_school_but_not_own_override(app, a
             plan_id=central_id, recipe_id=ids["recipe"],
         ).one().id
         local_item_id = school_item.id
+        school_id = second.id
         db.session.commit()
 
     url_central = f"/admin/order-tool/summary/dishes/{central_item_id}/recipe"
@@ -2986,3 +2987,22 @@ def test_central_daily_recipe_updates_default_school_but_not_own_override(app, a
         assert KitchenRecipeIngredient.query.filter_by(
             recipe_id=ids["recipe"], ingredient_id=ids["ingredient"],
         ).one().grams_per_person == Decimal("88")
+
+    # Re-saving that school's menu must not silently erase its special recipe.
+    response = authed_client.post(
+        "/admin/order-tool/summary/schools/save-day",
+        data={
+            "school_id": str(school_id), "service_date": TEST_DAY.isoformat(),
+            "headcount": "20", "vegetarian_headcount": "0",
+            "regular_recipe_ids": str(ids["recipe"]),
+            "service_status": "serving",
+        },
+    )
+    assert response.status_code == 204
+    with app.app_context():
+        saved_item = KitchenMenuPlanItem.query.join(KitchenMenuPlan).filter(
+            KitchenMenuPlan.name == "校外食堂菜單",
+            KitchenMenuPlan.service_date == TEST_DAY,
+            KitchenMenuPlanItem.recipe_id == ids["recipe"],
+        ).one()
+        assert order_tool_module._menu_item_components(saved_item)[0].grams_per_person == Decimal("50")

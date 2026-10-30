@@ -8,6 +8,7 @@ Recipe BOM（每人 AP 數量，可用 g 或 個）→ 中央菜單 → 學校�
 from __future__ import annotations
 
 from copy import copy
+import hashlib
 import json
 import secrets
 import re
@@ -17,6 +18,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import (
     Blueprint,
@@ -137,6 +139,7 @@ def _template_helpers():
         "status_label": _status_label,
         "order_total": _order_total,
         "recipe_total_g": _recipe_total_g,
+        "menu_item_total_g": _menu_item_total_g,
         "component_cost": _component_cost,
         "trim_decimal": _trim_decimal,
         "base_unit_label": _base_unit_label,
@@ -1139,7 +1142,13 @@ def plan_item_add(plan_id: int):
         return redirect(url_for("order_tool.plan_detail", plan_id=plan_id))
     if not KitchenMenuPlanItem.query.filter_by(plan_id=plan_id, recipe_id=recipe_id).first():
         max_order = max((x.sort_order for x in plan.items), default=-1)
-        db.session.add(KitchenMenuPlanItem(plan_id=plan_id, recipe_id=recipe_id, sort_order=max_order + 1))
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=plan_id, recipe_id=recipe_id, sort_order=max_order + 1,
+            ingredients_override_json=(
+                _central_recipe_overrides(plan.service_date, plan.meal_type).get(recipe_id)
+                if plan.name != "中央菜單" and not plan.name.endswith("素食菜單") else None
+            ),
+        ))
         db.session.commit()
         flash("菜色已加入。", "success")
     else:
@@ -1264,7 +1273,7 @@ def plan_copy(plan_id: int):
     db.session.add(copy)
     db.session.flush()
     for x in source.items:
-        db.session.add(KitchenMenuPlanItem(plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order))
+        db.session.add(KitchenMenuPlanItem(plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order, ingredients_override_json=x.ingredients_override_json))
     for x in source.assignments:
         db.session.add(KitchenMenuAssignment(plan_id=copy.id, school_id=x.school_id, headcount=x.headcount))
     db.session.commit()
@@ -1340,21 +1349,89 @@ _PLAN_REQUIREMENT_LOAD = (
 )
 
 
-def _usage_dish_groups(plans):
-    """Group a day's serving plans the same way 菜色用量表 does.
 
-    One row per meal variant and recipe. Headcount is the sum of every
-    school still serving that dish, so the default purchase quantity is
-    rounded once per dish rather than once per school.
-    """
+def _menu_item_total_g(item: KitchenMenuPlanItem) -> Decimal:
+    return sum(
+        (row.grams_per_person or Decimal("0"))
+        for row in _menu_item_components(item)
+        if row.ingredient and (row.ingredient.base_unit or "g") == "g"
+    )
+
+
+def _menu_item_components(item: KitchenMenuPlanItem):
+    """Use the menu-specific ingredient snapshot, or the shared master by default."""
+    if item.ingredients_override_json is None:
+        return item.recipe.ingredients
+    try:
+        rows = json.loads(item.ingredients_override_json)
+    except (TypeError, ValueError):
+        current_app.logger.warning("Invalid recipe override on menu item %s", item.id)
+        return item.recipe.ingredients
+    if not isinstance(rows, list):
+        return item.recipe.ingredients
+    components = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ingredient_id = _int(row.get("ingredient_id"), default=0) or 0
+        ingredient = db.session.get(KitchenIngredient, ingredient_id)
+        amount = _decimal(row.get("grams_per_person"), default=Decimal("0"))
+        if not ingredient or amount is None or amount < 0:
+            continue
+        components.append(SimpleNamespace(
+            ingredient=ingredient, ingredient_id=ingredient_id,
+            grams_per_person=amount,
+            quantity_status=(
+                "pending" if amount == 0 else row.get("quantity_status", "manual")
+            ),
+            source_note=row.get("source_note") or "本次菜單專用配方",
+        ))
+    return components
+
+
+def _bom_signature(components) -> str:
+    values = sorted(
+        (row.ingredient_id, _trim_decimal(row.grams_per_person))
+        for row in components
+    )
+    return json.dumps(values, separators=(",", ":"))
+
+
+def _menu_item_override_payload(components) -> str:
+    return json.dumps([
+        {
+            "ingredient_id": row.ingredient_id,
+            "grams_per_person": _trim_decimal(row.grams_per_person),
+            "quantity_status": (
+                "pending" if (row.grams_per_person or Decimal("0")) <= 0
+                else getattr(row, "quantity_status", "manual")
+            ),
+            "source_note": getattr(row, "source_note", "本次菜單專用配方"),
+        }
+        for row in sorted(components, key=lambda x: x.ingredient_id)
+    ], ensure_ascii=False, separators=(",", ":"))
+
+
+def _central_recipe_overrides(service_date: date, meal_type: str = "午餐") -> dict[int, str]:
+    """Central daily recipe versions used when schools first adopt a dish."""
+    central = KitchenMenuPlan.query.filter_by(
+        service_date=service_date, meal_type=meal_type, name="中央菜單"
+    ).options(selectinload(KitchenMenuPlan.items)).first()
+    return {
+        item.recipe_id: item.ingredients_override_json
+        for item in central.items if item.ingredients_override_json is not None
+    } if central else {}
+
+
+def _usage_dish_groups(plans):
+    """Separate servings with different formulas even when dish names match."""
     grouped = {"regular": {}, "vegetarian": {}}
     for plan in plans:
         assignments = [
-            assignment
-            for assignment in plan.assignments
-            if assignment.service_status == "serving" and assignment.headcount > 0
+            row for row in plan.assignments
+            if row.service_status == "serving" and row.headcount > 0
         ]
-        people = sum(assignment.headcount for assignment in assignments)
+        people = sum(row.headcount for row in assignments)
         if people <= 0:
             continue
         variant = "vegetarian" if plan.name.endswith("素食菜單") else "regular"
@@ -1362,16 +1439,20 @@ def _usage_dish_groups(plans):
             recipe = menu_item.recipe
             if recipe is None:
                 continue
-            dish = grouped[variant].setdefault(recipe.id, {
-                "recipe": recipe,
-                "headcount": 0,
-                "school_names": set(),
+            components = _menu_item_components(menu_item)
+            signature = _bom_signature(components)
+            key = (recipe.id, signature)
+            dish = grouped[variant].setdefault(key, {
+                "recipe": recipe, "headcount": 0, "school_names": set(),
+                "components_source": components,
+                "estimate_key": f"{variant}:{recipe.id}",
                 "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
             })
+            if signature != _bom_signature(recipe.ingredients):
+                digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+                dish["estimate_key"] = f"{variant}:{recipe.id}:local-{digest}"
             dish["headcount"] += people
-            dish["school_names"].update(
-                assignment.school.name for assignment in assignments
-            )
+            dish["school_names"].update(row.school.name for row in assignments)
     return grouped
 
 
@@ -1386,7 +1467,7 @@ def _usage_default_qty_from_plans(plans) -> dict[int, Decimal]:
     totals: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
     for dishes in _usage_dish_groups(plans).values():
         for dish in dishes.values():
-            for component in dish["recipe"].ingredients:
+            for component in dish["components_source"]:
                 ingredient = component.ingredient
                 if ingredient is None:
                     continue
@@ -1425,7 +1506,7 @@ def _requirements_from_plans(plans_on_day):
             recipe = menu_item.recipe
             if not recipe:
                 continue
-            for component in recipe.ingredients:
+            for component in _menu_item_components(menu_item):
                 ing = component.ingredient
                 if not ing or (component.grams_per_person or Decimal("0")) <= 0:
                     continue
@@ -1505,7 +1586,7 @@ def _summary_data(service_date: date):
         if not any(x.service_status == "serving" and x.headcount > 0 for x in plan.assignments):
             continue
         for item in plan.items:
-            for component in item.recipe.ingredients:
+            for component in _menu_item_components(item):
                 if (component.grams_per_person or Decimal("0")) > 0:
                     continue
                 key = (item.recipe_id, component.ingredient_id)
@@ -1990,7 +2071,7 @@ def school_menu_copy_day():
     if any(row and row.service_status == "no_service" for row in source_assignments.values()):
         return {"message": "來源學校當天停餐，無法複製菜色。"}, 409
     selected = {
-        variant: [item.recipe_id for item in sorted(
+        variant: [(item.recipe_id, item.ingredients_override_json) for item in sorted(
             assignment.plan.items, key=lambda entry: entry.sort_order
         )] if assignment else []
         for variant, assignment in source_assignments.items()
@@ -2027,9 +2108,10 @@ def school_menu_copy_day():
             for old_item in list(plan.items):
                 db.session.delete(old_item)
             db.session.flush()
-            for order, recipe_id in enumerate(recipe_ids):
+            for order, (recipe_id, override_json) in enumerate(recipe_ids):
                 db.session.add(KitchenMenuPlanItem(
                     plan_id=plan.id, recipe_id=recipe_id, sort_order=order,
+                    ingredients_override_json=override_json,
                 ))
     db.session.commit()
     return {
@@ -2090,6 +2172,8 @@ def school_menu_save_day():
                     db.session.delete(assignment.plan)
                 return
             plan = _editable_school_plan(school, service_date, variant)
+            existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+            central_overrides = _central_recipe_overrides(service_date) if variant == "regular" else {}
             for item in list(plan.items):
                 db.session.delete(item)
             db.session.flush()
@@ -2098,7 +2182,10 @@ def school_menu_save_day():
             ).all()
             for sort_order, recipe in enumerate(recipes):
                 db.session.add(KitchenMenuPlanItem(
-                    plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order
+                    plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order,
+                    ingredients_override_json=(
+                        existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                    ),
                 ))
             row = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
             row.headcount = people
@@ -2142,6 +2229,8 @@ def school_menu_save_day():
     if plan.status != "draft":
         db.session.rollback()
         return {"message": "這一天已確認，無法修改。"}, 409
+    existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+    central_overrides = _central_recipe_overrides(service_date)
     for item in list(plan.items):
         db.session.delete(item)
     db.session.flush()
@@ -2153,6 +2242,9 @@ def school_menu_save_day():
             plan_id=plan.id,
             recipe_id=recipe.id,
             sort_order=sort_order,
+            ingredients_override_json=(
+                existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+            ),
         ))
     assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
     assignment.headcount = headcount
@@ -2204,6 +2296,8 @@ def school_menus_save():
         if plan.status != "draft":
             locked_days += 1
             continue
+        existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+        central_overrides = _central_recipe_overrides(service_date)
         for item in list(plan.items):
             db.session.delete(item)
         db.session.flush()
@@ -2215,6 +2309,9 @@ def school_menus_save():
                 plan_id=plan.id,
                 recipe_id=recipe.id,
                 sort_order=sort_order,
+                ingredients_override_json=(
+                    existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                ),
             ))
         assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
         assignment.headcount = headcount
@@ -2297,6 +2394,92 @@ def summary_dish_add():
     db.session.commit()
     flash(f"已把「{recipe.name}」加入 {service_date.strftime('%m/%d')} 菜單。", "success")
     return redirect(redirect_to)
+
+
+
+@order_bp.route("/summary/dishes/<int:row_id>/recipe", methods=["GET", "POST"])
+def menu_item_recipe(row_id: int):
+    """Edit one menu occurrence without changing the global recipe."""
+    item = db.session.get(KitchenMenuPlanItem, row_id)
+    if item is None:
+        abort(404)
+    plan = item.plan
+    week_start = plan.service_date - timedelta(days=plan.service_date.weekday())
+    redirect_to = url_for("order_tool.menu_item_recipe", row_id=row_id)
+    if request.method == "POST":
+        if plan.status != "draft" or _active_confirmed_orders(plan.service_date):
+            flash("菜單或採購單已確認，不能修改本次配方。", "error")
+            return redirect(redirect_to)
+        action = request.form.get("action", "save")
+        if action not in {"save", "remove", "reset"}:
+            abort(400)
+        ingredient_id = _int(request.form.get("ingredient_id"), default=0) or 0
+        original = item.ingredients_override_json
+        if action == "reset":
+            payload = None
+        else:
+            components = list(_menu_item_components(item))
+            if action == "save":
+                ingredient = db.session.get(KitchenIngredient, ingredient_id)
+                amount = _decimal(request.form.get("grams_per_person"))
+                if ingredient is None or (not ingredient.active and not any(
+                    row.ingredient_id == ingredient_id for row in components
+                )) or amount is None or amount <= 0:
+                    flash("請選擇有效食材，並輸入大於 0 的每人用量。", "error")
+                    return redirect(redirect_to)
+                components = [row for row in components if row.ingredient_id != ingredient_id]
+                components.append(SimpleNamespace(
+                    ingredient_id=ingredient_id, grams_per_person=amount,
+                ))
+            else:
+                if not any(row.ingredient_id == ingredient_id for row in components):
+                    flash("這道菜沒有該食材。", "error")
+                    return redirect(redirect_to)
+                components = [row for row in components if row.ingredient_id != ingredient_id]
+            payload = (
+                None if _bom_signature(components) == _bom_signature(item.recipe.ingredients)
+                else _menu_item_override_payload(components)
+            )
+        item.ingredients_override_json = payload
+        # Central day's recipe is the default for schools that adopt it.
+        # Existing school-specific versions take precedence.
+        if plan.name == "中央菜單" and original != payload:
+            other_items = (
+                KitchenMenuPlanItem.query.join(KitchenMenuPlan)
+                .filter(
+                    KitchenMenuPlanItem.recipe_id == item.recipe_id,
+                    KitchenMenuPlanItem.id != item.id,
+                    KitchenMenuPlan.service_date == plan.service_date,
+                    KitchenMenuPlan.meal_type == plan.meal_type,
+                    KitchenMenuPlan.status == "draft",
+                )
+                .options(selectinload(KitchenMenuPlanItem.plan))
+                .all()
+            )
+            for other in other_items:
+                if other.plan.name.endswith("素食菜單"):
+                    continue
+                if other.ingredients_override_json in (None, original):
+                    other.ingredients_override_json = payload
+        db.session.commit()
+        flash("已儲存本次菜單專用配方；共用標準配方及其他日期不受影響。", "success")
+        return redirect(redirect_to)
+
+    components = _menu_item_components(item)
+    ingredients = KitchenIngredient.query.filter_by(active=True).order_by(
+        KitchenIngredient.name
+    ).all()
+    return render_template(
+        "kitchen/menu_item_recipe.html",
+        item=item, plan=plan, components=components,
+        ingredients=ingredients, week_start=week_start,
+        locked=plan.status != "draft" or bool(_active_confirmed_orders(plan.service_date)),
+        total_g=sum(
+            (row.grams_per_person or Decimal("0"))
+            for row in components
+            if row.ingredient and (row.ingredient.base_unit or "g") == "g"
+        ),
+    )
 
 
 @order_bp.post("/summary/dishes/<int:row_id>/delete")
@@ -3367,14 +3550,14 @@ def _production_sheet_data(service_date: date):
     for variant, dishes in grouped.items():
         for dish in sorted(dishes.values(), key=lambda row: row["sort_key"]):
             components = []
-            for component in dish["recipe"].ingredients:
+            for component in dish["components_source"]:
                 ingredient = component.ingredient
                 per_person = component.grams_per_person or Decimal("0")
                 base_amount = per_person * dish["headcount"]
                 divisor = ingredient.grams_per_purchase_unit or Decimal("0")
                 has_conversion = divisor > 0
                 purchase_item = purchase_items.get(ingredient.id)
-                estimate_key = f"{variant}:{dish['recipe'].id}"
+                estimate_key = dish["estimate_key"]
                 default_qty = _round_estimate(base_amount / divisor) if has_conversion else Decimal("0")
                 estimated_qty = (
                     item_overrides.get(purchase_item.id, {}).get(estimate_key, default_qty)
@@ -3487,7 +3670,15 @@ def _daily_kitchen_sheet_data(service_date: date):
                 "bento": 0,
                 "small_bento": 0,
                 "school_counts": {},
+                "ingredient_versions": set(),
+                "ingredient_name_versions": set(),
             })
+            effective_components = _menu_item_components(menu_item)
+            dish["ingredient_versions"].add(_bom_signature(effective_components))
+            dish["ingredient_name_versions"].add(tuple(sorted(
+                component.ingredient.name
+                for component in effective_components if component.ingredient
+            )))
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
                     CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
@@ -3523,7 +3714,11 @@ def _daily_kitchen_sheet_data(service_date: date):
                 dish["combo"] += transferred
             # Keep the live menu-derived counts separately from any deliberate edits.
             dish["auto_counts"] = {field: dish[field] for field in _DAILY_COUNT_FIELDS}
-            default_ingredients = _recipe_ingredient_names(dish["recipe"])
+            if len(dish["ingredient_versions"]) > 1:
+                default_ingredients = "不同學校配方不同，請依菜色用量表分別備料"
+            else:
+                default_ingredients = "、".join(next(iter(dish["ingredient_name_versions"]), ()))
+            dish["ingredient_default"] = default_ingredients
             note = notes.get((variant, dish["recipe"].id))
             dish["ingredients_text"] = (
                 note.ingredients_text if note and note.ingredients_text else default_ingredients
@@ -3651,7 +3846,7 @@ def daily_kitchen_sheet():
 
             if ingredients_field in request.form:
                 ingredients_text = request.form.get(ingredients_field, "").strip()[:2000]
-                note.ingredients_text = ingredients_text or _recipe_ingredient_names(dish["recipe"])
+                note.ingredients_text = ingredients_text or dish["ingredient_default"]
 
             overrides = _daily_count_overrides(note)
             if reset_field in request.form:
@@ -4133,7 +4328,7 @@ def procurement():
             continue
         for menu_item in plan.items:
             if any(component.quantity_status == "pending" or (component.grams_per_person or 0) <= 0
-                   for component in menu_item.recipe.ingredients):
+                   for component in _menu_item_components(menu_item)):
                 pending_recipes.add(menu_item.recipe.name)
     school_headcounts = defaultdict(int)
     for plan in plans:

@@ -256,7 +256,7 @@ def test_summary_is_a_monday_to_sunday_grid_and_can_add_a_dish(app, authed_clien
 
     page = authed_client.get("/admin/order-tool/summary?week=2026-08-10").get_data(as_text=True)
     assert "南洋綠咖哩雞" in page
-    assert f"/recipes/{ids['recipe']}?week=2026-08-10" in page
+    assert f"/admin/order-tool/summary/dishes/{item.id}/recipe" in page
 
     response = authed_client.post("/admin/order-tool/summary/dishes", data={
         "service_date": "2026-08-14",
@@ -2819,3 +2819,190 @@ def test_draft_procurement_refreshes_menu_without_overwriting_manual_or_ordered(
         ).one()
         assert item.required_grams == Decimal("5280")
         assert item.actual_order_qty == Decimal("17")
+
+
+def test_summary_menu_recipe_edit_is_not_global_and_can_reset(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    central_id = _create_plan(app, authed_client, ids, headcount=40)
+    next_day = TEST_DAY + timedelta(days=1)
+    with app.app_context():
+        central_item = KitchenMenuPlanItem.query.filter_by(
+            plan_id=central_id, recipe_id=ids["recipe"],
+        ).one()
+        target_item_id = central_item.id
+        other_plan = KitchenMenuPlan(
+            service_date=next_day, meal_type="午餐", name="明日菜單",
+        )
+        db.session.add(other_plan)
+        db.session.flush()
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=other_plan.id, recipe_id=ids["recipe"], sort_order=0,
+        ))
+        db.session.add(KitchenMenuAssignment(
+            plan_id=other_plan.id, school_id=ids["school"], headcount=50,
+        ))
+        db.session.commit()
+
+    summary = authed_client.get(
+        f"/admin/order-tool/summary?week={TEST_DAY.isoformat()}"
+    ).get_data(as_text=True)
+    assert f"/admin/order-tool/summary/dishes/{target_item_id}/recipe" in summary
+    before_edit = authed_client.get(
+        f"/admin/order-tool/summary/dishes/{target_item_id}/recipe"
+    )
+    assert before_edit.status_code == 200
+    assert "本次菜單專用配方" in before_edit.get_data(as_text=True)
+
+    update = authed_client.post(
+        f"/admin/order-tool/summary/dishes/{target_item_id}/recipe",
+        data={
+            "action": "save", "ingredient_id": str(ids["ingredient"]),
+            "grams_per_person": "65",
+        },
+    )
+    assert update.status_code == 302
+    with app.app_context():
+        shared = KitchenRecipeIngredient.query.filter_by(
+            recipe_id=ids["recipe"], ingredient_id=ids["ingredient"],
+        ).one()
+        assert shared.grams_per_person == Decimal("88")
+        current_item = db.session.get(KitchenMenuPlanItem, target_item_id)
+        assert current_item.ingredients_override_json is not None
+        day_one = order_tool_module._requirements_for_date(TEST_DAY)
+        day_two = order_tool_module._requirements_for_date(next_day)
+        assert next(iter(day_one.values()))[ids["ingredient"]]["required_amount"] == Decimal("2600")
+        assert next(iter(day_two.values()))[ids["ingredient"]]["required_amount"] == Decimal("4400")
+        # No duplicate recipes with the same name are created in the master.
+        assert KitchenRecipe.query.filter_by(name="南洋綠咖哩雞").count() == 1
+
+    reset = authed_client.post(
+        f"/admin/order-tool/summary/dishes/{target_item_id}/recipe",
+        data={"action": "reset"},
+    )
+    assert reset.status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenMenuPlanItem, target_item_id).ingredients_override_json is None
+        day_one = order_tool_module._requirements_for_date(TEST_DAY)
+        assert next(iter(day_one.values()))[ids["ingredient"]]["required_amount"] == Decimal("3520")
+
+
+def test_same_named_dishes_with_different_school_formulas_not_merged(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    with app.app_context():
+        schools = [
+            KitchenSchool(name="甲校"), KitchenSchool(name="乙校")
+        ]
+        db.session.add_all(schools)
+        db.session.flush()
+        item_ids = []
+        for index, school in enumerate(schools):
+            plan = KitchenMenuPlan(
+                service_date=TEST_DAY, meal_type="午餐", name=f"{school.name}菜單",
+            )
+            db.session.add(plan)
+            db.session.flush()
+            item = KitchenMenuPlanItem(
+                plan_id=plan.id, recipe_id=ids["recipe"], sort_order=0,
+            )
+            db.session.add(item)
+            db.session.add(KitchenMenuAssignment(
+                plan_id=plan.id, school_id=school.id,
+                headcount=40 if index == 0 else 60,
+            ))
+            db.session.flush()
+            item_ids.append(item.id)
+        db.session.commit()
+
+    customized = authed_client.post(
+        f"/admin/order-tool/summary/dishes/{item_ids[1]}/recipe",
+        data={"action": "save", "ingredient_id": str(ids["ingredient"]),
+              "grams_per_person": "70"},
+    )
+    assert customized.status_code == 302
+    with app.app_context():
+        uses = order_tool_module._production_sheet_data(TEST_DAY)["regular"]
+        assert len(uses) == 2
+        assert sorted((d["headcount"], d["components"][0]["per_person"]) for d in uses) == [
+            (40, Decimal("88")), (60, Decimal("70")),
+        ]
+        estimates = [d["components"][0]["estimate_key"] for d in uses]
+        assert len(set(estimates)) == 2
+        day = order_tool_module._requirements_for_date(TEST_DAY)
+        assert next(iter(day.values()))[ids["ingredient"]]["required_amount"] == Decimal("7720")
+        kitchen = order_tool_module._daily_kitchen_sheet_data(TEST_DAY)["regular"]
+        assert kitchen[0]["ingredient_default"] == "不同學校配方不同，請依菜色用量表分別備料"
+        assert KitchenRecipe.query.filter_by(name="南洋綠咖哩雞").count() == 1
+
+
+def test_central_daily_recipe_updates_default_school_but_not_own_override(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    central_id = _create_plan(app, authed_client, ids, headcount=40)
+    with app.app_context():
+        second = KitchenSchool(name="校外食堂")
+        db.session.add(second)
+        db.session.flush()
+        school_plan = KitchenMenuPlan(
+            service_date=TEST_DAY, meal_type="午餐", name="校外食堂菜單",
+        )
+        db.session.add(school_plan)
+        db.session.flush()
+        school_item = KitchenMenuPlanItem(
+            plan_id=school_plan.id, recipe_id=ids["recipe"],
+        )
+        db.session.add(school_item)
+        db.session.add(KitchenMenuAssignment(
+            plan_id=school_plan.id, school_id=second.id, headcount=20,
+        ))
+        db.session.flush()
+        central_item_id = KitchenMenuPlanItem.query.filter_by(
+            plan_id=central_id, recipe_id=ids["recipe"],
+        ).one().id
+        local_item_id = school_item.id
+        school_id = second.id
+        db.session.commit()
+
+    url_central = f"/admin/order-tool/summary/dishes/{central_item_id}/recipe"
+    url_local = f"/admin/order-tool/summary/dishes/{local_item_id}/recipe"
+    assert authed_client.post(url_central, data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]),
+        "grams_per_person": "75",
+    }).status_code == 302
+    with app.app_context():
+        local = db.session.get(KitchenMenuPlanItem, local_item_id)
+        assert order_tool_module._menu_item_components(local)[0].grams_per_person == Decimal("75")
+
+    assert authed_client.post(url_local, data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]),
+        "grams_per_person": "50",
+    }).status_code == 302
+    assert authed_client.post(url_central, data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]),
+        "grams_per_person": "90",
+    }).status_code == 302
+    with app.app_context():
+        local = db.session.get(KitchenMenuPlanItem, local_item_id)
+        central = db.session.get(KitchenMenuPlanItem, central_item_id)
+        assert order_tool_module._menu_item_components(local)[0].grams_per_person == Decimal("50")
+        assert order_tool_module._menu_item_components(central)[0].grams_per_person == Decimal("90")
+        assert KitchenRecipeIngredient.query.filter_by(
+            recipe_id=ids["recipe"], ingredient_id=ids["ingredient"],
+        ).one().grams_per_person == Decimal("88")
+
+    # Re-saving that school's menu must not silently erase its special recipe.
+    response = authed_client.post(
+        "/admin/order-tool/summary/schools/save-day",
+        data={
+            "school_id": str(school_id), "service_date": TEST_DAY.isoformat(),
+            "headcount": "20", "vegetarian_headcount": "0",
+            "regular_recipe_ids": str(ids["recipe"]),
+            "service_status": "serving",
+        },
+    )
+    assert response.status_code == 204
+    with app.app_context():
+        saved_item = KitchenMenuPlanItem.query.join(KitchenMenuPlan).filter(
+            KitchenMenuPlan.name == "校外食堂菜單",
+            KitchenMenuPlan.service_date == TEST_DAY,
+            KitchenMenuPlanItem.recipe_id == ids["recipe"],
+        ).one()
+        assert order_tool_module._menu_item_components(saved_item)[0].grams_per_person == Decimal("50")

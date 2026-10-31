@@ -15,7 +15,7 @@ from models import KitchenMenuPlan, KitchenRecipe, KitchenSchool
 from services.practice_database import cleanup_expired_accounts, list_accounts, workspace_engine
 
 
-def _app(tmp_path, *, limit=20):
+def _app(tmp_path, *, limit=20, ttl_days=10):
     main_path = tmp_path / "formal.db"
     practice_path = tmp_path / "practice-control.db"
     return create_app({
@@ -26,7 +26,7 @@ def _app(tmp_path, *, limit=20):
         "AUTO_CREATE_DB": True,
         "KITCHEN_CSRF_ENABLED": False,
         "PRACTICE_ACCOUNT_LIMIT": limit,
-        "PRACTICE_ACCOUNT_TTL_DAYS": 10,
+        "PRACTICE_ACCOUNT_TTL_DAYS": ttl_days,
         "PRACTICE_ACCOUNTS_ENABLED": True,
         "PRODUCTION": False,
     })
@@ -365,3 +365,62 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
     )
     repeated_page = repeated.get_data(as_text=True)
     assert "0 天新增 0 道菜" in repeated_page, repeated_page.partition('class="flash')[2][:1000]
+
+
+def test_practice_week_survives_relogin_and_weekly_report_is_reachable(tmp_path):
+    app = _app(tmp_path, ttl_days=0)
+    learner = app.test_client()
+    _login(learner, "週採購練習人員")
+    assert _create_plan(learner, "跨登入保留菜單").status_code == 302
+    page = learner.get("/admin/order-tool/summary?week=2026-10-05")
+    assert "跨登入保留菜單" in page.get_data(as_text=True)
+
+    home = learner.get("/admin/order-tool/").get_data(as_text=True)
+    assert "查看練習週採購單" in home
+    assert "week=2026-10-05" in home
+    weekly = learner.get("/admin/order-tool/weekly-procurement/summary.json")
+    assert weekly.status_code == 200
+    assert weekly.get_json()["week_start"] == "2026-10-05"
+    assert "2026/10/05" in learner.get(
+        "/admin/order-tool/weekly-procurement"
+    ).get_data(as_text=True)
+
+    learner.get("/admin/order-tool/ai-menu/practice/logout")
+    _login(learner, "週採購練習人員")
+    assert "跨登入保留菜單" in learner.get(
+        "/admin/order-tool/summary"
+    ).get_data(as_text=True)
+    assert learner.get(
+        "/admin/order-tool/weekly-procurement/summary.json"
+    ).get_json()["week_start"] == "2026-10-05"
+
+    other = app.test_client()
+    _login(other, "另一位練習人員")
+    assert "跨登入保留菜單" not in other.get(
+        "/admin/order-tool/summary?week=2026-10-05"
+    ).get_data(as_text=True)
+
+    with app.app_context():
+        engine = db.engines["practice"]
+        stale = datetime.now(timezone.utc) - timedelta(days=90)
+        with engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE practice_account SET last_active_at=:stale"
+            ), {"stale": stale})
+        assert cleanup_expired_accounts() == 0
+        assert len(list_accounts()) == 2
+        assert all(account["days_remaining"] is None for account in list_accounts())
+
+
+def test_practice_explicit_week_changes_the_weekly_report(tmp_path):
+    app = _app(tmp_path)
+    learner = app.test_client()
+    _login(learner, "週次切換練習")
+    _create_plan(learner, "舊週資料")
+    learner.get("/admin/order-tool/summary?week=2026-11-02")
+    assert learner.get(
+        "/admin/order-tool/weekly-procurement/summary.json"
+    ).get_json()["week_start"] == "2026-11-02"
+    assert "舊週資料" in learner.get(
+        "/admin/order-tool/summary?week=2026-10-05"
+    ).get_data(as_text=True)

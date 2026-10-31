@@ -33,13 +33,14 @@ the same host, port and database. Then set:
 
 - `PRACTICE_ACCOUNTS_ENABLED=1`
 - `PRACTICE_ACCOUNT_LIMIT=20`
-- `PRACTICE_ACCOUNT_TTL_DAYS=10`
+- `PRACTICE_ACCOUNT_TTL_DAYS=0` (0 means no automatic expiry; update an existing Render environment variable if it was set to 10)
 
 Practice workspaces create private `practice_*` schemas. Their school,
 supplier, ingredient and recipe tables are non-updatable views of `public`;
 only menu, assignment, kitchen-note, draft and purchase tables are private to
-each named account. Run `flask cleanup-practice-accounts` daily as a deployment
-cron job; login also removes expired accounts before enforcing the limit.
+each named account. Accounts persist until an administrator resets or deletes them.
+For optional inactivity expiry, explicitly set a positive `PRACTICE_ACCOUNT_TTL_DAYS`;
+only then does `flask cleanup-practice-accounts` or account login remove expired accounts.
 
 When `PRODUCTION=1`, the app intentionally refuses to start if `SECRET_KEY` or all admin passwords are missing, or if kitchen CSRF is disabled.
 

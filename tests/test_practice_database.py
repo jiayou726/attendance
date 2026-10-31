@@ -556,3 +556,56 @@ def test_practice_postgres_legacy_view_schema_upgrade_keeps_menu_and_private_rec
                 "AND c.relname='kitchen_recipe'"
             ), {"key": key}).scalar_one() == "r"
         assert KitchenRecipe.query.filter_by(name="舊帳號同名菜").count() == 1
+
+
+@pytest.mark.skipif(not os.environ.get("PRACTICE_POSTGRES_TEST_URL"),
+                    reason="Requires dedicated disposable PostgreSQL")
+def test_practice_postgres_master_copy_handles_public_column_order_and_extra_fields():
+    """Prevent INSERT ... SELECT * regression on migrated Supabase schemas."""
+    from models import KitchenSchool
+    url = os.environ["PRACTICE_POSTGRES_TEST_URL"]
+    app = create_app({
+        "TESTING": True,
+        "SECRET_KEY": "column-order-practice-test",
+        "SQLALCHEMY_DATABASE_URI": url,
+        "SQLALCHEMY_BINDS": {"practice": url},
+        "AUTO_CREATE_DB": True,
+        "KITCHEN_CSRF_ENABLED": False,
+        "PRACTICE_ACCOUNTS_ENABLED": True,
+        "PRODUCTION": False,
+    })
+    with app.app_context():
+        db.session.add(KitchenSchool(
+            name="欄位順序驗證學校", default_headcount=101,
+            default_vegetarian_headcount=7, active=True,
+        ))
+        db.session.commit()
+        # Simulate an additive formal migration that a new practice table does
+        # not have. SELECT * would now fail, explicit named columns must work.
+        with db.engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE public.kitchen_school "
+                "ADD COLUMN IF NOT EXISTS practice_copy_test_extra BOOLEAN DEFAULT false"
+            ))
+    try:
+        client = app.test_client()
+        _login(client, "Postgres 欄位順序防呆")
+        result = client.get("/admin/order-tool/schools")
+        assert result.status_code == 200
+        assert "欄位順序驗證學校" in result.get_data(as_text=True)
+        with app.app_context():
+            from services.practice_database import list_accounts, workspace_engine
+            from sqlalchemy import select
+            account = next(a for a in list_accounts() if a["display_name"] == "Postgres 欄位順序防呆")
+            with workspace_engine(account).connect() as conn:
+                school = conn.execute(select(KitchenSchool.__table__)
+                    .where(KitchenSchool.__table__.c.name == "欄位順序驗證學校")).mappings().one()
+                assert school["default_headcount"] == 101
+                assert school["default_vegetarian_headcount"] == 7
+    finally:
+        with app.app_context():
+            with db.engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE public.kitchen_school "
+                    "DROP COLUMN IF EXISTS practice_copy_test_extra"
+                ))

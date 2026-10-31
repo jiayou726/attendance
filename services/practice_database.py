@@ -164,7 +164,26 @@ def _copy_public_master(connection, engine, key: str, table_name: str) -> None:
     schema = _quote(engine, _assert_workspace_key(key))
     table = _quote(engine, table_name)
     private = f"{schema}.{table}"
-    connection.execute(text(f"INSERT INTO {private} SELECT * FROM public.{table}"))
+    # Supabase's public tables can have a different physical column order from
+    # SQLAlchemy-created practice tables after additive migrations. NEVER copy
+    # with SELECT *: it can put boolean values into integer columns and make
+    # every practice request fail when the legacy workspace is upgraded.
+    public_cols = {col["name"] for col in inspect(connection).get_columns(
+        table_name, schema="public"
+    )}
+    private_cols = [col["name"] for col in inspect(connection).get_columns(
+        table_name, schema=key
+    )]
+    shared_cols = [name for name in private_cols if name in public_cols]
+    if not shared_cols or "id" not in shared_cols:
+        raise PracticeAccountError(
+            f"練習空間的主檔 {table_name} 無法安全複製，請聯絡管理者。"
+        )
+    names_sql = ", ".join(_quote(engine, name) for name in shared_cols)
+    connection.execute(text(
+        f"INSERT INTO {private} ({names_sql}) "
+        f"SELECT {names_sql} FROM public.{table}"
+    ))
     # Do not lose private dishes previously created through the view overlay.
     if table_name == "kitchen_recipe" and inspect(connection).has_table(
         "practice_recipe_overlay", schema=key

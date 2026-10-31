@@ -189,7 +189,7 @@ def _upgrade_postgres_master_views(connection, engine, key: str) -> None:
     """Upgrade legacy read-only views without touching saved practice orders."""
     schema = _quote(engine, _assert_workspace_key(key))
     connection.execute(
-        text("SELECT pg_advisory_xact_lock(71320261031, hashtext(:key))"),
+        text("SELECT pg_advisory_xact_lock(71320260, hashtext(:key))"),
         {"key": key},
     )
     for table_name in MASTER_TABLES:

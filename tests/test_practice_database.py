@@ -755,3 +755,61 @@ def test_qrcode_formal_procurement_button_remains_formal_after_practice_login(tm
     assert browser.get(
         "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
     ).status_code == 200
+
+
+def test_practice_recipe_page_batches_queries_and_keeps_private_links(tmp_path):
+    from sqlalchemy import event
+    from models import KitchenIngredient, KitchenRecipeIngredient
+    app = _app(tmp_path)
+    with app.app_context():
+        ingredient = KitchenIngredient(name="配方查詢測試食材")
+        db.session.add(ingredient)
+        db.session.flush()
+        for i in range(18):
+            recipe = KitchenRecipe(name=f"配方批次測試{i:02d}", category="主菜")
+            db.session.add(recipe)
+            db.session.flush()
+            db.session.add(KitchenRecipeIngredient(
+                recipe_id=recipe.id, ingredient_id=ingredient.id, grams_per_person=55
+            ))
+        db.session.commit()
+    client = app.test_client()
+    _login(client, "配方頁面練習人員")
+    with app.app_context():
+        engine = workspace_engine(list_accounts()[0])
+        statements = []
+        def count_component_sql(conn, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().lower().startswith("select") and "kitchen_recipe_ingredient" in statement.lower():
+                statements.append(statement)
+        event.listen(engine, "before_cursor_execute", count_component_sql)
+        try:
+            response = client.get("/admin/order-tool/practice-workspace/recipes")
+            html = response.get_data(as_text=True)
+            assert response.status_code == 200
+            assert "配方批次測試00" in html and "配方批次測試17" in html
+            assert "/admin/order-tool/practice-workspace/recipes/" in html
+            assert "/admin/order-tool/recipes/" not in html
+        finally:
+            event.remove(engine, "before_cursor_execute", count_component_sql)
+        assert len(statements) <= 3, len(statements)
+
+
+def test_control_setup_does_not_rerun_on_each_practice_page(tmp_path):
+    from sqlalchemy import event
+    app = _app(tmp_path)
+    client = app.test_client()
+    _login(client, "練習帳號初始化測試")
+    with app.app_context():
+        engine = db.engines["practice"]
+        observed = []
+        def track(conn, cursor, statement, parameters, context, executemany):
+            if "REVOKE ALL ON SCHEMA" in statement or "CREATE SCHEMA IF NOT EXISTS" in statement:
+                observed.append(statement)
+        event.listen(engine, "before_cursor_execute", track)
+        try:
+            for i in range(3):
+                assert client.get("/admin/order-tool/practice-workspace/recipes").status_code == 200
+                assert client.get("/admin/order-tool/practice-workspace/summary").status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", track)
+        assert not observed, observed

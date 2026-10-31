@@ -76,8 +76,15 @@ def _control_name(engine) -> str:
 
 
 def _ensure_control(engine) -> None:
+    # One-time per app-worker setup. Re-running schema REVOKE in every HTTP
+    # request was causing "tuple concurrently updated" PostgreSQL failures.
+    ready = current_app.extensions.setdefault("practice_control_ready", set())
+    if id(engine) in ready:
+        return
     with engine.begin() as connection:
         if _is_postgres(engine):
+            # Serialize first-use schema setup across all server workers.
+            connection.execute(text("SELECT pg_advisory_xact_lock(71320260, 2)"))
             connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_CONTROL_SCHEMA}"))
             connection.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS {_CONTROL_SCHEMA}.{_CONTROL_TABLE} (
@@ -103,6 +110,7 @@ def _ensure_control(engine) -> None:
                     last_active_at DATETIME NOT NULL
                 )
             """))
+    ready.add(id(engine))
 
 
 def _row_dict(row):

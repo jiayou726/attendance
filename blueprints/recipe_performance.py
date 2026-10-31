@@ -27,7 +27,13 @@ def _recipe_bom_load():
 def install_recipe_performance_views(app):
     """Replace only recipe GET views with eager-loading equivalents."""
 
-    original_recipes = app.view_functions["order_tool.recipes"]
+    # Both blueprints use the same templates and must have the same eager loading.
+    for namespace in ("order_tool", "practice_order_tool"):
+        _install_recipe_namespace(app, namespace)
+
+
+def _install_recipe_namespace(app, namespace):
+    original_recipes = app.view_functions[f"{namespace}.recipes"]
 
     @wraps(original_recipes)
     def recipes_view(*args, **kwargs):
@@ -55,9 +61,15 @@ def install_recipe_performance_views(app):
             edit_row=edit_row,
             categories=CATEGORIES,
             q=q,
+            new_name=request.args.get("new_name", "").strip(),
+            new_category=(
+                request.args.get("new_category", "主菜")
+                if request.args.get("new_category", "主菜") in CATEGORIES
+                else "主菜"
+            ),
         )
 
-    original_recipe_detail = app.view_functions["order_tool.recipe_detail"]
+    original_recipe_detail = app.view_functions[f"{namespace}.recipe_detail"]
 
     @wraps(original_recipe_detail)
     def recipe_detail_view(recipe_id: int, *args, **kwargs):
@@ -100,5 +112,5 @@ def install_recipe_performance_views(app):
             week_start=week_start,
         )
 
-    app.view_functions["order_tool.recipes"] = recipes_view
-    app.view_functions["order_tool.recipe_detail"] = recipe_detail_view
+    app.view_functions[f"{namespace}.recipes"] = recipes_view
+    app.view_functions[f"{namespace}.recipe_detail"] = recipe_detail_view

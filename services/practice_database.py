@@ -169,9 +169,27 @@ def _copy_public_master(connection, engine, key: str, table_name: str) -> None:
     if table_name == "kitchen_recipe" and inspect(connection).has_table(
         "practice_recipe_overlay", schema=key
     ):
+        recipe_cols = [column.name for column in db.metadata.tables["kitchen_recipe"].columns]
+        quoted_cols = ", ".join(_quote(engine, name) for name in recipe_cols)
+        selected_cols = []
+        for column_name in recipe_cols:
+            if column_name == "name":
+                # Preserve a private recipe even when the formal catalog later
+                # introduced a dish with that name. Never discard its ID:
+                # saved practice menu items may still point to that ID.
+                selected_cols.append(
+                    f"CASE WHEN EXISTS (SELECT 1 FROM {private} m "
+                    "WHERE lower(m.name)=lower(p.name)) "
+                    "THEN LEFT(p.name, 90) || '（練習原有' || p.id || '）' "
+                    "ELSE p.name END"
+                )
+            else:
+                selected_cols.append(f"p.{_quote(engine, column_name)}")
         connection.execute(text(
-            f"INSERT INTO {private} SELECT * FROM {schema}.practice_recipe_overlay "
-            "ON CONFLICT DO NOTHING"
+            f"INSERT INTO {private} ({quoted_cols}) "
+            f"SELECT {', '.join(selected_cols)} "
+            f"FROM {schema}.practice_recipe_overlay p "
+            "ON CONFLICT (id) DO NOTHING"
         ))
     # The sequence must belong to the private table; never use public nextval.
     seq = connection.execute(text(

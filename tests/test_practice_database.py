@@ -667,3 +667,55 @@ def test_practice_login_page_has_no_formal_navigation(tmp_path):
     html = browser.get("/admin/order-tool/ai-menu/practice/login").get_data(as_text=True)
     assert "進入練習帳號" in html
     assert 'aria-label="團膳管理主選單"' not in html
+
+
+def test_formal_and_practice_menu_and_master_edits_never_synchronize(tmp_path):
+    """Both directions are isolated, including unchanged formal master snapshots."""
+    app = _app(tmp_path)
+    with app.app_context():
+        db.session.add(KitchenSchool(name="正式原始學校", default_headcount=99))
+        db.session.add(KitchenMenuPlan(
+            service_date=datetime(2026, 11, 2).date(),
+            meal_type="午餐", name="正式菜單不可顯示於練習區"))
+        db.session.commit()
+
+    learner = app.test_client()
+    _login(learner, "獨立新帳號練習者")
+    practice_page = learner.get("/admin/order-tool/summary?week=2026-11-02")
+    assert practice_page.status_code == 200
+    assert "正式菜單不可顯示於練習區" not in practice_page.get_data(as_text=True)
+    assert "正式原始學校" in learner.get(
+        "/admin/order-tool/schools"
+    ).get_data(as_text=True)
+
+    # Modify the formal master *after* the practice account was created.
+    with app.app_context():
+        school = KitchenSchool.query.filter_by(name="正式原始學校").one()
+        school.name = "正式後來改名學校"
+        db.session.commit()
+    practice_schools = learner.get(
+        "/admin/order-tool/schools"
+    ).get_data(as_text=True)
+    assert "正式原始學校" in practice_schools
+    assert "正式後來改名學校" not in practice_schools
+
+    learner.post("/admin/order-tool/plans", data={
+        "service_date": "2026-11-02", "meal_type": "午餐",
+        "name": "只存在練習區的菜單",
+    })
+    assert "只存在練習區的菜單" in learner.get(
+        "/admin/order-tool/summary?week=2026-11-02"
+    ).get_data(as_text=True)
+
+    # Formal data is still unchanged and the practice plan is not visible.
+    formal = app.test_client()
+    formal_page = formal.get(
+        "/admin/order-tool/summary?week=2026-11-02"
+    ).get_data(as_text=True)
+    assert "正式菜單不可顯示於練習區" in formal_page
+    assert "只存在練習區的菜單" not in formal_page
+    with app.app_context():
+        assert KitchenMenuPlan.query.filter_by(
+            name="只存在練習區的菜單").count() == 0
+        assert KitchenSchool.query.filter_by(
+            name="正式原始學校").count() == 0

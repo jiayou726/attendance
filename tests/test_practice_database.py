@@ -725,3 +725,33 @@ def test_practice_login_page_has_no_formal_navigation(tmp_path):
     ).get_data(as_text=True)
     assert "進入練習帳號" in html
     assert 'aria-label="團膳管理主選單"' not in html
+
+
+def test_qrcode_formal_procurement_button_remains_formal_after_practice_login(tmp_path):
+    """The actual 前往叫貨專區 button points to /kitchen, which must go formal."""
+    app = _app(tmp_path)
+    with app.app_context():
+        db.session.add(KitchenMenuPlan(
+            service_date=datetime(2026, 11, 2).date(),
+            meal_type="午餐", name="正式叫貨入口驗證"
+        ))
+        db.session.commit()
+    browser = app.test_client()
+    _login(browser, "練習者會點正式叫貨")
+    practice = browser.get(
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
+    )
+    assert "正式叫貨入口驗證" not in practice.get_data(as_text=True)
+
+    button_result = browser.get("/kitchen")
+    assert button_result.status_code == 302
+    assert button_result.headers["Location"].endswith("/admin/order-tool/")
+    homepage = browser.get(button_result.headers["Location"])
+    assert homepage.status_code == 200
+    assert "開始叫菜" in homepage.get_data(as_text=True)
+    assert "【練習模式" not in homepage.get_data(as_text=True)
+    formal = browser.get("/admin/order-tool/summary?week=2026-11-02")
+    assert "正式叫貨入口驗證" in formal.get_data(as_text=True)
+    assert browser.get(
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
+    ).status_code == 200

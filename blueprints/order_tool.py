@@ -431,12 +431,16 @@ def _plan_has_assignment_conflict(plan: KitchenMenuPlan, service_date: date, mea
 
 @order_bp.get("/")
 def index():
+    from services.practice_navigation import preferred_practice_week
+    practice_week = preferred_practice_week() if session.get("kitchen_practice") else None
     recent_orders = KitchenPurchaseOrder.query.order_by(
         KitchenPurchaseOrder.service_date.desc(), KitchenPurchaseOrder.id.desc()
     ).limit(10).all()
     return render_template(
         "kitchen/dashboard.html",
         recent_orders=recent_orders,
+        practice_week=practice_week,
+        practice_ttl_days=int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 0)),
         ai_enabled_recipe_count=KitchenRecipe.query.filter_by(active=True).count(),
         total_recipe_count=KitchenRecipe.query.count(),
         ingredient_count=KitchenIngredient.query.filter_by(active=True).count(),
@@ -1619,7 +1623,11 @@ def _summary_data(service_date: date):
 
 @order_bp.get("/summary")
 def summary():
-    selected_date = _date(request.args.get("week") or request.args.get("date"), default=date.today()) or date.today()
+    if session.get("kitchen_practice"):
+        from services.practice_navigation import preferred_practice_week
+        selected_date = preferred_practice_week(request.args.get("week") or request.args.get("date"))
+    else:
+        selected_date = _date(request.args.get("week") or request.args.get("date"), default=date.today()) or date.today()
     week_start = selected_date - timedelta(days=selected_date.weekday())
     week_end = week_start + timedelta(days=6)
     plans = (

@@ -255,7 +255,10 @@ def cleanup_expired_accounts(*, now: datetime | None = None) -> int:
     engine = _practice_engine()
     _ensure_control(engine)
     now = now or _utcnow()
-    cutoff = now - timedelta(days=int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 10)))
+    ttl = int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 0))
+    if ttl <= 0:
+        return 0
+    cutoff = now - timedelta(days=ttl)
     removed = 0
     with engine.begin() as connection:
         rows = connection.execute(text(
@@ -332,8 +335,8 @@ def touch_current_account() -> dict | None:
     if account is None:
         return None
     now = _utcnow()
-    cutoff = now - timedelta(days=int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 10)))
-    if account["last_active_at"] < cutoff:
+    ttl = int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 0))
+    if ttl > 0 and account["last_active_at"] < now - timedelta(days=ttl):
         delete_account(account["id"])
         return None
     if now - account["last_active_at"] >= timedelta(minutes=30):
@@ -471,10 +474,13 @@ def list_accounts() -> list[dict]:
         )).all()
     accounts = [_row_dict(row) for row in rows]
     now = _utcnow()
-    ttl = int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 10))
+    ttl = int(current_app.config.get("PRACTICE_ACCOUNT_TTL_DAYS", 0))
     for account in accounts:
-        remaining = timedelta(days=ttl) - (now - account["last_active_at"])
-        account["days_remaining"] = max(0, remaining.days + (1 if remaining.seconds else 0))
+        if ttl > 0:
+            remaining = timedelta(days=ttl) - (now - account["last_active_at"])
+            account["days_remaining"] = max(0, remaining.days + (1 if remaining.seconds else 0))
+        else:
+            account["days_remaining"] = None
         try:
             account_engine = workspace_engine(account)
             with account_engine.connect() as connection:
@@ -526,6 +532,7 @@ def ensure_practice_database() -> None:
 
 def activate_account(account: dict) -> None:
     db.session.remove()
+    session.pop("practice_selected_week", None)
     session["kitchen_practice"] = True
     session["practice_account_id"] = account["id"]
     session["practice_account_name"] = account["display_name"]
@@ -536,7 +543,7 @@ def clear_practice_session() -> None:
     db.session.remove()
     for key in (
         "kitchen_practice", "practice_account_id", "practice_account_name",
-        "practice_workspace_key",
+        "practice_workspace_key", "practice_selected_week",
     ):
         session.pop(key, None)
 

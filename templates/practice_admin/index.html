@@ -15,7 +15,7 @@
 </head>
 <body>
   <div class="top"><h1>練習人員管理</h1><a href="{{ url_for('emp.list_employees') }}">回員工名單</a></div>
-  <p class="muted">最多 20 個帳號；連續 10 天沒有使用會自動刪除。重置會保留姓名並清空總表、叫貨與採購結果。</p>
+  <p class="muted">最多 {{ config.PRACTICE_ACCOUNT_LIMIT }} 個帳號；{% if config.PRACTICE_ACCOUNT_TTL_DAYS > 0 %}連續 {{ config.PRACTICE_ACCOUNT_TTL_DAYS }} 天沒有使用會自動刪除。{% else %}練習成果預設持續保留，須由管理員手動重置或刪除。{% endif %}重置會保留姓名並清空總表、叫貨與採購結果。</p>
   {% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
   <table>
     <thead><tr><th>姓名</th><th class="optional">建立時間</th><th>最後使用</th><th>剩餘</th><th>菜單</th><th>採購單</th><th>操作</th></tr></thead>
@@ -25,7 +25,7 @@
         <td>{{ account.display_name }}</td>
         <td class="optional">{{ account.created_at.strftime('%Y/%m/%d %H:%M') }}</td>
         <td>{{ account.last_active_at.strftime('%Y/%m/%d %H:%M') }}</td>
-        <td>{{ account.days_remaining }} 天</td>
+        <td>{{ account.days_remaining ~ ' 天' if account.days_remaining is not none else '持續保留' }}</td>
         <td>{{ account.plan_count if account.plan_count is not none else '—' }}</td>
         <td>{{ account.order_count if account.order_count is not none else '—' }}</td>
         <td><div class="actions">

@@ -5,7 +5,7 @@
   <span class="eyebrow">PRACTICE ACCOUNT</span>
   <h1>練習專用入口</h1>
   <p>輸入姓名進入練習帳號。在其他電腦輸入同一姓名，也會回到同一份練習進度。</p>
-  <p class="muted">學校、廠商、食材與配方來自正式主帳，在練習區只能讀取；總表、叫貨與週採購單只屬於這個姓名。連續 10 天沒有使用會自動刪除。
+  <p class="muted">學校、廠商、食材與配方來自正式主帳，在練習區只能讀取；總表、叫貨與週採購單只屬於這個姓名。{% if config.PRACTICE_ACCOUNT_TTL_DAYS > 0 %}連續 {{ config.PRACTICE_ACCOUNT_TTL_DAYS }} 天未使用會自動刪除。{% else %}練習成果會保留，直到管理員重置或刪除帳號。{% endif %}
   </p>
   {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
   <form method="post">

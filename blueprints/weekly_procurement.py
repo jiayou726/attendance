@@ -7,7 +7,7 @@ from decimal import Decimal
 from io import BytesIO
 import re
 
-from flask import Blueprint, render_template, request, send_file
+from flask import Blueprint, render_template, request, send_file, session
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy.orm import selectinload
@@ -36,6 +36,13 @@ def _as_date(raw):
 def _week_bounds(day):
     start = day - timedelta(days=day.weekday())
     return start, start + timedelta(days=6)
+
+
+def _selected_week():
+    if session.get("kitchen_practice"):
+        from services.practice_navigation import preferred_practice_week
+        return preferred_practice_week(request.args.get("week"))
+    return _as_date(request.args.get("week"))
 
 
 def _d(value):
@@ -250,7 +257,7 @@ def _weekly_template_helpers():
 
 @weekly_procurement_bp.get("/weekly-procurement")
 def weekly_procurement():
-    selected = _as_date(request.args.get("week"))
+    selected = _selected_week()
     week_start, week_end = _week_bounds(selected)
     orders, vendors, anomalies = _weekly_data(week_start, week_end)
     total_items = sum(len(order.items) for order in orders)
@@ -272,7 +279,7 @@ def weekly_procurement():
 @weekly_procurement_bp.get("/weekly-procurement/summary.json")
 def weekly_procurement_summary():
     """Small dashboard payload so the home page can show exactly one selected week."""
-    selected = _as_date(request.args.get("week"))
+    selected = _selected_week()
     week_start, week_end = _week_bounds(selected)
     orders = (
         KitchenPurchaseOrder.query.filter(
@@ -317,7 +324,7 @@ def _safe_sheet_name(name, used):
 
 @weekly_procurement_bp.get("/weekly-procurement.xlsx")
 def weekly_procurement_export():
-    selected = _as_date(request.args.get("week"))
+    selected = _selected_week()
     week_start, week_end = _week_bounds(selected)
     _orders, vendors, _anomalies = _weekly_data(week_start, week_end)
     workbook = Workbook()

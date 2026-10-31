@@ -202,6 +202,10 @@ def create_app(config_overrides=None) -> Flask:
         return original_url_for(endpoint, **values)
 
     app.url_for = account_scoped_url_for
+    # Flask captures the URL builder in Jinja's globals at app creation time.
+    # Update that reference too, or templates still generate *formal* links
+    # even when the practice blueprint was used.
+    app.jinja_env.globals["url_for"] = account_scoped_url_for
 
     # 非登合菜名範本本身有幾列格式不同；匯出前把所有資料列
     # 統一成第 2 列格式，避免日期、底色、框線在中間幾列跑掉。

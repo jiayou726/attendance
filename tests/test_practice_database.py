@@ -77,7 +77,7 @@ def test_named_accounts_resume_across_computers_and_remain_isolated(tmp_path):
         assert len(list_accounts()) == 2
 
 
-def test_practice_master_data_is_read_only(tmp_path):
+def test_practice_master_data_is_editable_and_isolated(tmp_path):
     app = _app(tmp_path)
     with app.app_context():
         db.session.add(KitchenSchool(name="正式學校"))
@@ -85,10 +85,11 @@ def test_practice_master_data_is_read_only(tmp_path):
     client = app.test_client()
     _login(client, "練習者")
 
-    response = client.post("/admin/order-tool/schools", data={"name": "不可新增"})
+    response = client.post("/admin/order-tool/schools", data={"name": "練習新增學校"})
     assert response.status_code == 302
+    assert "練習新增學校" in client.get("/admin/order-tool/schools").get_data(as_text=True)
     with app.app_context():
-        assert KitchenSchool.query.filter_by(name="不可新增").first() is None
+        assert KitchenSchool.query.filter_by(name="練習新增學校").first() is None
 
 
 def test_capacity_and_expiry_release_slots(tmp_path):
@@ -294,7 +295,7 @@ def test_practice_import_month_template_is_complete_and_idempotent(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("PRACTICE_POSTGRES_TEST_URL"),
                     reason="Requires dedicated disposable PostgreSQL for integration tests")
-def test_practice_postgres_excel_import_uses_private_recipe_overlay():
+def test_practice_postgres_excel_import_uses_private_master_copy():
     # Never point this test at a shared or production database.
     postgres_url = os.environ["PRACTICE_POSTGRES_TEST_URL"]
     app = create_app({
@@ -332,7 +333,7 @@ def test_practice_postgres_excel_import_uses_private_recipe_overlay():
         with engine.connect() as connection:
             private_recipes = connection.execute(select(KitchenRecipe.__table__)).mappings().all()
             assert len(private_recipes) == 127
-            assert sum(row["id"] < 0 for row in private_recipes) == 126
+            assert sum(row["id"] > 0 for row in private_recipes) == 127
             assert connection.execute(select(func.count()).select_from(
                 KitchenMenuPlan.__table__
             )).scalar_one() == 21
@@ -424,3 +425,36 @@ def test_practice_explicit_week_changes_the_weekly_report(tmp_path):
     assert "舊週資料" in learner.get(
         "/admin/order-tool/summary?week=2026-10-05"
     ).get_data(as_text=True)
+
+
+def test_existing_sqlite_practice_workspace_is_auto_upgraded_without_data_loss(tmp_path):
+    from services.practice_database import workspace_engine
+    app = _app(tmp_path)
+    client = app.test_client()
+    _login(client, "舊資料升級練習")
+    _create_plan(client, "升級前保留菜單")
+    with app.app_context():
+        account = list_accounts()[0]
+        engine = workspace_engine(account)
+        with engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE kitchen_menu_plan_item DROP COLUMN ingredients_override_json"
+            ))
+            connection.execute(text(
+                "ALTER TABLE kitchen_daily_dish_note DROP COLUMN count_override_fields"
+            ))
+        app.extensions["practice_estimate_schema_checked"].discard(
+            account["workspace_key"]
+        )
+    response = client.get("/admin/order-tool/summary?week=2026-10-05")
+    assert response.status_code == 200
+    assert "升級前保留菜單" in response.get_data(as_text=True)
+    with app.app_context():
+        engine = workspace_engine(list_accounts()[0])
+        from sqlalchemy import inspect
+        assert "ingredients_override_json" in {
+            x["name"] for x in inspect(engine).get_columns("kitchen_menu_plan_item")
+        }
+        assert "count_override_fields" in {
+            x["name"] for x in inspect(engine).get_columns("kitchen_daily_dish_note")
+        }

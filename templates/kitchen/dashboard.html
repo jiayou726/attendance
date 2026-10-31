@@ -4,7 +4,7 @@
 {% block content %}
 <section class="home-welcome"><div><h1>{{ '繼續練習' if session.get('kitchen_practice') else '開始叫菜' }}</h1></div><a class="btn home-primary" href="{{ url_for('order_tool.summary', week=practice_week.isoformat()) if practice_week else url_for('order_tool.summary') }}">開啟總表</a></section>
 {% if session.get('kitchen_practice') %}
-<div class="notice"><b>這是 {{ session.get('practice_account_name') }} 的獨立練習空間。</b>菜單、採購單與週採購結果會保存在這個姓名下；學校、食材、廠商、共用配方為正式資料的唯讀參考。{% if practice_ttl_days > 0 %}連續 {{ practice_ttl_days }} 天未使用後自動清除。{% else %}離開或重新登入不會清除資料，僅管理員可重置或刪除。{% endif %}<a href="{{ url_for('weekly_procurement.weekly_procurement', week=practice_week.isoformat()) }}">查看練習週採購單（{{ practice_week.strftime('%m/%d') }} 當週）</a></div>
+<div class="notice"><b>這是 {{ session.get('practice_account_name') }} 的獨立練習空間。</b>菜單、採購單與週採購結果會保存在這個姓名下；學校、食材、廠商與共用配方已複製到練習帳號，可自由修改而不影響正式資料。{% if practice_ttl_days > 0 %}連續 {{ practice_ttl_days }} 天未使用後自動清除。{% else %}離開或重新登入不會清除資料，僅管理員可重置或刪除。{% endif %}<a href="{{ url_for('weekly_procurement.weekly_procurement', week=practice_week.isoformat()) }}">查看練習週採購單（{{ practice_week.strftime('%m/%d') }} 當週）</a></div>
 {% endif %}
 {% if pending_component_count %}<div class="notice warning-home"><b>{{ pending_component_count }} 筆材料克數待確認</b>　材料名稱已匯入；確認克數後才會加入總量，避免叫錯貨。<a href="{{ url_for('order_tool.recipes') }}">去查看</a></div>{% endif %}
 <section class="home-section" aria-labelledby="home-functions-title"><div class="home-section-heading"><span class="eyebrow">功能選單</span><h2 id="home-functions-title">你要處理哪一項？</h2></div><div class="home-actions">

@@ -1,8 +1,8 @@
 """Named, isolated kitchen practice workspaces.
 
-PostgreSQL workspaces contain read-only views of the formal master tables and
-private operational tables. No formal master row is copied. SQLite keeps a
-small file-per-account fallback for local development and automated tests.
+PostgreSQL workspaces have private writable copies of master and operational
+tables. Existing view-based accounts upgrade in place without erasing records.
+SQLite uses a file-per-account fallback for development and tests.
 """
 from __future__ import annotations
 
@@ -141,10 +141,10 @@ def _assert_workspace_key(value: str) -> str:
     return value
 
 
-def _clone_operational_tables(connection, schema: str) -> None:
-    """Create operational tables without cross-schema foreign keys."""
+def _clone_operational_tables(connection, schema: str, names=OPERATIONAL_TABLES) -> None:
+    """Create private tables without cross-schema foreign keys."""
     metadata = MetaData()
-    for table_name in OPERATIONAL_TABLES:
+    for table_name in names:
         cloned = db.metadata.tables[table_name].to_metadata(metadata, schema=schema)
         for constraint in list(cloned.constraints):
             if isinstance(constraint, ForeignKeyConstraint):
@@ -158,25 +158,72 @@ def _clone_operational_tables(connection, schema: str) -> None:
             connection.execute(CreateIndex(index))
 
 
+
+def _copy_public_master(connection, engine, key: str, table_name: str) -> None:
+    """Copy formal reference rows to a private writable workspace table."""
+    schema = _quote(engine, _assert_workspace_key(key))
+    table = _quote(engine, table_name)
+    private = f"{schema}.{table}"
+    connection.execute(text(f"INSERT INTO {private} SELECT * FROM public.{table}"))
+    # Do not lose private dishes previously created through the view overlay.
+    if table_name == "kitchen_recipe" and inspect(connection).has_table(
+        "practice_recipe_overlay", schema=key
+    ):
+        connection.execute(text(
+            f"INSERT INTO {private} SELECT * FROM {schema}.practice_recipe_overlay "
+            "ON CONFLICT DO NOTHING"
+        ))
+    # The sequence must belong to the private table; never use public nextval.
+    seq = connection.execute(text(
+        "SELECT pg_get_serial_sequence(:table, 'id')"
+    ), {"table": f"{key}.{table_name}"}).scalar()
+    if seq:
+        connection.execute(text(
+            f"SELECT setval(CAST(:seq AS regclass), "
+            f"COALESCE((SELECT MAX(id) FROM {private}), 1), "
+            f"EXISTS(SELECT 1 FROM {private}))"
+        ), {"seq": seq})
+
+
+def _upgrade_postgres_master_views(connection, engine, key: str) -> None:
+    """Upgrade legacy read-only views without touching saved practice orders."""
+    schema = _quote(engine, _assert_workspace_key(key))
+    connection.execute(
+        text("SELECT pg_advisory_xact_lock(71320261031, hashtext(:key))"),
+        {"key": key},
+    )
+    for table_name in MASTER_TABLES:
+        kind = connection.execute(text("""
+            SELECT c.relkind FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname=:schema AND c.relname=:table
+        """), {"schema": key, "table": table_name}).scalar()
+        if kind == "r":
+            continue
+        if kind != "v":
+            raise PracticeAccountError("練習空間的主檔不存在，已停止操作以保護資料。")
+        connection.execute(text(
+            f"DROP VIEW {schema}.{_quote(engine, table_name)}"
+        ))
+        _clone_operational_tables(connection, key, (table_name,))
+        _copy_public_master(connection, engine, key, table_name)
+
+
 def _create_postgres_workspace(connection, engine, workspace_key: str) -> None:
     formal_target = (db.engine.url.host, db.engine.url.port, db.engine.url.database)
     practice_target = (engine.url.host, engine.url.port, engine.url.database)
     if formal_target != practice_target:
         raise PracticeAccountError(
             "練習區必須與正式主帳使用同一個 PostgreSQL 資料庫，"
-            "才能即時唯讀取用主檔。"
+            "才能安全建立獨立資料表。"
         )
     workspace_key = _assert_workspace_key(workspace_key)
     schema = _quote(engine, workspace_key)
     connection.execute(text(f"CREATE SCHEMA {schema}"))
-    # OFFSET makes the views non-updatable; forgotten UI guards still cannot
-    # write to formal master tables.
+    # Each account starts with its own fully writable reference data.
+    _clone_operational_tables(connection, workspace_key, MASTER_TABLES)
     for table_name in MASTER_TABLES:
-        table = _quote(engine, table_name)
-        connection.execute(text(
-            f"CREATE VIEW {schema}.{table} WITH (security_invoker=true) AS "
-            f"SELECT * FROM public.{table} OFFSET 0"
-        ))
+        _copy_public_master(connection, engine, workspace_key, table_name)
     _clone_operational_tables(connection, workspace_key)
     connection.execute(text(
         f"REVOKE ALL ON SCHEMA {schema} FROM PUBLIC, anon, authenticated"
@@ -424,21 +471,37 @@ def _ensure_workspace_estimate_columns(account: dict) -> None:
         return
     is_postgres = _is_postgres(engine)
     bind = engine if is_postgres else _sqlite_account_engine(engine, key)
-    table = f"{_quote(engine, key)}.kitchen_purchase_order_item" if is_postgres else "kitchen_purchase_order_item"
     with bind.begin() as connection:
-        columns = {col["name"] for col in inspect(connection).get_columns(
-            "kitchen_purchase_order_item", schema=key if is_postgres else None,
-        )}
-        if "dish_estimates_json" not in columns:
-            connection.execute(text(
-                f"ALTER TABLE {table} ADD COLUMN dish_estimates_json TEXT NOT NULL DEFAULT '{{}}'"
-            ))
-        if "dish_adjustment_qty" not in columns:
-            connection.execute(text(
-                f"ALTER TABLE {table} ADD COLUMN dish_adjustment_qty NUMERIC(16, 4)"
-            ))
         if is_postgres:
-            _ensure_postgres_recipe_overlay(connection, engine, key)
+            _upgrade_postgres_master_views(connection, engine, key)
+        # Old practice tables do not automatically receive newly added
+        # columns from public; missing ones cause UndefinedColumn on SELECT.
+        upgrades = {
+            "kitchen_purchase_order_item": {
+                "dish_estimates_json": "TEXT NOT NULL DEFAULT '{}'",
+                "dish_adjustment_qty": "NUMERIC(16, 4)",
+            },
+            "kitchen_menu_plan_item": {
+                "ingredients_override_json": "TEXT",
+            },
+            "kitchen_daily_dish_note": {
+                "count_override_fields": "TEXT",
+            },
+        }
+        for table_name, additions in upgrades.items():
+            cols = {c["name"] for c in inspect(connection).get_columns(
+                table_name, schema=key if is_postgres else None,
+            )}
+            qualified = (
+                f"{_quote(engine, key)}.{_quote(engine, table_name)}"
+                if is_postgres else _quote(engine, table_name)
+            )
+            for column_name, definition in additions.items():
+                if column_name not in cols:
+                    connection.execute(text(
+                        f"ALTER TABLE {qualified} ADD COLUMN "
+                        f"{_quote(engine, column_name)} {definition}"
+                    ))
     cache.add(key)
 
 

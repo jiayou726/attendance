@@ -117,11 +117,7 @@ def _protect_kitchen():
         received = request.form.get("_csrf_token", "")
         if not expected or not received or not secrets.compare_digest(expected, received):
             abort(400, description="安全驗證已失效，請重新整理頁面再操作。")
-    if request.method == "POST" and session.get("kitchen_practice"):
-        from services.practice_database import practice_master_write_blocked
-        if practice_master_write_blocked(request.endpoint):
-            flash("練習區的學校、廠商、食材與配方直接讀取正式主帳，不可在這裡修改。", "error")
-            return redirect(request.referrer or url_for("order_tool.index"))
+    # Practice requests use private writable master and operational tables.
     return None
 
 
@@ -4723,13 +4719,11 @@ def _apply_procurement_item_values(
             db.func.lower(KitchenSupplier.name) == supplier_name.lower()
         ).first()
         if supplier is None:
-            if session.get("kitchen_practice"):
-                return None, "練習區只能選擇正式主帳已有的廠商。"
-            supplier = KitchenSupplier(name=supplier_name, note="由採購明細新增", active=True)
+             supplier = KitchenSupplier(name=supplier_name, note="由採購明細新增", active=True)
             db.session.add(supplier)
             db.session.flush()
             supplier_created = True
-        elif not supplier.active and not session.get("kitchen_practice"):
+        elif not supplier.active:
             supplier.active = True
 
     supplier_item = _supplier_item_match(
@@ -4747,7 +4741,7 @@ def _apply_procurement_item_values(
 
     conversion_changed = False
     if (supplier and package_qty is not None and package_qty > 0 and package_unit
-            and actual > 0 and not session.get("kitchen_practice")):
+            and actual > 0):
         supplier_item, conversion_changed = _remember_supplier_conversion(
             supplier, item, actual, package_qty, package_unit
         )
@@ -4771,7 +4765,7 @@ def _apply_procurement_item_values(
     item.delivery_date = delivery_date
     item.delivery_slot = delivery_slot
     item.manual_override = True
-    if item.ingredient and not session.get("kitchen_practice"):
+    if item.ingredient:
         item.ingredient.supplier_id = supplier.id if supplier else None
 
     return {

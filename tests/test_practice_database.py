@@ -458,3 +458,101 @@ def test_existing_sqlite_practice_workspace_is_auto_upgraded_without_data_loss(t
         assert "count_override_fields" in {
             x["name"] for x in inspect(engine).get_columns("kitchen_daily_dish_note")
         }
+
+
+@pytest.mark.skipif(not os.environ.get("PRACTICE_POSTGRES_TEST_URL"),
+                    reason="Requires dedicated disposable PostgreSQL")
+def test_practice_postgres_legacy_view_schema_upgrade_keeps_menu_and_private_recipe():
+    """Old PostgreSQL accounts must become writable without losing plans or IDs."""
+    from services.practice_database import MASTER_TABLES, workspace_engine
+    from sqlalchemy import inspect
+
+    url = os.environ["PRACTICE_POSTGRES_TEST_URL"]
+    app = create_app({
+        "TESTING": True,
+        "SECRET_KEY": "legacy-practice-test-secret",
+        "SQLALCHEMY_DATABASE_URI": url,
+        "SQLALCHEMY_BINDS": {"practice": url},
+        "AUTO_CREATE_DB": True,
+        "KITCHEN_CSRF_ENABLED": False,
+        "PRACTICE_ACCOUNTS_ENABLED": True,
+        "PRODUCTION": False,
+    })
+    with app.app_context():
+        db.session.add(KitchenRecipe(name="舊帳號同名菜", category="主菜"))
+        db.session.commit()
+    client = app.test_client()
+    _login(client, "Postgres 舊帳號保留測試")
+    _create_plan(client, "遷移前的菜單")
+    with app.app_context():
+        account = next(x for x in list_accounts()
+                       if x["display_name"] == "Postgres 舊帳號保留測試")
+        key = account["workspace_key"]
+        db.session.remove()
+        with db.engines["practice"].begin() as connection:
+            for table in MASTER_TABLES:
+                connection.execute(text(f'DROP TABLE "{key}"."{table}"'))
+                connection.execute(text(
+                    f'CREATE VIEW "{key}"."{table}" '
+                    f'WITH (security_invoker=true) AS '
+                    f'SELECT * FROM public."{table}" OFFSET 0'
+                ))
+            connection.execute(text(
+                f'CREATE TABLE "{key}".practice_recipe_overlay '
+                '(LIKE public.kitchen_recipe INCLUDING CONSTRAINTS)'
+            ))
+            connection.execute(text(
+                f'INSERT INTO "{key}".practice_recipe_overlay '
+                '(id, name, category, active, created_at, updated_at) '
+                "VALUES (-11, '舊帳號同名菜', '主菜', false, now(), now())"
+            ))
+            connection.execute(text(
+                f'INSERT INTO "{key}".kitchen_menu_plan_item '
+                '(plan_id, recipe_id, sort_order) '
+                f'SELECT id, -11, 1 FROM "{key}".kitchen_menu_plan LIMIT 1'
+            ))
+            connection.execute(text(
+                f'ALTER TABLE "{key}".kitchen_menu_plan_item '
+                'DROP COLUMN ingredients_override_json'
+            ))
+            connection.execute(text(
+                f'ALTER TABLE "{key}".kitchen_daily_dish_note '
+                'DROP COLUMN count_override_fields'
+            ))
+        app.extensions["practice_estimate_schema_checked"].discard(key)
+
+    response = client.get("/admin/order-tool/summary?week=2026-10-05")
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "遷移前的菜單" in page
+    assert "練習原有-11" in page
+    with app.app_context():
+        account = next(x for x in list_accounts()
+                       if x["display_name"] == "Postgres 舊帳號保留測試")
+        engine = workspace_engine(account)
+        with engine.connect() as connection:
+            assert connection.execute(select(func.count()).select_from(
+                KitchenMenuPlan.__table__
+            )).scalar_one() == 1
+            assert connection.execute(select(func.count()).select_from(
+                db.metadata.tables["kitchen_menu_plan_item"]
+            )).scalar_one() == 1
+            assert connection.execute(text(
+                f'SELECT count(*) FROM "{key}".kitchen_recipe WHERE id=-11'
+            )).scalar_one() == 1
+            assert "ingredients_override_json" in {
+                c["name"] for c in inspect(connection).get_columns(
+                    "kitchen_menu_plan_item", schema=key
+                )
+            }
+            assert "count_override_fields" in {
+                c["name"] for c in inspect(connection).get_columns(
+                    "kitchen_daily_dish_note", schema=key
+                )
+            }
+            assert connection.execute(text(
+                'SELECT relkind FROM pg_class c JOIN pg_namespace n '
+                'ON n.oid=c.relnamespace WHERE n.nspname=:key '
+                "AND c.relname='kitchen_recipe'"
+            ), {"key": key}).scalar_one() == "r"
+        assert KitchenRecipe.query.filter_by(name="舊帳號同名菜").count() == 1

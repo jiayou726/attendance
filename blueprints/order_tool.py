@@ -4719,7 +4719,7 @@ def _apply_procurement_item_values(
             db.func.lower(KitchenSupplier.name) == supplier_name.lower()
         ).first()
         if supplier is None:
-             supplier = KitchenSupplier(name=supplier_name, note="由採購明細新增", active=True)
+            supplier = KitchenSupplier(name=supplier_name, note="由採購明細新增", active=True)
             db.session.add(supplier)
             db.session.flush()
             supplier_created = True

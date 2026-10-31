@@ -743,7 +743,7 @@ def test_qrcode_formal_procurement_button_remains_formal_after_practice_login(tm
     )
     assert "正式叫貨入口驗證" not in practice.get_data(as_text=True)
 
-    button_result = browser.get("/kitchen")
+    button_result = browser.get("/punch/kitchen")
     assert button_result.status_code == 302
     assert button_result.headers["Location"].endswith("/admin/order-tool/")
     homepage = browser.get(button_result.headers["Location"])

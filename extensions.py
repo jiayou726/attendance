@@ -7,10 +7,9 @@ from flask_sqlalchemy.session import Session as FlaskSQLAlchemySession
 class KitchenRoutingSession(FlaskSQLAlchemySession):
     """Route kitchen practice requests to an isolated database bind.
 
-    The rest of the application keeps using the normal database. Once the
-    practice flag is present in the browser session, every ORM read/write
-    under /admin/order-tool is transparently sent to that named account's
-    workspace. Formal kitchen routes retain their original bind unchanged.
+    A dedicated practice-workspace URL scope is required, alongside the
+    signed account session. Formal URLs are *always* served by public data,
+    even if this browser also has an active practice account.
     """
 
     def get_bind(self, mapper=None, clause=None, bind=None, **kwargs):
@@ -18,7 +17,7 @@ class KitchenRoutingSession(FlaskSQLAlchemySession):
             bind is None
             and has_request_context()
             and session.get("kitchen_practice")
-            and request.path.startswith("/admin/order-tool")
+            and request.path.startswith("/admin/order-tool/practice-workspace/")
         ):
             # Import lazily to avoid the extensions -> models -> extensions
             # cycle during application startup.

@@ -14,7 +14,7 @@
 <main class="wrap">
   <div class="top no-print">
     <h1>{{ '團膳管理｜練習帳號：' ~ session.get('practice_account_name', '') if session.get('kitchen_practice') else '團膳管理' }}</h1>
-    {% if request.endpoint != 'order_tool.ai_menu_practice_login' %}
+    {% if request.endpoint not in ('order_tool.ai_menu_practice_login', 'practice_order_tool.ai_menu_practice_login') %}
     <nav class="nav" aria-label="團膳管理主選單">
       <a href="{{ url_for('order_tool.index') }}">總覽</a>
       <a href="{{ url_for('order_tool.summary') }}">總表</a>

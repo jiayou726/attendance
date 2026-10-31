@@ -168,8 +168,40 @@ def create_app(config_overrides=None) -> Flask:
     app.register_blueprint(order_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(weekly_procurement_bp, url_prefix="/admin/order-tool")
     app.register_blueprint(school_ingredient_export_bp, url_prefix="/admin/order-tool")
+    # Reuse the exact same views and features, but under a distinct URL
+    # namespace. This is a different login/account, never a switch of the
+    # formal /admin/order-tool pages into practice mode.
+    app.register_blueprint(
+        order_bp, name="practice_order_tool",
+        url_prefix="/admin/order-tool/practice-workspace",
+    )
+    app.register_blueprint(
+        weekly_procurement_bp, name="practice_weekly_procurement",
+        url_prefix="/admin/order-tool/practice-workspace",
+    )
+    app.register_blueprint(
+        school_ingredient_export_bp, name="practice_school_ingredient_export",
+        url_prefix="/admin/order-tool/practice-workspace",
+    )
     app.register_blueprint(practice_admin_bp, url_prefix="/admin/practice-users")
     app.register_blueprint(punch_bp)
+
+    # Existing templates and views call url_for("order_tool.*") regardless
+    # of the account type. Only on practice-workspace pages, resolve those
+    # links to the practice endpoint. Formal links everywhere else are never
+    # rewritten.
+    original_url_for = app.url_for
+
+    def account_scoped_url_for(endpoint, **values):
+        if (request and request.path.startswith("/admin/order-tool/practice-workspace/")
+                and endpoint.startswith((
+                    "order_tool.", "weekly_procurement.",
+                    "school_ingredient_export.",
+                ))):
+            endpoint = "practice_" + endpoint
+        return original_url_for(endpoint, **values)
+
+    app.url_for = account_scoped_url_for
 
     # 非登合菜名範本本身有幾列格式不同；匯出前把所有資料列
     # 統一成第 2 列格式，避免日期、底色、框線在中間幾列跑掉。
@@ -181,31 +213,33 @@ def create_app(config_overrides=None) -> Flask:
 
     @app.before_request
     def protect_admin_pages():
-        # The practice and formal modules share URLs for historical reasons.
-        # If a practice browser loses its Flask session (e.g. deployment,
-        # cookie expiry), NEVER fall through to the formal database.
-        # Keep an independent HttpOnly marker cookie for the practice browser.
-        practice_endpoint = request.endpoint in {
-            "order_tool.ai_menu_practice_login",
-            "order_tool.ai_menu_practice_logout",
-        }
-        if (request.path.startswith("/admin/order-tool")
-                and not practice_endpoint
-                and request.cookies.get("kitchen_practice_mode") == "1"
-                and not session.get("kitchen_practice")):
-            return redirect(url_for("order_tool.ai_menu_practice_login"))
-        if (session.get("kitchen_practice")
-                and request.path.startswith("/admin/order-tool")
-                and request.endpoint not in {
-                    "order_tool.ai_menu_practice_login",
-                    "order_tool.ai_menu_practice_logout",
-                }):
+        practice_path = request.path.startswith("/admin/order-tool/practice-workspace/")
+        account_login = request.endpoint == "practice_order_tool.ai_menu_practice_login"
+        account_logout = request.endpoint == "practice_order_tool.ai_menu_practice_logout"
+
+        # Compatibility for old public links: the old "practice login"
+        # URL now takes people to the distinct practice account URL.
+        if request.endpoint == "order_tool.ai_menu_practice_login":
+            return redirect(url_for("practice_order_tool.ai_menu_practice_login"))
+        if request.endpoint == "order_tool.ai_menu_practice":
+            return redirect(url_for("practice_order_tool.index"))
+
+        if practice_path and not (account_login or account_logout):
             from services.practice_database import clear_practice_session, touch_current_account
-            if touch_current_account() is None:
+            if not session.get("practice_account_id") or touch_current_account() is None:
                 clear_practice_session()
-                return redirect(url_for("order_tool.ai_menu_practice_login"))
-        # 團膳菜單是內部作業工具，依需求可直接使用；其餘管理後台仍需登入。
-        kitchen_public = request.path == "/admin/order-tool" or request.path.startswith("/admin/order-tool/")
+                return redirect(url_for("practice_order_tool.ai_menu_practice_login"))
+            # Scope is selected by the URL, *never* by stale browser state.
+            session["kitchen_practice"] = True
+        else:
+            # The formal menu always uses the formal database, even if the
+            # same browser also has a practice account signed in.
+            session["kitchen_practice"] = False
+
+        kitchen_public = (
+            request.path == "/admin/order-tool"
+            or request.path.startswith("/admin/order-tool/")
+        )
         if (request.path.startswith("/admin") and not kitchen_public
                 and request.path not in {"/admin/login", "/admin/logout"}):
             if not session.get("role"):
@@ -213,18 +247,11 @@ def create_app(config_overrides=None) -> Flask:
         return None
 
     @app.after_request
-    def keep_practice_mode_marker(response):
-        # Also protect users who logged into practice before this upgrade:
-        # a later session reset must never put them on the formal menu.
-        if (request.path.startswith("/admin/order-tool")
-                and session.get("kitchen_practice")):
-            response.set_cookie(
-                "kitchen_practice_mode", "1",
-                max_age=10 * 24 * 60 * 60,
-                path="/admin/order-tool",
-                secure=bool(app.config.get("SESSION_COOKIE_SECURE")),
-                httponly=True, samesite="Lax",
-            )
+    def clear_legacy_practice_mode_cookie(response):
+        # Previous versions used a site-wide "practice mode" flag. Remove it
+        # so old browsers do not redirect the *formal* procurement button.
+        if request.path.startswith("/admin/order-tool"):
+            response.delete_cookie("kitchen_practice_mode", path="/admin/order-tool")
         return response
 
     @app.cli.command("cleanup-practice-accounts")

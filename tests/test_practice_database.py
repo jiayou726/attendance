@@ -34,15 +34,15 @@ def _app(tmp_path, *, limit=20, ttl_days=10):
 
 def _login(client, name):
     response = client.post(
-        "/admin/order-tool/ai-menu/practice/login",
+        "/admin/order-tool/practice-workspace/ai-menu/practice/login",
         data={"name": name},
     )
     assert response.status_code == 302
-    assert response.headers["Location"].endswith("/admin/order-tool/")
+    assert response.headers["Location"].endswith("/admin/order-tool/practice-workspace/")
 
 
 def _create_plan(client, name="練習週菜單"):
-    return client.post("/admin/order-tool/plans", data={
+    return client.post("/admin/order-tool/practice-workspace/plans", data={
         "service_date": "2026-10-05",
         "meal_type": "午餐",
         "name": name,
@@ -61,13 +61,13 @@ def test_named_accounts_resume_across_computers_and_remain_isolated(tmp_path):
 
     second_computer = app.test_client()
     _login(second_computer, "王小明")
-    response = second_computer.get("/admin/order-tool/summary?week=2026-10-05")
+    response = second_computer.get("/admin/order-tool/practice-workspace/summary?week=2026-10-05")
     assert response.status_code == 200
     assert "練習週菜單" in response.get_data(as_text=True)
 
     different_person = app.test_client()
     _login(different_person, "李小華")
-    response = different_person.get("/admin/order-tool/summary?week=2026-10-05")
+    response = different_person.get("/admin/order-tool/practice-workspace/summary?week=2026-10-05")
     assert response.status_code == 200
     assert "練習週菜單" not in response.get_data(as_text=True)
 
@@ -85,9 +85,9 @@ def test_practice_master_data_is_editable_and_isolated(tmp_path):
     client = app.test_client()
     _login(client, "練習者")
 
-    response = client.post("/admin/order-tool/schools", data={"name": "練習新增學校"})
+    response = client.post("/admin/order-tool/practice-workspace/schools", data={"name": "練習新增學校"})
     assert response.status_code == 302
-    assert "練習新增學校" in client.get("/admin/order-tool/schools").get_data(as_text=True)
+    assert "練習新增學校" in client.get("/admin/order-tool/practice-workspace/schools").get_data(as_text=True)
     with app.app_context():
         assert KitchenSchool.query.filter_by(name="練習新增學校").first() is None
 
@@ -100,7 +100,7 @@ def test_capacity_and_expiry_release_slots(tmp_path):
     _login(one, "一號")
     _login(two, "二號")
 
-    response = three.post("/admin/order-tool/ai-menu/practice/login", data={"name": "三號"})
+    response = three.post("/admin/order-tool/practice-workspace/ai-menu/practice/login", data={"name": "三號"})
     assert response.status_code == 200
     assert "已達 2 人上限" in response.get_data(as_text=True)
 
@@ -176,7 +176,7 @@ def test_practice_excel_import_new_recipe_stays_private(tmp_path):
     output.seek(0)
 
     imported = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (output, "2026年10月練習菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -202,7 +202,7 @@ def test_practice_excel_import_new_recipe_stays_private(tmp_path):
 
     # The same account can safely import the same workbook again: no duplicates.
     repeated = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (_practice_menu_file(), "2026年10月練習菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -262,7 +262,7 @@ def test_practice_import_month_template_is_complete_and_idempotent(tmp_path):
     client = app.test_client()
     _login(client, "完整月份匯入")
     response = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -285,7 +285,7 @@ def test_practice_import_month_template_is_complete_and_idempotent(tmp_path):
             )).scalar_one() == 126
 
     again = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -316,7 +316,7 @@ def test_practice_postgres_excel_import_uses_private_master_copy():
     client = app.test_client()
     _login(client, "PostgreSQL 練習匯入")
     response = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -359,7 +359,7 @@ def test_practice_postgres_excel_import_uses_private_master_copy():
             assert not mismatched, mismatched[:30]
 
     repeated = client.post(
-        "/admin/order-tool/summary/import",
+        "/admin/order-tool/practice-workspace/summary/import",
         data={"menu_file": (_realistic_november_menu(), "中平11月菜單.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
@@ -373,32 +373,32 @@ def test_practice_week_survives_relogin_and_weekly_report_is_reachable(tmp_path)
     learner = app.test_client()
     _login(learner, "週採購練習人員")
     assert _create_plan(learner, "跨登入保留菜單").status_code == 302
-    page = learner.get("/admin/order-tool/summary?week=2026-10-05")
+    page = learner.get("/admin/order-tool/practice-workspace/summary?week=2026-10-05")
     assert "跨登入保留菜單" in page.get_data(as_text=True)
 
-    home = learner.get("/admin/order-tool/").get_data(as_text=True)
+    home = learner.get("/admin/order-tool/practice-workspace/").get_data(as_text=True)
     assert "查看練習週採購單" in home
     assert "week=2026-10-05" in home
-    weekly = learner.get("/admin/order-tool/weekly-procurement/summary.json")
+    weekly = learner.get("/admin/order-tool/practice-workspace/weekly-procurement/summary.json")
     assert weekly.status_code == 200
     assert weekly.get_json()["week_start"] == "2026-10-05"
     assert "2026/10/05" in learner.get(
-        "/admin/order-tool/weekly-procurement"
+        "/admin/order-tool/practice-workspace/weekly-procurement"
     ).get_data(as_text=True)
 
-    learner.get("/admin/order-tool/ai-menu/practice/logout")
+    learner.get("/admin/order-tool/practice-workspace/ai-menu/practice/logout")
     _login(learner, "週採購練習人員")
     assert "跨登入保留菜單" in learner.get(
-        "/admin/order-tool/summary"
+        "/admin/order-tool/practice-workspace/summary"
     ).get_data(as_text=True)
     assert learner.get(
-        "/admin/order-tool/weekly-procurement/summary.json"
+        "/admin/order-tool/practice-workspace/weekly-procurement/summary.json"
     ).get_json()["week_start"] == "2026-10-05"
 
     other = app.test_client()
     _login(other, "另一位練習人員")
     assert "跨登入保留菜單" not in other.get(
-        "/admin/order-tool/summary?week=2026-10-05"
+        "/admin/order-tool/practice-workspace/summary?week=2026-10-05"
     ).get_data(as_text=True)
 
     with app.app_context():
@@ -418,12 +418,12 @@ def test_practice_explicit_week_changes_the_weekly_report(tmp_path):
     learner = app.test_client()
     _login(learner, "週次切換練習")
     _create_plan(learner, "舊週資料")
-    learner.get("/admin/order-tool/summary?week=2026-11-02")
+    learner.get("/admin/order-tool/practice-workspace/summary?week=2026-11-02")
     assert learner.get(
-        "/admin/order-tool/weekly-procurement/summary.json"
+        "/admin/order-tool/practice-workspace/weekly-procurement/summary.json"
     ).get_json()["week_start"] == "2026-11-02"
     assert "舊週資料" in learner.get(
-        "/admin/order-tool/summary?week=2026-10-05"
+        "/admin/order-tool/practice-workspace/summary?week=2026-10-05"
     ).get_data(as_text=True)
 
 
@@ -446,7 +446,7 @@ def test_existing_sqlite_practice_workspace_is_auto_upgraded_without_data_loss(t
         app.extensions["practice_estimate_schema_checked"].discard(
             account["workspace_key"]
         )
-    response = client.get("/admin/order-tool/summary?week=2026-10-05")
+    response = client.get("/admin/order-tool/practice-workspace/summary?week=2026-10-05")
     assert response.status_code == 200
     assert "升級前保留菜單" in response.get_data(as_text=True)
     with app.app_context():
@@ -521,7 +521,7 @@ def test_practice_postgres_legacy_view_schema_upgrade_keeps_menu_and_private_rec
             ))
         app.extensions["practice_estimate_schema_checked"].discard(key)
 
-    response = client.get("/admin/order-tool/summary?week=2026-10-05")
+    response = client.get("/admin/order-tool/practice-workspace/summary?week=2026-10-05")
     page = response.get_data(as_text=True)
     assert response.status_code == 200
     assert "遷移前的菜單" in page
@@ -590,7 +590,7 @@ def test_practice_postgres_master_copy_handles_public_column_order_and_extra_fie
     try:
         client = app.test_client()
         _login(client, "Postgres 欄位順序防呆")
-        result = client.get("/admin/order-tool/schools")
+        result = client.get("/admin/order-tool/practice-workspace/schools")
         assert result.status_code == 200
         assert "欄位順序驗證學校" in result.get_data(as_text=True)
         with app.app_context():
@@ -611,66 +611,66 @@ def test_practice_postgres_master_copy_handles_public_column_order_and_extra_fie
                 ))
 
 
-def test_practice_session_loss_cannot_fall_back_to_formal_menu(tmp_path):
-    """Practice must not accidentally display/write formal data if its cookie session expires."""
+
+
+def test_formal_button_and_practice_account_have_distinct_urls(tmp_path):
+    """Clicking the regular procurement entry always stays formal."""
     app = _app(tmp_path)
     with app.app_context():
         db.session.add(KitchenMenuPlan(
             service_date=datetime(2026, 11, 2).date(),
-            meal_type="午餐", name="正式區專用機密菜單"))
+            meal_type="午餐", name="正式總表專用資料"))
         db.session.commit()
     browser = app.test_client()
-    _login(browser, "隔離狀態驗證")
-    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool").value == "1"
-    content = browser.get("/admin/order-tool/summary?week=2026-11-02").get_data(as_text=True)
-    assert "正式區專用機密菜單" not in content
+    _login(browser, "練習帳號獨立路徑")
+    practice = browser.get(
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
+    )
+    assert practice.status_code == 200
+    assert "正式總表專用資料" not in practice.get_data(as_text=True)
+    assert "/admin/order-tool/practice-workspace/" in practice.get_data(as_text=True)
 
-    # Simulate loss of the signed Flask session after a deploy while the
-    # persistent practice-browser marker remains intact.
-    with browser.session_transaction() as sess:
-        sess.clear()
-    get_result = browser.get("/admin/order-tool/summary?week=2026-11-02")
-    assert get_result.status_code == 302
-    assert "/ai-menu/practice/login" in get_result.headers["Location"]
-    post_result = browser.post("/admin/order-tool/plans", data={
+    # Formal entry on the same browser must never switch to practice.
+    formal_home = browser.get("/admin/order-tool/")
+    assert formal_home.status_code == 200
+    assert "開始叫菜" in formal_home.get_data(as_text=True)
+    assert '【練習模式' not in formal_home.get_data(as_text=True)
+    formal = browser.get("/admin/order-tool/summary?week=2026-11-02")
+    assert formal.status_code == 200
+    assert "正式總表專用資料" in formal.get_data(as_text=True)
+    assert "/admin/order-tool/practice-workspace/" not in formal.get_data(as_text=True)
+
+    # Navigating back to the already-signed-in practice account still works.
+    practice_again = browser.get(
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
+    )
+    assert practice_again.status_code == 200
+    assert "正式總表專用資料" not in practice_again.get_data(as_text=True)
+
+
+def test_expired_practice_session_never_falls_back_to_formal(tmp_path):
+    app = _app(tmp_path)
+    browser = app.test_client()
+    _login(browser, "測試登入過期")
+    with browser.session_transaction() as saved:
+        saved.clear()
+    response = browser.get("/admin/order-tool/practice-workspace/summary")
+    assert response.status_code == 302
+    assert "/practice-workspace/ai-menu/practice/login" in response.headers["Location"]
+    response = browser.post("/admin/order-tool/practice-workspace/plans", data={
         "service_date": "2026-11-02", "meal_type": "午餐",
-        "name": "絕不能進入正式區的練習菜單",
+        "name": "這筆不應進入正式區"
     })
-    assert post_result.status_code == 302
-    assert "/ai-menu/practice/login" in post_result.headers["Location"]
+    assert response.status_code == 302
+    assert "/practice-workspace/ai-menu/practice/login" in response.headers["Location"]
     with app.app_context():
         assert KitchenMenuPlan.query.filter_by(
-            name="絕不能進入正式區的練習菜單").count() == 0
-
-    # The explicit Leave Practice action resets only the browser mode.
-    _login(browser, "隔離狀態驗證")
-    browser.get("/admin/order-tool/ai-menu/practice/logout")
-    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool") is None
-    content = browser.get("/admin/order-tool/summary?week=2026-11-02").get_data(as_text=True)
-    assert "正式區專用機密菜單" in content
-
-
-def test_old_practice_sessions_gain_mode_cookie_before_session_expiry(tmp_path):
-    """An existing signed practice session gets the fail-closed mode marker."""
-    app = _app(tmp_path)
-    browser = app.test_client()
-    _login(browser, "保護既有練習登入")
-    browser.delete_cookie("kitchen_practice_mode", path="/admin/order-tool")
-    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool") is None
+            name="這筆不應進入正式區").count() == 0
+    # Formal link remains available with no practice session.
     assert browser.get("/admin/order-tool/summary").status_code == 200
-    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool").value == "1"
-
-
-def test_practice_login_page_has_no_formal_navigation(tmp_path):
-    app = _app(tmp_path)
-    browser = app.test_client()
-    html = browser.get("/admin/order-tool/ai-menu/practice/login").get_data(as_text=True)
-    assert "進入練習帳號" in html
-    assert 'aria-label="團膳管理主選單"' not in html
 
 
 def test_formal_and_practice_menu_and_master_edits_never_synchronize(tmp_path):
-    """Both directions are isolated, including unchanged formal master snapshots."""
     app = _app(tmp_path)
     with app.app_context():
         db.session.add(KitchenSchool(name="正式原始學校", default_headcount=99))
@@ -678,38 +678,33 @@ def test_formal_and_practice_menu_and_master_edits_never_synchronize(tmp_path):
             service_date=datetime(2026, 11, 2).date(),
             meal_type="午餐", name="正式菜單不可顯示於練習區"))
         db.session.commit()
-
     learner = app.test_client()
     _login(learner, "獨立新帳號練習者")
-    practice_page = learner.get("/admin/order-tool/summary?week=2026-11-02")
+    practice_page = learner.get(
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
+    )
     assert practice_page.status_code == 200
     assert "正式菜單不可顯示於練習區" not in practice_page.get_data(as_text=True)
     assert "正式原始學校" in learner.get(
-        "/admin/order-tool/schools"
+        "/admin/order-tool/practice-workspace/schools"
     ).get_data(as_text=True)
-
-    # Modify the formal master *after* the practice account was created.
     with app.app_context():
         school = KitchenSchool.query.filter_by(name="正式原始學校").one()
         school.name = "正式後來改名學校"
         db.session.commit()
     practice_schools = learner.get(
-        "/admin/order-tool/schools"
+        "/admin/order-tool/practice-workspace/schools"
     ).get_data(as_text=True)
     assert "正式原始學校" in practice_schools
     assert "正式後來改名學校" not in practice_schools
-
-    learner.post("/admin/order-tool/plans", data={
+    learner.post("/admin/order-tool/practice-workspace/plans", data={
         "service_date": "2026-11-02", "meal_type": "午餐",
         "name": "只存在練習區的菜單",
     })
     assert "只存在練習區的菜單" in learner.get(
-        "/admin/order-tool/summary?week=2026-11-02"
+        "/admin/order-tool/practice-workspace/summary?week=2026-11-02"
     ).get_data(as_text=True)
-
-    # Formal data is still unchanged and the practice plan is not visible.
-    formal = app.test_client()
-    formal_page = formal.get(
+    formal_page = learner.get(
         "/admin/order-tool/summary?week=2026-11-02"
     ).get_data(as_text=True)
     assert "正式菜單不可顯示於練習區" in formal_page
@@ -717,5 +712,16 @@ def test_formal_and_practice_menu_and_master_edits_never_synchronize(tmp_path):
     with app.app_context():
         assert KitchenMenuPlan.query.filter_by(
             name="只存在練習區的菜單").count() == 0
-        assert KitchenSchool.query.filter_by(
-            name="正式原始學校").count() == 0
+
+
+def test_practice_login_page_has_no_formal_navigation(tmp_path):
+    app = _app(tmp_path)
+    browser = app.test_client()
+    old = browser.get("/admin/order-tool/ai-menu/practice/login")
+    assert old.status_code == 302
+    assert "practice-workspace" in old.headers["Location"]
+    html = browser.get(
+        "/admin/order-tool/practice-workspace/ai-menu/practice/login"
+    ).get_data(as_text=True)
+    assert "進入練習帳號" in html
+    assert 'aria-label="團膳管理主選單"' not in html

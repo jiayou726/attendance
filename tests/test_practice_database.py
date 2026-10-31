@@ -609,3 +609,42 @@ def test_practice_postgres_master_copy_handles_public_column_order_and_extra_fie
                     "ALTER TABLE public.kitchen_school "
                     "DROP COLUMN IF EXISTS practice_copy_test_extra"
                 ))
+
+
+def test_practice_session_loss_cannot_fall_back_to_formal_menu(tmp_path):
+    """Practice must not accidentally display/write formal data if its cookie session expires."""
+    app = _app(tmp_path)
+    with app.app_context():
+        db.session.add(KitchenMenuPlan(
+            service_date=datetime(2026, 11, 2).date(),
+            meal_type="午餐", name="正式區專用機密菜單"))
+        db.session.commit()
+    browser = app.test_client()
+    _login(browser, "隔離狀態驗證")
+    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool").value == "1"
+    content = browser.get("/admin/order-tool/summary?week=2026-11-02").get_data(as_text=True)
+    assert "正式區專用機密菜單" not in content
+
+    # Simulate loss of the signed Flask session after a deploy while the
+    # persistent practice-browser marker remains intact.
+    with browser.session_transaction() as sess:
+        sess.clear()
+    get_result = browser.get("/admin/order-tool/summary?week=2026-11-02")
+    assert get_result.status_code == 302
+    assert "/ai-menu/practice/login" in get_result.headers["Location"]
+    post_result = browser.post("/admin/order-tool/plans", data={
+        "service_date": "2026-11-02", "meal_type": "午餐",
+        "name": "絕不能進入正式區的練習菜單",
+    })
+    assert post_result.status_code == 302
+    assert "/ai-menu/practice/login" in post_result.headers["Location"]
+    with app.app_context():
+        assert KitchenMenuPlan.query.filter_by(
+            name="絕不能進入正式區的練習菜單").count() == 0
+
+    # The explicit Leave Practice action resets only the browser mode.
+    _login(browser, "隔離狀態驗證")
+    browser.get("/admin/order-tool/ai-menu/practice/logout")
+    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool") is None
+    content = browser.get("/admin/order-tool/summary?week=2026-11-02").get_data(as_text=True)
+    assert "正式區專用機密菜單" in content

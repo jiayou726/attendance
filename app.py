@@ -181,6 +181,19 @@ def create_app(config_overrides=None) -> Flask:
 
     @app.before_request
     def protect_admin_pages():
+        # The practice and formal modules share URLs for historical reasons.
+        # If a practice browser loses its Flask session (e.g. deployment,
+        # cookie expiry), NEVER fall through to the formal database.
+        # Keep an independent HttpOnly marker cookie for the practice browser.
+        practice_endpoint = request.endpoint in {
+            "order_tool.ai_menu_practice_login",
+            "order_tool.ai_menu_practice_logout",
+        }
+        if (request.path.startswith("/admin/order-tool")
+                and not practice_endpoint
+                and request.cookies.get("kitchen_practice_mode") == "1"
+                and not session.get("kitchen_practice")):
+            return redirect(url_for("order_tool.ai_menu_practice_login"))
         if (session.get("kitchen_practice")
                 and request.path.startswith("/admin/order-tool")
                 and request.endpoint not in {

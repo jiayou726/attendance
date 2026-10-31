@@ -299,13 +299,26 @@ def ai_menu_practice_login():
         else:
             activate_account(account)
             flash(f"{'已建立' if created else '已登入'} {account['display_name']} 的練習帳號。","success")
-            return redirect(url_for("order_tool.index"))
+            response = redirect(url_for("order_tool.index"))
+            # Persist the *mode*, not the account ID or any account credentials.
+            # An expired Flask session must not silently reopen the formal
+            # order-tool under the exact same URL.
+            response.set_cookie(
+                "kitchen_practice_mode", "1",
+                max_age=10 * 24 * 60 * 60,
+                path="/admin/order-tool",
+                secure=bool(current_app.config.get("SESSION_COOKIE_SECURE")),
+                httponly=True, samesite="Lax",
+            )
+            return response
     return render_template("kitchen/ai_menu_practice_login.html",error=error)
 
 @order_bp.get("/ai-menu/practice/logout")
 def ai_menu_practice_logout():
     clear_practice_session()
-    return redirect(url_for("order_tool.ai_menu_practice_login"))
+    response = redirect(url_for("order_tool.ai_menu_practice_login"))
+    response.delete_cookie("kitchen_practice_mode", path="/admin/order-tool")
+    return response
 
 @order_bp.get("/ai-menu/practice")
 def ai_menu_practice():

@@ -14,6 +14,7 @@
 <main class="wrap">
   <div class="top no-print">
     <h1>{{ '團膳管理｜練習帳號：' ~ session.get('practice_account_name', '') if session.get('kitchen_practice') else '團膳管理' }}</h1>
+    {% if request.endpoint != 'order_tool.ai_menu_practice_login' %}
     <nav class="nav" aria-label="團膳管理主選單">
       <a href="{{ url_for('order_tool.index') }}">總覽</a>
       <a href="{{ url_for('order_tool.summary') }}">總表</a>
@@ -28,6 +29,7 @@
       <a href="{{ url_for('order_tool.ai_menu') }}">AI 菜單</a>
       {% if session.get('kitchen_practice') %}<a href="{{ url_for('order_tool.ai_menu_practice_logout') }}">離開練習</a>{% endif %}
     </nav>
+    {% endif %}
   </div>
   {% if session.get('kitchen_practice') %}
     <div class="notice no-print" role="status" style="border:2px solid #a47700;background:#fff2c9"><b>【練習模式・非正式資料】練習帳號：{{ session.get('practice_account_name', '') }}</b>。總表、叫貨、學校、廠商、食材、配方與採購結果都屬於這個獨立帳號，可以完整練習，不會改動正式資料。</div>

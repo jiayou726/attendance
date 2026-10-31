@@ -648,3 +648,22 @@ def test_practice_session_loss_cannot_fall_back_to_formal_menu(tmp_path):
     assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool") is None
     content = browser.get("/admin/order-tool/summary?week=2026-11-02").get_data(as_text=True)
     assert "正式區專用機密菜單" in content
+
+
+def test_old_practice_sessions_gain_mode_cookie_before_session_expiry(tmp_path):
+    """An existing signed practice session gets the fail-closed mode marker."""
+    app = _app(tmp_path)
+    browser = app.test_client()
+    _login(browser, "保護既有練習登入")
+    browser.delete_cookie("kitchen_practice_mode", path="/admin/order-tool")
+    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool") is None
+    assert browser.get("/admin/order-tool/summary").status_code == 200
+    assert browser.get_cookie("kitchen_practice_mode", path="/admin/order-tool").value == "1"
+
+
+def test_practice_login_page_has_no_formal_navigation(tmp_path):
+    app = _app(tmp_path)
+    browser = app.test_client()
+    html = browser.get("/admin/order-tool/ai-menu/practice/login").get_data(as_text=True)
+    assert "進入練習帳號" in html
+    assert 'aria-label="團膳管理主選單"' not in html

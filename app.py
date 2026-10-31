@@ -212,6 +212,21 @@ def create_app(config_overrides=None) -> Flask:
                 return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
         return None
 
+    @app.after_request
+    def keep_practice_mode_marker(response):
+        # Also protect users who logged into practice before this upgrade:
+        # a later session reset must never put them on the formal menu.
+        if (request.path.startswith("/admin/order-tool")
+                and session.get("kitchen_practice")):
+            response.set_cookie(
+                "kitchen_practice_mode", "1",
+                max_age=10 * 24 * 60 * 60,
+                path="/admin/order-tool",
+                secure=bool(app.config.get("SESSION_COOKIE_SECURE")),
+                httponly=True, samesite="Lax",
+            )
+        return response
+
     @app.cli.command("cleanup-practice-accounts")
     def cleanup_practice_accounts_command():
         """Delete named practice accounts inactive for the configured TTL."""

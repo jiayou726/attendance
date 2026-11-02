@@ -1,6 +1,7 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}{{ item.recipe.name }}｜本次菜單配方{% endblock %}
 {% block content %}
+<script id="ingredient-search-data" type="application/json">{{ ingredient_options|tojson }}</script>
 <section class="summary-week-head">
   <div>
     <div class="eyebrow">本次菜單專用配方</div>
@@ -77,13 +78,13 @@
     <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" class="main-form">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="save">
-      <div class="field"><label>食材</label>
-        <select name="ingredient_id" required>
-          <option value="">請選擇食材</option>
-          {% for ingredient in ingredients %}
-          <option value="{{ ingredient.id }}">{{ ingredient.name }}（{{ ingredient.base_unit or 'g' }}/人）</option>
-          {% endfor %}
-        </select>
+      <div class="field">
+        <label for="menu-ingredient-search">食材</label>
+        <div class="dish-search-wrap" data-ingredient-search>
+          <input type="hidden" name="ingredient_id" value="">
+          <input id="menu-ingredient-search" class="ingredient-search-input" type="search" placeholder="輸入食材名稱搜尋…" aria-label="搜尋要加入本次菜單的食材" autocomplete="off" required>
+          <div class="dish-search-results" role="listbox" aria-label="符合的食材" hidden></div>
+        </div>
       </div>
       <div class="field"><label>每人用量</label>
         <input type="number" name="grams_per_person" min="0.001" step="0.001" required placeholder="例如 65">

@@ -2477,6 +2477,15 @@ def menu_item_recipe(row_id: int):
         "kitchen/menu_item_recipe.html",
         item=item, plan=plan, components=components,
         ingredients=ingredients, week_start=week_start,
+        ingredient_options=[
+            {
+                "id": ingredient.id,
+                "name": ingredient.name,
+                "base_unit": ingredient.base_unit or "g",
+                "purchase_unit": ingredient.purchase_unit,
+            }
+            for ingredient in ingredients
+        ],
         locked=plan.status != "draft" or bool(_active_confirmed_orders(plan.service_date)),
         total_g=sum(
             (row.grams_per_person or Decimal("0"))

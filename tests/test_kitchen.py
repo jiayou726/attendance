@@ -2851,7 +2851,16 @@ def test_summary_menu_recipe_edit_is_not_global_and_can_reset(app, authed_client
         f"/admin/order-tool/summary/dishes/{target_item_id}/recipe"
     )
     assert before_edit.status_code == 200
-    assert "本次菜單專用配方" in before_edit.get_data(as_text=True)
+    recipe_html = before_edit.get_data(as_text=True)
+    assert "本次菜單專用配方" in recipe_html
+    # Keep menu-specific recipes using the same searchable ingredient picker
+    # as the global recipe editor, rather than regressing to a plain select.
+    assert 'id="ingredient-search-data"' in recipe_html
+    assert 'data-ingredient-search' in recipe_html
+    assert 'class="ingredient-search-input"' in recipe_html
+    assert 'name="ingredient_id" value=""' in recipe_html
+    assert f'"id": {ids["ingredient"]}' in recipe_html
+    assert '<select name="ingredient_id"' not in recipe_html
 
     update = authed_client.post(
         f"/admin/order-tool/summary/dishes/{target_item_id}/recipe",

@@ -2204,7 +2204,9 @@ def school_menu_save_day():
                 return
             plan = _editable_school_plan(school, service_date, variant)
             existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+            existing_categories = {row.recipe_id: row.category_override for row in plan.items}
             central_overrides = _central_recipe_overrides(service_date) if variant == "regular" else {}
+            central_categories = _central_category_overrides(service_date) if variant == "regular" else {}
             for item in list(plan.items):
                 db.session.delete(item)
             db.session.flush()
@@ -2216,6 +2218,9 @@ def school_menu_save_day():
                     plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order,
                     ingredients_override_json=(
                         existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                    ),
+                    category_override=(
+                        existing_categories.get(recipe.id) or central_categories.get(recipe.id)
                     ),
                 ))
             row = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2261,7 +2266,9 @@ def school_menu_save_day():
         db.session.rollback()
         return {"message": "這一天已確認，無法修改。"}, 409
     existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+    existing_categories = {row.recipe_id: row.category_override for row in plan.items}
     central_overrides = _central_recipe_overrides(service_date)
+    central_categories = _central_category_overrides(service_date)
     for item in list(plan.items):
         db.session.delete(item)
     db.session.flush()
@@ -2275,6 +2282,9 @@ def school_menu_save_day():
             sort_order=sort_order,
             ingredients_override_json=(
                 existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+            ),
+            category_override=(
+                existing_categories.get(recipe.id) or central_categories.get(recipe.id)
             ),
         ))
     assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2328,7 +2338,9 @@ def school_menus_save():
             locked_days += 1
             continue
         existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+        existing_categories = {row.recipe_id: row.category_override for row in plan.items}
         central_overrides = _central_recipe_overrides(service_date)
+        central_categories = _central_category_overrides(service_date)
         for item in list(plan.items):
             db.session.delete(item)
         db.session.flush()
@@ -2342,6 +2354,9 @@ def school_menus_save():
                 sort_order=sort_order,
                 ingredients_override_json=(
                     existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                ),
+                category_override=(
+                    existing_categories.get(recipe.id) or central_categories.get(recipe.id)
                 ),
             ))
         assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2899,7 +2914,7 @@ def summary_import():
                 queued_recipe_objects.add(id(recipe))
                 if recipe.id is not None:
                     existing_recipe_ids.add(recipe.id)
-                pending_items.append((plan, recipe, sort_order))
+                pending_items.append((plan, recipe, sort_order, dish["category"]))
                 sort_order += 1
                 added_items += 1
                 day_added += 1
@@ -2913,8 +2928,8 @@ def summary_import():
         # link menu items or the dishes can end up assigned to wrong dates.
         db.session.flush()
         if pending_items:
-            wanted_dates = {plan.service_date for plan, _, _ in pending_items}
-            wanted_names = {recipe.name for _, recipe, _ in pending_items}
+            wanted_dates = {plan.service_date for plan, _, _, _ in pending_items}
+            wanted_names = {recipe.name for _, recipe, _, _ in pending_items}
             plan_id_by_date = dict(db.session.query(
                 KitchenMenuPlan.service_date, KitchenMenuPlan.id,
             ).filter(
@@ -2938,8 +2953,12 @@ def summary_import():
                     plan_id=plan_id_by_date[plan.service_date],
                     recipe_id=recipe_id_by_name[recipe.name],
                     sort_order=sort_order,
+                    category_override=(
+                        category if category in CATEGORIES and category != (recipe.category or "其他")
+                        else None
+                    ),
                 )
-                for plan, recipe, sort_order in pending_items
+                for plan, recipe, sort_order, category in pending_items
             ])
         db.session.commit()
     except Exception:

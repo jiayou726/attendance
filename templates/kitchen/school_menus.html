@@ -72,12 +72,12 @@
           {% for item in day.source_items %}
           <label class="school-dish-check{% if item.recipe_id in day.selected_ids.regular %} selected{% endif %}" data-variant-panel="regular">
             <input data-menu-variant="regular" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.regular %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
-            <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+            <span class="dish-category">{{ item.category_override or item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
           <label class="school-dish-check vegetarian{% if item.recipe_id in day.selected_ids.vegetarian %} selected{% endif %}" data-variant-panel="vegetarian" hidden>
             <input data-menu-variant="vegetarian" type="checkbox" value="{{ item.recipe_id }}"{% if item.recipe_id in day.selected_ids.vegetarian %} checked{% endif %}{% if day.locked or day.service_status == 'no_service' %} disabled{% endif %}>
-            <span class="dish-category">{{ item.recipe.category or '菜' }}</span>
+            <span class="dish-category">{{ item.category_override or item.recipe.category or '菜' }}</span>
             <span class="school-dish-name"><b>{{ item.recipe.name }}</b>{% if item.recipe.serving_output_g %}<small>@{{ trim_decimal(item.recipe.serving_output_g) }} g/人</small>{% endif %}</span>
           </label>
           {% endfor %}

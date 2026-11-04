@@ -68,6 +68,10 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
                     connection.execute(text(
                         "ALTER TABLE kitchen_menu_plan_item ADD COLUMN ingredients_override_json TEXT"
                     ))
+                if "category_override" not in columns:
+                    connection.execute(text(
+                        "ALTER TABLE kitchen_menu_plan_item ADD COLUMN category_override VARCHAR(20)"
+                    ))
             purchase_item_table = "kitchen_purchase_order_item"
             if inspector.has_table(purchase_item_table):
                 columns = {column["name"] for column in inspector.get_columns(purchase_item_table)}

@@ -34,7 +34,7 @@
       <option value="{{ category }}"{% if (item.category_override or item.recipe.category or '其他') == category %} selected{% endif %}>{{ category }}</option>
       {% endfor %}
     </select>
-    <button class="btn secondary" type="submit">儲存分類</button>
+    <span class="muted">選擇後自動儲存</span>
   </form>
   {% else %}
   <p><span class="pill">{{ item.category_override or item.recipe.category or '其他' }}</span>（菜單已確認，分類不能修改）</p>

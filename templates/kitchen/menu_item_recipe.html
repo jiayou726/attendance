@@ -21,6 +21,25 @@
 {% else %}
 <div class="notice">目前沿用共用標準配方。修改任何食材或克數後，會為這次菜單建立自己的配方，不會影響其他日期。</div>
 {% endif %}
+<section class="card no-print">
+  <h2>本次菜單的菜色分類</h2>
+  <p class="muted">這道菜在本次菜單要歸類為主食、主菜、副菜、青菜、湯品或其他分類。這裡不會修改共用菜色主檔，也不影響其他日期。</p>
+  {% if not locked %}
+  <form method="post" action="{{ url_for('order_tool.menu_item_recipe', row_id=item.id) }}" class="row center-y">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="category">
+    <label for="menu-item-category">菜色分類</label>
+    <select id="menu-item-category" name="category" onchange="this.form.requestSubmit()">
+      {% for category in categories %}
+      <option value="{{ category }}"{% if (item.category_override or item.recipe.category or '其他') == category %} selected{% endif %}>{{ category }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn secondary" type="submit">儲存分類</button>
+  </form>
+  {% else %}
+  <p><span class="pill">{{ item.category_override or item.recipe.category or '其他' }}</span>（菜單已確認，分類不能修改）</p>
+  {% endif %}
+</section>
 <div class="grid">
   <section class="card span-8">
     <h2>這次菜單使用的食材</h2>

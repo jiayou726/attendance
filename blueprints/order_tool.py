@@ -88,8 +88,13 @@ NONREGISTERED_MENU_COLUMNS = {
 CATEGORY_ORDER = {category: index for index, category in enumerate(CATEGORIES)}
 
 
+def _menu_item_category(item: KitchenMenuPlanItem) -> str:
+    """Category of this menu item, without editing the shared recipe."""
+    return item.category_override or item.recipe.category or "其他"
+
+
 def _menu_item_category_sort_key(item: KitchenMenuPlanItem):
-    category = item.recipe.category or "其他"
+    category = _menu_item_category(item)
     return (
         CATEGORY_ORDER.get(category, len(CATEGORIES)),
         item.sort_order,
@@ -1148,6 +1153,10 @@ def plan_item_add(plan_id: int):
                 _central_recipe_overrides(plan.service_date, plan.meal_type).get(recipe_id)
                 if plan.name != "中央菜單" and not plan.name.endswith("素食菜單") else None
             ),
+            category_override=(
+                _central_category_overrides(plan.service_date, plan.meal_type).get(recipe_id)
+                if plan.name != "中央菜單" and not plan.name.endswith("素食菜單") else None
+            ),
         ))
         db.session.commit()
         flash("菜色已加入。", "success")
@@ -1273,7 +1282,11 @@ def plan_copy(plan_id: int):
     db.session.add(copy)
     db.session.flush()
     for x in source.items:
-        db.session.add(KitchenMenuPlanItem(plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order, ingredients_override_json=x.ingredients_override_json))
+        db.session.add(KitchenMenuPlanItem(
+            plan_id=copy.id, recipe_id=x.recipe_id, sort_order=x.sort_order,
+            ingredients_override_json=x.ingredients_override_json,
+            category_override=x.category_override,
+        ))
     for x in source.assignments:
         db.session.add(KitchenMenuAssignment(plan_id=copy.id, school_id=x.school_id, headcount=x.headcount))
     db.session.commit()
@@ -1412,6 +1425,17 @@ def _menu_item_override_payload(components) -> str:
     ], ensure_ascii=False, separators=(",", ":"))
 
 
+def _central_category_overrides(service_date: date, meal_type: str = "午餐") -> dict[int, str]:
+    """Central menu's local categories for schools selecting the same dishes."""
+    central = KitchenMenuPlan.query.filter_by(
+        service_date=service_date, meal_type=meal_type, name="中央菜單"
+    ).options(selectinload(KitchenMenuPlan.items)).first()
+    return {
+        item.recipe_id: item.category_override
+        for item in central.items if item.category_override is not None
+    } if central else {}
+
+
 def _central_recipe_overrides(service_date: date, meal_type: str = "午餐") -> dict[int, str]:
     """Central daily recipe versions used when schools first adopt a dish."""
     central = KitchenMenuPlan.query.filter_by(
@@ -1446,7 +1470,7 @@ def _usage_dish_groups(plans):
                 "recipe": recipe, "headcount": 0, "school_names": set(),
                 "components_source": components,
                 "estimate_key": f"{variant}:{recipe.id}",
-                "sort_key": (menu_item.sort_order, recipe.category or "其他", recipe.name),
+                "sort_key": (menu_item.sort_order, _menu_item_category(menu_item), recipe.name),
             })
             if signature != _bom_signature(recipe.ingredients):
                 digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
@@ -1952,7 +1976,9 @@ def _put_nonregistered_dishes(sheet, row_number: int, plans: list[KitchenMenuPla
     dishes_by_category = defaultdict(list)
     for plan in plans:
         for item in sorted(plan.items, key=_menu_item_category_sort_key):
-            category = item.recipe.category if item.recipe.category in NONREGISTERED_MENU_COLUMNS else "其他"
+            category = _menu_item_category(item)
+            if category not in NONREGISTERED_MENU_COLUMNS:
+                category = "其他"
             dishes_by_category[category].append(item.recipe.name)
     for category, columns in NONREGISTERED_MENU_COLUMNS.items():
         if category == "其他":
@@ -2075,7 +2101,7 @@ def school_menu_copy_day():
     if any(row and row.service_status == "no_service" for row in source_assignments.values()):
         return {"message": "來源學校當天停餐，無法複製菜色。"}, 409
     selected = {
-        variant: [(item.recipe_id, item.ingredients_override_json) for item in sorted(
+        variant: [(item.recipe_id, item.ingredients_override_json, item.category_override) for item in sorted(
             assignment.plan.items, key=lambda entry: entry.sort_order
         )] if assignment else []
         for variant, assignment in source_assignments.items()
@@ -2112,10 +2138,11 @@ def school_menu_copy_day():
             for old_item in list(plan.items):
                 db.session.delete(old_item)
             db.session.flush()
-            for order, (recipe_id, override_json) in enumerate(recipe_ids):
+            for order, (recipe_id, override_json, category_override) in enumerate(recipe_ids):
                 db.session.add(KitchenMenuPlanItem(
                     plan_id=plan.id, recipe_id=recipe_id, sort_order=order,
                     ingredients_override_json=override_json,
+                    category_override=category_override,
                 ))
     db.session.commit()
     return {
@@ -2177,7 +2204,9 @@ def school_menu_save_day():
                 return
             plan = _editable_school_plan(school, service_date, variant)
             existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+            existing_categories = {row.recipe_id: row.category_override for row in plan.items}
             central_overrides = _central_recipe_overrides(service_date) if variant == "regular" else {}
+            central_categories = _central_category_overrides(service_date) if variant == "regular" else {}
             for item in list(plan.items):
                 db.session.delete(item)
             db.session.flush()
@@ -2189,6 +2218,9 @@ def school_menu_save_day():
                     plan_id=plan.id, recipe_id=recipe.id, sort_order=sort_order,
                     ingredients_override_json=(
                         existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                    ),
+                    category_override=(
+                        existing_categories.get(recipe.id) or central_categories.get(recipe.id)
                     ),
                 ))
             row = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2234,7 +2266,9 @@ def school_menu_save_day():
         db.session.rollback()
         return {"message": "這一天已確認，無法修改。"}, 409
     existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+    existing_categories = {row.recipe_id: row.category_override for row in plan.items}
     central_overrides = _central_recipe_overrides(service_date)
+    central_categories = _central_category_overrides(service_date)
     for item in list(plan.items):
         db.session.delete(item)
     db.session.flush()
@@ -2248,6 +2282,9 @@ def school_menu_save_day():
             sort_order=sort_order,
             ingredients_override_json=(
                 existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+            ),
+            category_override=(
+                existing_categories.get(recipe.id) or central_categories.get(recipe.id)
             ),
         ))
     assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2301,7 +2338,9 @@ def school_menus_save():
             locked_days += 1
             continue
         existing_overrides = {row.recipe_id: row.ingredients_override_json for row in plan.items}
+        existing_categories = {row.recipe_id: row.category_override for row in plan.items}
         central_overrides = _central_recipe_overrides(service_date)
+        central_categories = _central_category_overrides(service_date)
         for item in list(plan.items):
             db.session.delete(item)
         db.session.flush()
@@ -2315,6 +2354,9 @@ def school_menus_save():
                 sort_order=sort_order,
                 ingredients_override_json=(
                     existing_overrides.get(recipe.id) or central_overrides.get(recipe.id)
+                ),
+                category_override=(
+                    existing_categories.get(recipe.id) or central_categories.get(recipe.id)
                 ),
             ))
         assignment = KitchenMenuAssignment.query.filter_by(plan_id=plan.id, school_id=school.id).one()
@@ -2415,8 +2457,35 @@ def menu_item_recipe(row_id: int):
             flash("菜單或採購單已確認，不能修改本次配方。", "error")
             return redirect(redirect_to)
         action = request.form.get("action", "save")
-        if action not in {"save", "remove", "reset"}:
+        if action not in {"save", "remove", "reset", "category"}:
             abort(400)
+        if action == "category":
+            category = request.form.get("category", "").strip()
+            if category not in CATEGORIES:
+                flash("菜色分類不正確，請重新選擇。", "error")
+                return redirect(redirect_to)
+            old_category = item.category_override
+            item.category_override = None if category == (item.recipe.category or "其他") else category
+            # A central menu's category flows to regular schools on the same
+            # day if they have not independently selected a different category.
+            if plan.name == "中央菜單" and old_category != item.category_override:
+                other_items = (
+                    KitchenMenuPlanItem.query.join(KitchenMenuPlan)
+                    .filter(
+                        KitchenMenuPlanItem.recipe_id == item.recipe_id,
+                        KitchenMenuPlanItem.id != item.id,
+                        KitchenMenuPlan.service_date == plan.service_date,
+                        KitchenMenuPlan.meal_type == plan.meal_type,
+                        KitchenMenuPlan.status == "draft",
+                    ).options(selectinload(KitchenMenuPlanItem.plan)).all()
+                )
+                for other in other_items:
+                    if (not other.plan.name.endswith("素食菜單")
+                            and other.category_override in (None, old_category)):
+                        other.category_override = item.category_override
+            db.session.commit()
+            flash("已更新本次菜單的菜色分類，未修改共用菜色主檔或其他日期。", "success")
+            return redirect(redirect_to)
         ingredient_id = _int(request.form.get("ingredient_id"), default=0) or 0
         original = item.ingredients_override_json
         if action == "reset":
@@ -2477,6 +2546,7 @@ def menu_item_recipe(row_id: int):
         "kitchen/menu_item_recipe.html",
         item=item, plan=plan, components=components,
         ingredients=ingredients, week_start=week_start,
+        categories=CATEGORIES,
         ingredient_options=[
             {
                 "id": ingredient.id,
@@ -2844,7 +2914,7 @@ def summary_import():
                 queued_recipe_objects.add(id(recipe))
                 if recipe.id is not None:
                     existing_recipe_ids.add(recipe.id)
-                pending_items.append((plan, recipe, sort_order))
+                pending_items.append((plan, recipe, sort_order, dish["category"]))
                 sort_order += 1
                 added_items += 1
                 day_added += 1
@@ -2858,8 +2928,8 @@ def summary_import():
         # link menu items or the dishes can end up assigned to wrong dates.
         db.session.flush()
         if pending_items:
-            wanted_dates = {plan.service_date for plan, _, _ in pending_items}
-            wanted_names = {recipe.name for _, recipe, _ in pending_items}
+            wanted_dates = {plan.service_date for plan, _, _, _ in pending_items}
+            wanted_names = {recipe.name for _, recipe, _, _ in pending_items}
             plan_id_by_date = dict(db.session.query(
                 KitchenMenuPlan.service_date, KitchenMenuPlan.id,
             ).filter(
@@ -2883,8 +2953,12 @@ def summary_import():
                     plan_id=plan_id_by_date[plan.service_date],
                     recipe_id=recipe_id_by_name[recipe.name],
                     sort_order=sort_order,
+                    category_override=(
+                        category if category in CATEGORIES and category != (recipe.category or "其他")
+                        else None
+                    ),
                 )
-                for plan, recipe, sort_order in pending_items
+                for plan, recipe, sort_order, category in pending_items
             ])
         db.session.commit()
     except Exception:
@@ -3675,7 +3749,7 @@ def _daily_kitchen_sheet_data(service_date: date):
             dish = grouped[variant].setdefault(recipe.id, {
                 "recipe": recipe,
                 "sort_key": (
-                    CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
+                    CATEGORY_ORDER.get(_menu_item_category(menu_item), len(CATEGORIES)),
                     menu_item.sort_order,
                     recipe.name.casefold(),
                 ),
@@ -3694,7 +3768,7 @@ def _daily_kitchen_sheet_data(service_date: date):
             )))
             if menu_item.sort_order < dish["sort_key"][1]:
                 dish["sort_key"] = (
-                    CATEGORY_ORDER.get(recipe.category or "其他", len(CATEGORIES)),
+                    CATEGORY_ORDER.get(_menu_item_category(menu_item), len(CATEGORIES)),
                     menu_item.sort_order,
                     recipe.name.casefold(),
                 )

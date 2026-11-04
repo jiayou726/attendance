@@ -2895,6 +2895,91 @@ def test_summary_menu_recipe_edit_is_not_global_and_can_reset(app, authed_client
         assert next(iter(day_one.values()))[ids["ingredient"]]["required_amount"] == Decimal("3520")
 
 
+
+def test_per_menu_category_can_be_edited_without_changing_shared_recipe(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    plan_id = _create_plan(app, authed_client, ids, headcount=40)
+    with app.app_context():
+        menu_item = KitchenMenuPlanItem.query.filter_by(
+            plan_id=plan_id, recipe_id=ids["recipe"],
+        ).one()
+        item_id = menu_item.id
+        master_category = menu_item.recipe.category
+        next_date = TEST_DAY + timedelta(days=1)
+        other_plan = KitchenMenuPlan(
+            service_date=next_date, meal_type="午餐", name="其他日期菜單",
+        )
+        db.session.add(other_plan)
+        db.session.flush()
+        other_item = KitchenMenuPlanItem(
+            plan_id=other_plan.id, recipe_id=ids["recipe"], sort_order=0,
+        )
+        db.session.add(other_item)
+        db.session.commit()
+        other_item_id = other_item.id
+
+    chosen = "青菜" if master_category != "青菜" else "副菜"
+    url = f"/admin/order-tool/summary/dishes/{item_id}/recipe"
+    editor = authed_client.get(url)
+    assert editor.status_code == 200
+    html = editor.get_data(as_text=True)
+    assert 'name="action" value="category"' in html
+    assert 'id="menu-item-category"' in html
+    assert 'value="主食"' in html
+    assert 'value="主菜"' in html
+    assert 'value="副菜"' in html
+    assert 'value="青菜"' in html
+
+    changed = authed_client.post(url, data={"action": "category", "category": chosen})
+    assert changed.status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenMenuPlanItem, item_id)
+        assert item.category_override == chosen
+        assert db.session.get(KitchenRecipe, ids["recipe"]).category == master_category
+        assert db.session.get(KitchenMenuPlanItem, other_item_id).category_override is None
+
+    summary_html = authed_client.get(
+        f"/admin/order-tool/summary?week={TEST_DAY.isoformat()}"
+    ).get_data(as_text=True)
+    assert f'<span class="dish-category">{chosen}</span>' in summary_html
+    detail_html = authed_client.get(
+        f"/admin/order-tool/plans/{plan_id}"
+    ).get_data(as_text=True)
+    assert chosen in detail_html
+
+    copy_date = TEST_DAY + timedelta(days=3)
+    copied = authed_client.post(
+        f"/admin/order-tool/plans/{plan_id}/copy",
+        data={"target_date": copy_date.isoformat()},
+    )
+    assert copied.status_code == 302
+    with app.app_context():
+        copied_plan = KitchenMenuPlan.query.filter_by(
+            service_date=copy_date, meal_type="午餐", name="中央菜單",
+        ).one()
+        copied_item = KitchenMenuPlanItem.query.filter_by(
+            plan_id=copied_plan.id, recipe_id=ids["recipe"],
+        ).one()
+        assert copied_item.category_override == chosen
+
+    bad_request = authed_client.post(
+        url, data={"action": "category", "category": "無效分類"},
+    )
+    assert bad_request.status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenMenuPlanItem, item_id).category_override == chosen
+
+    with app.app_context():
+        db.session.get(KitchenMenuPlan, plan_id).status = "confirmed"
+        db.session.commit()
+    locked = authed_client.post(
+        url, data={"action": "category", "category": "其他"},
+    )
+    assert locked.status_code == 302
+    with app.app_context():
+        assert db.session.get(KitchenMenuPlanItem, item_id).category_override == chosen
+
+
 def test_same_named_dishes_with_different_school_formulas_not_merged(app, authed_client):
     ids = _seed_core_via_routes(app, authed_client)
     with app.app_context():

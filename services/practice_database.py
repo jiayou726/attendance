@@ -528,6 +528,7 @@ def _ensure_workspace_estimate_columns(account: dict) -> None:
             },
             "kitchen_menu_plan_item": {
                 "ingredients_override_json": "TEXT",
+                "category_override": "VARCHAR(20)",
             },
             "kitchen_daily_dish_note": {
                 "count_override_fields": "TEXT",

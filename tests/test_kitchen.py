@@ -2925,6 +2925,9 @@ def test_per_menu_category_can_be_edited_without_changing_shared_recipe(app, aut
     html = editor.get_data(as_text=True)
     assert 'name="action" value="category"' in html
     assert 'id="menu-item-category"' in html
+    assert 'onchange="this.form.requestSubmit()"' in html
+    assert "選擇後自動儲存" in html
+    assert "儲存分類</button>" not in html
     assert 'value="主食"' in html
     assert 'value="主菜"' in html
     assert 'value="副菜"' in html

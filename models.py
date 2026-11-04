@@ -235,6 +235,8 @@ class KitchenMenuPlanItem(db.Model):
     # NULL uses the shared master BOM. A JSON array is this menu item's
     # independent BOM snapshot; modifying it never edits KitchenRecipeIngredient.
     ingredients_override_json = db.Column(db.Text, nullable=True)
+    # NULL inherits the master category; a value applies to this menu only.
+    category_override = db.Column(db.String(20), nullable=True)
 
     plan = db.relationship("KitchenMenuPlan", back_populates="items")
     recipe = db.relationship("KitchenRecipe")

@@ -7,6 +7,7 @@ from flask import jsonify, render_template, request, send_file
 
 from blueprints.order_tool import order_bp
 from services.ftrace import KINDS, SCHEMAS, ExportError, build_sheets, draft, export_workbook
+from services.ftrace_references import reference_data
 
 
 @order_bp.get("/ftrace")
@@ -19,7 +20,9 @@ def ftrace():
     kind = request.args.get("kind", "receiving")
     if kind not in SCHEMAS:
         return "資料類型錯誤。", 400
-    return render_template("kitchen/ftrace.html", data=draft(day), kind=kind, kinds=KINDS)
+    response = render_template("kitchen/ftrace.html", data=draft(day), kind=kind,
+                               kinds=KINDS, references=reference_data())
+    return response, 200, {"Cache-Control": "no-store"}
 
 
 @order_bp.post("/ftrace/export")

@@ -45,7 +45,11 @@ def reference_data():
                     for spec in specs:
                         if not isinstance(spec.get("code"), str) or not isinstance(spec.get("supplier_name", ""), str):
                             raise ValueError
-                        clean["specs"].append(dict(code=spec["code"], supplier_name=spec.get("supplier_name", "")))
+                        clean_spec = dict(code=spec["code"], supplier_name=spec.get("supplier_name", ""))
+                        for key in ("product_name", "package_label", "manufacturer_name"):
+                            if isinstance(spec.get(key), str):
+                                clean_spec[key] = spec[key]
+                        clean["specs"].append(clean_spec)
                 if kind == "products" and isinstance(row.get("grams"), (int, float)):
                     clean["grams"] = row["grams"]
                 result[kind].append(clean)

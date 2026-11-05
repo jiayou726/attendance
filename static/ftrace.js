@@ -68,13 +68,13 @@
       const product = refs.mappings[`school:${row.school_key}`] || match(refs.products, row.name);
       row.product_code ||= product?.code || '';
       row.customer_code ||= product?.customer_code || match(refs.parties, row.name)?.code || '';
-      const grams = product?.grams || refs.products.find(p => p.code === row.product_code)?.grams;
+      const grams = product?.grams || row.grams_per_portion || refs.products.find(p => p.code === row.product_code)?.grams;
       if (!row.kg && grams) row.kg = String(Math.round(Number(row.quantity) * Number(grams)) / 1000);
       for (const material of row.materials) material.code ||= refs.mappings[`material:${material.key}`]?.code || match(refs.materials, material.name)?.code || '';
     }
   }
   function lists() {
-    for (const [id, values] of [['material-codes',refs.materials],['product-codes',refs.products],['party-codes',refs.parties],['spec-codes',refs.materials.flatMap(r => r.specs || [])]]) {
+    for (const [id, values] of [['material-codes',refs.materials],['product-codes',refs.products],['party-codes',refs.parties]]) {
       const target = document.getElementById(id); target.replaceChildren();
       for (const value of values) { const option = document.createElement('option'); option.value = value.code; option.label = value.name || value.supplier_name || ''; target.append(option); }
     }
@@ -87,6 +87,39 @@
     if (list) input.setAttribute('list', list);
     input.addEventListener('input', () => { row[name] = input.value; invalidate(); });
     wrapper.append(input); parent.append(wrapper);
+    return input;
+  }
+  function specField(parent, row) {
+    const input = field(parent,row,'spec_code','原材料廠商自編碼（規格碼）');
+    const options = document.createElement('datalist');
+    options.id = `spec-options-${String(row.key).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
+    input.setAttribute('list', options.id);
+    const description = document.createElement('small'); description.className = 'muted';
+    input.parentElement.append(options, description);
+    const details = (spec, material) => [...new Set([
+      spec.product_name || material.name,
+      spec.package_label,
+      spec.manufacturer_name && `製造廠：${spec.manufacturer_name}`,
+      spec.supplier_name && `廠商：${spec.supplier_name}`
+    ].filter(Boolean))].join('；');
+    function update(reset = false) {
+      if (reset) { row.spec_code = ''; input.value = ''; }
+      const material = refs.materials.find(m => m.code === row.material_code);
+      const specs = material?.specs || [];
+      options.replaceChildren();
+      for (const spec of specs) {
+        const option = document.createElement('option'); option.value = spec.code;
+        option.label = `${spec.code}（${details(spec,material)}）`;
+        option.textContent = option.label; options.append(option);
+      }
+      const chosen = specs.find(s => s.code === row.spec_code);
+      description.textContent = chosen ? `（${details(chosen,material)}）` :
+        !material ? '先選原材料，才會顯示這個食材的規格。' :
+        specs.length ? '選項括號會顯示產品、包裝與廠商；也可直接輸入規格碼。' :
+        '平台對照沒有此原料的規格，請核對後填寫。';
+    }
+    input.addEventListener('input', () => update());
+    update(); return update;
   }
   function invalidate() { document.getElementById('ftrace-confirm').checked = false; errorBox.hidden = true; status('有尚未暫存的修改。'); }
   function render() {
@@ -102,15 +135,17 @@
       const fields = document.createElement('div'); fields.className = 'ftrace-fields'; card.append(fields);
       if (settings.kind === 'receiving') {
         source.textContent += `；供應商：${row.supplier_name || '待確認'}`;
-        field(fields,row,'material_code','原材料自編碼','text','material-codes');
-        field(fields,row,'spec_code','原材料廠商自編碼（規格碼）','text','spec-codes');
+        const materialInput = field(fields,row,'material_code','原材料自編碼','text','material-codes');
+        const updateSpecs = specField(fields,row);
+        materialInput.addEventListener('input', () => updateSpecs(true));
         field(fields,row,'supplier_code','供應商自編碼','text','party-codes');
         field(fields,row,'received_date','實際收貨日期','date');
         field(fields,row,'kg','實收淨重（公斤）','number');
       } else {
         field(fields,row,'product_code','產品自編碼','text','product-codes');
         field(fields,row,'quantity',settings.kind === 'manufacture' ? '實際製造份數' : '實際交貨份數','number');
-        field(fields,row,'kg',settings.kind === 'manufacture' ? '成品總淨重（公斤）' : '交貨總淨重（公斤）','number');
+        const weightInput = field(fields,row,'kg',settings.kind === 'manufacture' ? '成品總淨重（公斤）' : '交貨總淨重（公斤）','number');
+        if (!row.kg) { const reason = document.createElement('small'); reason.className='muted'; reason.textContent='尚未設定每份成品重量，請填實際總公斤數。'; weightInput.parentElement.append(reason); }
         if (settings.kind === 'delivery') field(fields,row,'customer_code','下游業者自編碼','text','party-codes');
         else {
           const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = `使用原材料（${row.materials.length} 項，請核對編碼）`; details.append(summary);

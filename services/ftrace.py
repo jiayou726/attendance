@@ -149,6 +149,7 @@ def draft(day):
             meal["customer_code"] = product.get("customer_code", "")
             grams = product.get("grams")
             if grams:
+                meal["grams_per_portion"] = text_number(grams)
                 meal["kg"] = text_number(Decimal(meal["quantity"]) * Decimal(str(grams)) / 1000)
                 meal["source"] += f"；按平台產品規格 {grams} g／份預填成品重量，請核對實際出餐。"
     from services.ftrace_references import apply_reference_defaults, reference_data

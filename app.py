@@ -24,6 +24,7 @@ from blueprints.import_employees import import_bp
 from blueprints.order_tool import order_bp
 # AI 菜單路由直接掛在 order_bp 上，必須在 register_blueprint 前載入。
 import blueprints.ai_menu  # noqa: F401
+import blueprints.ftrace_export  # noqa: F401
 from blueprints.recipe_performance import install_recipe_performance_views
 from blueprints.school_ingredient_export import school_ingredient_export_bp
 from blueprints.nonregistered_menu_format import install_nonregistered_menu_export_format_fix

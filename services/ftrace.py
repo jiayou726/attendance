@@ -151,7 +151,9 @@ def draft(day):
             if grams:
                 meal["kg"] = text_number(Decimal(meal["quantity"]) * Decimal(str(grams)) / 1000)
                 meal["source"] += f"；按平台產品規格 {grams} g／份預填成品重量，請核對實際出餐。"
-    return dict(date=day.isoformat(), receipts=receipts, meals=list(meals.values()), skipped=sorted(skipped))
+    from services.ftrace_references import apply_reference_defaults, reference_data
+    return apply_reference_defaults(dict(date=day.isoformat(), receipts=receipts,
+        meals=list(meals.values()), skipped=sorted(skipped)), reference_data())
 
 
 class ExportError(ValueError):

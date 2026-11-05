@@ -9,12 +9,15 @@
   const editor = document.getElementById('ftrace-editor');
   const errorBox = document.getElementById('ftrace-error');
   let data = structuredClone(initial);
-  let refs = {materials: [], products: [], parties: [], mappings: {}};
+  const systemRefs = JSON.parse(document.getElementById('ftrace-references').textContent);
+  let refs = {...systemRefs, mappings: {}};
   const status = message => { document.getElementById('draft-status').textContent = message; };
   function fail(message) { errorBox.textContent = message; errorBox.hidden = false; }
   function readSaved(name) { try { return JSON.parse(localStorage.getItem(name)); } catch (_) { return null; } }
   const savedRefs = readSaved(referenceKey);
-  if (savedRefs && Array.isArray(savedRefs.materials) && Array.isArray(savedRefs.products) && Array.isArray(savedRefs.parties)) refs = savedRefs;
+  if (savedRefs && Array.isArray(savedRefs.materials) && Array.isArray(savedRefs.products) && Array.isArray(savedRefs.parties)) {
+    refs = {...savedRefs, ...Object.fromEntries(['materials','products','parties'].map(k => [k, systemRefs[k].length ? systemRefs[k] : savedRefs[k]]))};
+  }
   refs.mappings ||= {};
   const saved = readSaved(key);
   if (!saved && settings.kind === 'delivery') {
@@ -43,18 +46,23 @@
   }
   const normalized = value => String(value || '').replace(/[\s　]/g, '');
   function match(list, name) {
-    const matches = list.filter(r => normalized(r.name) === normalized(name));
+    const matches = list.filter(r => [r.name, ...(r.aliases || [])].some(n => normalized(n) === normalized(name)));
     return matches.length === 1 ? matches[0] : null;
   }
   function applyReferences() {
     for (const row of data.receipts) {
       const saved = refs.mappings[`material:${row.material_key}`];
       const material = saved || match(refs.materials, row.name);
-      row.material_code ||= material?.code || '';
+      if (saved) row.material_code = saved.code;
+      else row.material_code ||= material?.code || '';
       const specs = refs.materials.find(r => r.code === row.material_code)?.specs || [];
       const supplierSpecs = specs.filter(s => normalized(s.supplier_name) === normalized(row.supplier_name));
-      row.spec_code ||= refs.mappings[`spec:${row.material_key}:${row.supplier_key}`]?.code || (supplierSpecs.length === 1 ? supplierSpecs[0].code : specs.length === 1 ? specs[0].code : '');
-      row.supplier_code ||= refs.mappings[`supplier:${row.supplier_key}`]?.code || match(refs.parties, row.supplier_name)?.code || '';
+      const savedSpec = refs.mappings[`spec:${row.material_key}:${row.supplier_key}`];
+      const savedSupplier = refs.mappings[`supplier:${row.supplier_key}`];
+      if (savedSpec) row.spec_code = savedSpec.code;
+      else row.spec_code ||= supplierSpecs.length === 1 ? supplierSpecs[0].code : specs.length === 1 ? specs[0].code : '';
+      if (savedSupplier) row.supplier_code = savedSupplier.code;
+      else row.supplier_code ||= match(refs.parties, row.supplier_name)?.code || '';
     }
     for (const row of data.meals) {
       const product = refs.mappings[`school:${row.school_key}`] || match(refs.products, row.name);
@@ -165,4 +173,5 @@
     } catch (error) {fail(error.message);} finally {button.disabled = false;}
   });
   applyReferences(); render();
+  if (systemRefs.materials.length || systemRefs.parties.length) document.getElementById('reference-status').textContent = `系統已載入 ${systemRefs.materials.length} 項原料、${systemRefs.parties.length} 個交易對象。`;
 })();

@@ -29,6 +29,7 @@ def app(tmp_path):
         dict(name="平鎮高中", code="TEST-P1", customer_code="TEST-C1", grams=600),
         dict(name="新勢國小", code="TEST-P2", customer_code="TEST-C2"),
         dict(name="信義國小", code="TEST-P3", customer_code="TEST-C3", grams=600)]
+    app.config["FTRACE_REFERENCES_JSON"] = dict(materials=[], products=[], parties=[])
     with app.app_context():
         ingredient = KitchenIngredient(name="高麗菜", base_unit="g", purchase_unit="kg")
         recipe = KitchenRecipe(name="炒高麗菜")
@@ -63,6 +64,56 @@ def payload():
         received_date="2026-11-05")], "meals": [dict(name="測試國小", include=True,
         product_code="TEST-P0", customer_code="TEST-C0", kg="7.2", quantity="12",
         materials=[dict(name="高麗菜", code="B001")])]}
+
+
+def private_references():
+    return dict(materials=[dict(name="高麗菜", code="TEST-M",
+        specs=[dict(code="TEST-S", supplier_name="原料製造商")])], products=[],
+        parties=[dict(name="測試採購公司", code="TEST-V", aliases=["每日採購單"])])
+
+
+def test_system_prefills_all_three_receipt_codes_without_browser_import_or_database_writes(app):
+    app.config["FTRACE_REFERENCES_JSON"] = private_references()
+    with app.app_context():
+        row = draft(DAY)["receipts"][0]
+        assert (row["material_code"], row["spec_code"], row["supplier_code"]) == ("TEST-M", "TEST-S", "TEST-V")
+        assert draft(DAY)["meals"][0]["materials"][0]["code"] == "TEST-M"
+        assert not db.session.new and not db.session.dirty and not db.session.deleted
+    response = app.test_client().get("/admin/order-tool/ftrace?date=2026-11-05")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert b'ftrace-references' in response.data and b'TEST-S' in response.data
+
+
+def test_ambiguous_references_are_not_guessed_and_supplier_spec_is_selected_only_when_unique(app):
+    refs = private_references()
+    refs["materials"][0]["specs"].append(dict(code="TEST-S2", supplier_name="另一製造商"))
+    refs["parties"].append(dict(name="另一交易對象", code="TEST-V2", aliases=["每日採購單"]))
+    app.config["FTRACE_REFERENCES_JSON"] = refs
+    with app.app_context():
+        row = draft(DAY)["receipts"][0]
+        assert row["material_code"] == "TEST-M" and row["spec_code"] == row["supplier_code"] == ""
+        refs["materials"][0]["specs"][1]["supplier_name"] = "每日採購單"
+        assert draft(DAY)["receipts"][0]["spec_code"] == "TEST-S2"
+        refs["materials"].append(dict(name="高麗菜", code="OTHER-M"))
+        row = draft(DAY)["receipts"][0]
+        assert row["material_code"] == row["spec_code"] == ""
+
+
+def test_compressed_private_references_load_without_exposing_unrelated_fields(app, monkeypatch):
+    import base64, zlib
+    from services.ftrace_references import reference_data
+    refs = private_references()
+    refs["parties"][0]["contact"] = "MUST-NOT-RENDER"
+    app.config.pop("FTRACE_REFERENCES_JSON")
+    packed = base64.b64encode(zlib.compress(json.dumps(refs).encode())).decode()
+    monkeypatch.setenv("FTRACE_REFERENCES_ZLIB_BASE64", packed)
+    with app.app_context():
+        assert reference_data()["parties"][0]["code"] == "TEST-V"
+        assert "contact" not in reference_data()["parties"][0]
+        assert draft(DAY)["receipts"][0]["supplier_code"] == "TEST-V"
+        monkeypatch.setenv("FTRACE_REFERENCES_ZLIB_BASE64", "invalid")
+        assert draft(DAY)["receipts"][0]["material_code"] == ""
 
 
 def test_drafts_are_read_only_and_do_not_treat_raw_weight_as_finished_weight(app):

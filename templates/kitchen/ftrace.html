@@ -10,7 +10,7 @@
   <p class="muted">系統先帶入已對照的原料、規格與供應商編碼，可直接編輯。無法唯一對應的欄位請補選，再核對實際數量。</p>
   <details><summary>平台編碼對照（可補充或備份）</summary><p class="muted">系統已設定的對照會自動載入，不需每個瀏覽器重新匯入。也可載入自己的對照 JSON；手動修改與草稿會記住在這個瀏覽器，不會修改菜單、採購或平台紀錄。</p><label class="btn secondary">載入編碼對照<input id="ftrace-reference" type="file" accept=".json,application/json"></label><button class="btn secondary" id="ftrace-save-reference" type="button">備份編碼對照</button><p id="reference-status" role="status"></p></details>
   <p class="notice">{% if kind == 'receiving' %}來源：預定當日送達的採購項目；未填送達日者使用供餐日期。公斤數由當時採購單位換算，個數類食材請補實際重量。{% else %}來源：當日有供餐的各校菜單與人數，葷素合併、不同餐別分開。成品重量請依實際出餐核對；原料投入重量不會直接當作成品重量。{% endif %}</p>
-  <label class="ftrace-confirm"><input type="checkbox" id="batch-mode" checked>依批號申報（收貨、製造、交貨串接）</label><p class="muted">餐食製造批號、製造日與有效日先帶供餐日期，可修改。原料批號依實際收貨紀錄填寫；製造請選用已申報的收貨批次。批次與修改暫存於此瀏覽器，可跨日期選取，尚不代表平台已申報或已扣庫存。</p><div id="ftrace-editor"></div>
+  <label class="ftrace-confirm"><input type="checkbox" id="batch-mode" checked>依批號申報（收貨、製造、交貨串接）</label><p class="muted">內部批號沿用「原材料／產品自編碼＋民國日期」預填，可修改；原料有原廠批號或已申報批號時，請以原紀錄為準。餐食製造日、有效日先帶供餐日期，請核對實際日期；製造請選用已申報的收貨批次。批次與修改暫存於此瀏覽器，可跨日期選取，尚不代表平台已申報或已扣庫存。</p><div id="ftrace-editor"></div>
   {% if kind != 'receiving' %}<p class="muted">小便當併入平鎮高中；新勢幼、信義幼併入各自國小。{% if data.skipped %}依設定不列入：{{ data.skipped|join('、') }}。{% endif %}</p>{% endif %}
   <div id="ftrace-error" class="notice" role="alert" hidden></div>
   <div class="ftrace-actions"><button id="save-draft" class="btn secondary" type="button">暫存本次修改</button><button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button><span id="draft-status" role="status"></span></div>
@@ -27,5 +27,5 @@
 <script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token()}|tojson }}</script>
-<script src="{{ url_for('static', filename='ftrace.js', v=5) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=6) }}" defer></script>
 {% endblock %}

@@ -356,3 +356,16 @@ def test_recipe_usage_estimate_is_weight_only_and_export_does_not_write(app):
         assert draft(DAY)['meals'][0]['materials'][0]['estimated_kg']=='0.96'
         build_sheets('manufacture',DAY,batch_payload())
         assert not db.session.new and not db.session.dirty
+
+
+def test_batch_suggestions_follow_existing_material_or_product_code_and_roc_date(app):
+    from services.ftrace_batch import suggested_batch
+    assert suggested_batch('TEST-M', date(2026,10,8)) == 'TEST-M1151008'
+    assert suggested_batch('', DAY) == ''
+    assert suggested_batch('X'*40, DAY) == ''
+    app.config['FTRACE_REFERENCES_JSON']=private_references()
+    with app.app_context():
+        value=draft(DAY)
+        assert value['receipts'][0]['batch']=='TEST-M1151105'
+        assert value['receipts'][0]['seq']=='01'
+        assert value['meals'][0]['manufactured_date']==DAY.isoformat()

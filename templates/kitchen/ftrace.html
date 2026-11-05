@@ -21,10 +21,11 @@
 <datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist>
 <style>
 .ftrace-picker,.ftrace-actions,.ftrace-steps{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}.ftrace-picker label{display:grid;gap:6px}.ftrace-steps .btn{flex:1;text-align:center}.ftrace-row{border:1px solid #dce4e2;border-radius:12px;padding:16px;margin:16px 0}.ftrace-row h3{margin:0 0 4px}.ftrace-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}.ftrace-fields label{display:grid;gap:5px;font-size:.92rem}.ftrace-fields input{width:100%;box-sizing:border-box;min-height:42px}.ftrace-confirm{display:flex;align-items:center;gap:8px;margin:20px 0}.ftrace-materials{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:12px}.ftrace-materials label{display:grid;gap:4px}.ftrace-row input[type=checkbox]{width:18px;height:18px}.ftrace-row summary{cursor:pointer}.ftrace-picker select{min-height:42px}.ftrace-row .muted{overflow-wrap:anywhere}#ftrace-error{background:#fff0ee;color:#9d271b}#ftrace-download:disabled{opacity:.6}#ftrace-reference{display:block;max-width:100%}
+.ftrace-spec-picker{min-width:0}.ftrace-spec-picker summary{padding:8px;background:#edf4f7;border-radius:6px;font-weight:600}.ftrace-spec-options{display:grid;gap:6px;max-height:320px;overflow:auto;padding:6px 0}.ftrace-spec-options button{display:block;width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.5;padding:10px;border:1px solid #bfcfd8;border-radius:6px;background:#fff;color:#203744;cursor:pointer}.ftrace-spec-options button:hover,.ftrace-spec-options button:focus{background:#e9f3ff;border-color:#326baf}
 @media(max-width:600px){.ftrace-picker>*{width:100%}.ftrace-steps{gap:6px}.ftrace-row{padding:12px}.ftrace-fields{grid-template-columns:1fr}.ftrace-actions .btn{width:100%}}
 </style>
 <script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token()}|tojson }}</script>
-<script src="{{ url_for('static', filename='ftrace.js', v=3) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=4) }}" defer></script>
 {% endblock %}

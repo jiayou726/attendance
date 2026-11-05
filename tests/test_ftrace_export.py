@@ -290,3 +290,69 @@ def test_export_requires_csrf_with_production_setting(app):
         "date":str(DAY), "kind":"receiving", "payload":json.dumps(payload()),
         "confirmed":"1", "_csrf_token":token})
     assert response.status_code == 200
+
+
+def batch_payload():
+    value = payload()
+    value['batch_mode'] = True
+    value['receipts'][0].update(seq='91', batch='TEST-RAW-LOT', manufactured_date='', expiry_date='')
+    value['meals'][0].update(seq='92', batch='2026/11/05', manufactured_date='2026-11-05', expiry_date='2026-11-05')
+    value['meals'][0]['materials'][0]['lots'] = [dict(report_date='2026-11-04', seq='91',
+        spec_code='TEST-RAW-SPEC', batch='TEST-RAW-LOT', received_date='', kg='0.96', receipt_kg='1.235')]
+    return value
+
+
+def test_batch_receipt_and_manufacture_and_delivery_keep_real_links_and_biff(app):
+    from services.ftrace_batch import BATCH_SCHEMAS
+    value = batch_payload()
+    receipt = build_sheets('receiving', DAY, value)
+    assert receipt['收貨資料批號資訊'][0] == ['2','2026/11/05','91','B001','B001A025','TEST-RAW-LOT','','','2026/11/05','1.235','','']
+    made = build_sheets('manufacture', DAY, value)
+    assert made['製造資料'][0][4:7] == ['2026/11/05','2026/11/05','2026/11/05']
+    link = made['製造餐食資料原材料供應商'][0]
+    assert link[5:] == ['2026','11','04','91','B001','TEST-RAW-SPEC','TEST-RAW-LOT','','0.96']
+    delivered = build_sheets('delivery', DAY, value)
+    assert delivered['交貨資料'][0][4] == made['製造資料'][0][4]
+    assert delivered['交貨資料下游業者'][0][-4:] == ['TEST-C0','7.2','12','']
+    for kind,sheets in [('receiving',receipt),('manufacture',made),('delivery',delivered)]:
+        book=xlrd.open_workbook(file_contents=export_workbook(kind,sheets,batch_mode=True).getvalue())
+        assert book.sheet_names() == list(BATCH_SCHEMAS[kind])
+        for sheet in book.sheets():
+            assert sheet.row_values(0) == BATCH_SCHEMAS[kind][sheet.name]
+            assert all(sheet.ncols == len(row) for row in sheets[sheet.name])
+    response=app.test_client().post('/admin/order-tool/ftrace/export',data=dict(date=DAY.isoformat(),kind='manufacture',confirmed='1',payload=json.dumps(value)))
+    assert response.status_code == 200
+    assert xlrd.open_workbook(file_contents=response.data).sheet_by_name('製造資料').cell_value(1,4)=='2026/11/05'
+
+
+@pytest.mark.parametrize('case', ['missing_lot','future_lot','invalid_month','two_identifiers','too_much','aggregate_overuse','bad_expiry','receipt_day'])
+def test_batch_invalid_or_untraceable_data_is_rejected(case):
+    value=batch_payload(); meal=value['meals'][0]; material=meal['materials'][0]; lot=material['lots'][0]
+    kind='manufacture'
+    if case=='missing_lot': material['lots']=[]
+    elif case=='future_lot': lot['report_date']='2026-11-06'
+    elif case=='invalid_month': lot['report_date']='2026-13'
+    elif case=='two_identifiers': lot['received_date']='2026-11-04'
+    elif case=='too_much': lot['kg']='2'
+    elif case=='aggregate_overuse':
+        import copy
+        other=copy.deepcopy(meal);other['seq']='93';other['product_code']='TEST-P9';value['meals'].append(other)
+    elif case=='bad_expiry': meal['expiry_date']='2026-11-04'
+    elif case=='receipt_day': kind='receiving';value['receipts'][0]['received_date']='2026-11-04'
+    with pytest.raises(ExportError):build_sheets(kind,DAY,value)
+
+
+def test_batch_manufacture_can_link_legacy_stock_or_multiple_receipt_lots():
+    value=batch_payload();lot=value['meals'][0]['materials'][0]['lots'][0]
+    lot.update(report_date='2026-10',seq='',batch='',received_date='2026-10-30',kg='0.46')
+    value['meals'][0]['materials'][0]['lots'].append(dict(report_date='2026-11-05',seq='01',spec_code='TEST-S',batch='TEST-LOT',received_date='',kg='0.5'))
+    rows=build_sheets('manufacture',DAY,value)['製造餐食資料原材料供應商']
+    assert rows[0][5:9]==['2026','10','',''] and rows[0][-2:]==['2026/10/30','0.46']
+    assert len(rows)==2 and rows[1][-1]=='0.5'
+
+
+def test_recipe_usage_estimate_is_weight_only_and_export_does_not_write(app):
+    with app.app_context():
+        assert draft(DAY)['meals'][0]['materials'][0]['estimated_kg']=='0.96'
+        build_sheets('manufacture',DAY,batch_payload())
+        assert not db.session.new and not db.session.dirty

@@ -38,7 +38,7 @@ def ftrace_export():
         kind = request.form.get("kind")
         day = date.fromisoformat(request.form.get("date", ""))
         sheets = build_sheets(kind, day, payload)
-        stream = export_workbook(kind, sheets)
+        stream = export_workbook(kind, sheets, batch_mode=payload.get("batch_mode") is True)
     except (ValueError, TypeError, KeyError) as error:
         message = str(error) if isinstance(error, ExportError) else "日期或資料格式錯誤，請重新檢查。"
         return jsonify(error=message), 400

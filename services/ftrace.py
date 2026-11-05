@@ -137,8 +137,11 @@ def draft(day):
             for component in components:
                 ingredient = component.ingredient
                 if ingredient is not None:
-                    meal["materials"][str(ingredient.id)] = dict(
-                        key=str(ingredient.id), name=ingredient.name, code="")
+                    material = meal["materials"].setdefault(str(ingredient.id), dict(
+                        key=str(ingredient.id), name=ingredient.name, code="", estimated_kg=""))
+                    if (ingredient.base_unit or "g") == "g":
+                        material["estimated_kg"] = text_number(Decimal(material["estimated_kg"] or "0") +
+                            Decimal(component.grams_per_person or 0) * assignment.headcount / 1000, 7)
     for meal in meals.values():
         meal["quantity"] = str(meal["quantity"])
         meal["materials"] = list(meal["materials"].values())
@@ -186,6 +189,9 @@ def _number(row, field, label, places, positive=True):
 def build_sheets(kind, day, payload):
     if kind not in SCHEMAS:
         raise ExportError("請選擇收貨、製造或交貨。")
+    if payload.get("batch_mode") is True:
+        from services.ftrace_batch import build_batch_sheets
+        return build_batch_sheets(kind, day, payload)
     sheets = {name: [] for name in SCHEMAS[kind]}
     report_date = day.strftime("%Y/%m/%d")
     field = "receipts" if kind == "receiving" else "meals"
@@ -235,13 +241,15 @@ def build_sheets(kind, day, payload):
     return sheets
 
 
-def export_workbook(kind, sheets):
+def export_workbook(kind, sheets, batch_mode=False):
     # The live uploader rejects OOXML (.xlsx). Use real BIFF8/OLE .xls,
     # not a renamed .xlsx, matching the official templates.
     workbook = xlwt.Workbook(encoding="utf-8")
     body_style = xlwt.easyxf("align: vert centre, wrap on;", num_format_str="@")
     header_style = xlwt.easyxf("font: bold on; align: vert centre, wrap on;", num_format_str="@")
-    for name, headers in SCHEMAS[kind].items():
+    from services.ftrace_batch import BATCH_SCHEMAS
+    schema = BATCH_SCHEMAS if batch_mode else SCHEMAS
+    for name, headers in schema[kind].items():
         sheet = workbook.add_sheet(name)
         for r, row in enumerate([headers, *sheets[name]]):
             for c, value in enumerate(row):

@@ -91,11 +91,12 @@
   }
   function specField(parent, row) {
     const input = field(parent,row,'spec_code','原材料廠商自編碼（規格碼）');
-    const options = document.createElement('datalist');
-    options.id = `spec-options-${String(row.key).replace(/[^a-zA-Z0-9_-]/g,'_')}`;
-    input.setAttribute('list', options.id);
+    const picker = document.createElement('details'); picker.className = 'ftrace-spec-picker';
+    const summary = document.createElement('summary'); summary.textContent = '選擇產品／包裝規格';
+    const options = document.createElement('div'); options.className = 'ftrace-spec-options';
+    picker.append(summary, options);
     const description = document.createElement('small'); description.className = 'muted';
-    input.parentElement.append(options, description);
+    input.parentElement.append(picker, description);
     const details = (spec, material) => [...new Set([
       spec.product_name || material.name,
       spec.package_label,
@@ -108,9 +109,18 @@
       const specs = material?.specs || [];
       options.replaceChildren();
       for (const spec of specs) {
-        const option = document.createElement('option'); option.value = spec.code;
-        option.label = `${spec.code}（${details(spec,material)}）`;
-        option.textContent = option.label; options.append(option);
+        const option = document.createElement('button'); option.type = 'button';
+        option.textContent = `${spec.code}（${details(spec,material)}）`;
+        option.addEventListener('click', () => {
+          row.spec_code = spec.code; input.value = spec.code; picker.open = false;
+          invalidate(); update();
+        });
+        options.append(option);
+      }
+      if (!specs.length) {
+        const empty = document.createElement('p');
+        empty.textContent = material ? '平台對照沒有此原料的規格，請核對後填寫。' : '請先選原材料，再選產品規格。';
+        options.append(empty);
       }
       const chosen = specs.find(s => s.code === row.spec_code);
       description.textContent = chosen ? `（${details(chosen,material)}）` :

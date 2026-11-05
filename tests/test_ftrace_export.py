@@ -104,6 +104,7 @@ def test_compressed_private_references_load_without_exposing_unrelated_fields(ap
     import base64, zlib
     from services.ftrace_references import reference_data
     refs = private_references()
+    refs["materials"][0]["specs"][0].update(product_name="測試食材", package_label="1公斤／袋", manufacturer_name="測試製造廠")
     refs["parties"][0]["contact"] = "MUST-NOT-RENDER"
     app.config.pop("FTRACE_REFERENCES_JSON")
     packed = base64.b64encode(zlib.compress(json.dumps(refs).encode())).decode()
@@ -111,6 +112,7 @@ def test_compressed_private_references_load_without_exposing_unrelated_fields(ap
     with app.app_context():
         assert reference_data()["parties"][0]["code"] == "TEST-V"
         assert "contact" not in reference_data()["parties"][0]
+        assert reference_data()["materials"][0]["specs"][0]["package_label"] == "1公斤／袋"
         assert draft(DAY)["receipts"][0]["supplier_code"] == "TEST-V"
         monkeypatch.setenv("FTRACE_REFERENCES_ZLIB_BASE64", "invalid")
         assert draft(DAY)["receipts"][0]["material_code"] == ""
@@ -181,6 +183,7 @@ def test_product_codes_come_from_private_environment_and_invalid_settings_fail_c
     with app.app_context():
         meal = draft(DAY)["meals"][0]
         assert (meal["product_code"], meal["customer_code"], meal["kg"]) == ("PRIVATE-P", "PRIVATE-C", "7.2")
+        assert meal["grams_per_portion"] == "600"
         monkeypatch.setenv("FTRACE_PRODUCTS_JSON", "invalid")
         meal = draft(DAY)["meals"][0]
         assert (meal["product_code"], meal["customer_code"], meal["kg"]) == ("", "", "")

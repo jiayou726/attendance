@@ -18,7 +18,7 @@
   <button id="ftrace-download" class="btn" type="button">下載{{ dict(kinds)[kind] }}資料匯入檔</button>
   <p class="muted">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
 </section>
-<datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist><datalist id="spec-codes"></datalist>
+<datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist>
 <style>
 .ftrace-picker,.ftrace-actions,.ftrace-steps{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}.ftrace-picker label{display:grid;gap:6px}.ftrace-steps .btn{flex:1;text-align:center}.ftrace-row{border:1px solid #dce4e2;border-radius:12px;padding:16px;margin:16px 0}.ftrace-row h3{margin:0 0 4px}.ftrace-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}.ftrace-fields label{display:grid;gap:5px;font-size:.92rem}.ftrace-fields input{width:100%;box-sizing:border-box;min-height:42px}.ftrace-confirm{display:flex;align-items:center;gap:8px;margin:20px 0}.ftrace-materials{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:12px}.ftrace-materials label{display:grid;gap:4px}.ftrace-row input[type=checkbox]{width:18px;height:18px}.ftrace-row summary{cursor:pointer}.ftrace-picker select{min-height:42px}.ftrace-row .muted{overflow-wrap:anywhere}#ftrace-error{background:#fff0ee;color:#9d271b}#ftrace-download:disabled{opacity:.6}#ftrace-reference{display:block;max-width:100%}
 @media(max-width:600px){.ftrace-picker>*{width:100%}.ftrace-steps{gap:6px}.ftrace-row{padding:12px}.ftrace-fields{grid-template-columns:1fr}.ftrace-actions .btn{width:100%}}
@@ -26,5 +26,5 @@
 <script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token()}|tojson }}</script>
-<script src="{{ url_for('static', filename='ftrace.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=3) }}" defer></script>
 {% endblock %}

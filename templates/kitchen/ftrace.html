@@ -1,0 +1,28 @@
+{% extends 'kitchen/base.html' %}
+{% block title %}非追不可匯入檔{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="top"><div><span class="eyebrow">餐食製造業</span><h1>非追不可匯入檔</h1><p class="muted">先帶入系統資料，核對實際數量與平台自編碼後，下載檔案到非追不可的「資料匯入」。</p></div><a class="btn secondary" href="{{ url_for('order_tool.index') }}">回首頁</a></div>
+  <form class="ftrace-picker" method="get"><label>申報日期<input type="date" name="date" value="{{ data.date }}" required></label><label>資料類型<select name="kind">{% for value,label in kinds %}<option value="{{ value }}" {{ 'selected' if kind == value else '' }}>{{ loop.index }}. {{ label }}資料</option>{% endfor %}</select></label><button class="btn" type="submit">帶入當日資料</button></form>
+  <nav class="ftrace-steps" aria-label="申報順序">{% for value,label in kinds %}<a class="btn {{ '' if kind == value else 'secondary' }}" href="{{ url_for('order_tool.ftrace', date=data.date, kind=value) }}" {{ 'aria-current=step' if kind == value else '' }}>{{ loop.index }}　{{ label }}</a>{% endfor %}</nav>
+</section>
+<section class="card">
+  <details><summary>平台編碼對照（可記住在這個瀏覽器）</summary><p class="muted">載入對照 JSON 後，以完全相同的名稱帶入編碼；不同名稱請在下方選擇。對照和匯出草稿只保存在這個瀏覽器，不會修改菜單、採購或平台紀錄。</p><label class="btn secondary">載入編碼對照<input id="ftrace-reference" type="file" accept=".json,application/json"></label><button class="btn secondary" id="ftrace-save-reference" type="button">備份編碼對照</button><p id="reference-status" role="status"></p></details>
+  <p class="notice">{% if kind == 'receiving' %}來源：預定當日送達的採購項目；未填送達日者使用供餐日期。公斤數由當時採購單位換算，個數類食材請補實際重量。{% else %}來源：當日有供餐的各校菜單與人數，葷素合併、不同餐別分開。成品重量請依實際出餐核對；原料投入重量不會直接當作成品重量。{% endif %}</p>
+  <div id="ftrace-editor"></div>
+  {% if kind != 'receiving' %}<p class="muted">小便當併入平鎮高中。{% if data.skipped %}依設定不列入：{{ data.skipped|join('、') }}。{% endif %}</p>{% endif %}
+  <div id="ftrace-error" class="notice" role="alert" hidden></div>
+  <div class="ftrace-actions"><button id="save-draft" class="btn secondary" type="button">暫存本次修改</button><button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button><span id="draft-status" role="status"></span></div>
+  <label class="ftrace-confirm"><input type="checkbox" id="ftrace-confirm">我已核對所選項目的實際數量、日期與平台編碼。</label>
+  <button id="ftrace-download" class="btn" type="button">下載{{ dict(kinds)[kind] }}資料匯入檔</button>
+  <p class="muted">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
+</section>
+<datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist><datalist id="spec-codes"></datalist>
+<style>
+.ftrace-picker,.ftrace-actions,.ftrace-steps{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}.ftrace-picker label{display:grid;gap:6px}.ftrace-steps .btn{flex:1;text-align:center}.ftrace-row{border:1px solid #dce4e2;border-radius:12px;padding:16px;margin:16px 0}.ftrace-row h3{margin:0 0 4px}.ftrace-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}.ftrace-fields label{display:grid;gap:5px;font-size:.92rem}.ftrace-fields input{width:100%;box-sizing:border-box;min-height:42px}.ftrace-confirm{display:flex;align-items:center;gap:8px;margin:20px 0}.ftrace-materials{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:12px}.ftrace-materials label{display:grid;gap:4px}.ftrace-row input[type=checkbox]{width:18px;height:18px}.ftrace-row summary{cursor:pointer}.ftrace-picker select{min-height:42px}.ftrace-row .muted{overflow-wrap:anywhere}#ftrace-error{background:#fff0ee;color:#9d271b}#ftrace-download:disabled{opacity:.6}#ftrace-reference{display:block;max-width:100%}
+@media(max-width:600px){.ftrace-picker>*{width:100%}.ftrace-steps{gap:6px}.ftrace-row{padding:12px}.ftrace-fields{grid-template-columns:1fr}.ftrace-actions .btn{width:100%}}
+</style>
+<script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
+<script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token()}|tojson }}</script>
+<script src="{{ url_for('static', filename='ftrace.js') }}" defer></script>
+{% endblock %}

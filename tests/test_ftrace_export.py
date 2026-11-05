@@ -3,7 +3,9 @@ from decimal import Decimal
 from io import BytesIO
 import json
 
-from openpyxl import load_workbook
+import xlrd
+import xlwt
+from xlrd.compdoc import CompDoc
 import pytest
 
 from app import create_app
@@ -13,6 +15,7 @@ from models import (KitchenIngredient, KitchenMenuPlan, KitchenMenuPlanItem,
                     KitchenPurchaseOrderItem, KitchenRecipe,
                     KitchenRecipeIngredient, KitchenSchool)
 from services.ftrace import SCHEMAS, ExportError, build_sheets, draft, export_workbook
+from services.ftrace_xls import excel_envelope
 
 DAY = date(2026, 11, 5)
 
@@ -22,6 +25,10 @@ def app(tmp_path):
     app = create_app(dict(TESTING=True, SECRET_KEY="ftrace-test-only",
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{tmp_path / 'ftrace.db'}",
         AUTO_CREATE_DB=True, KITCHEN_CSRF_ENABLED=False, PRODUCTION=False))
+    app.config["FTRACE_PRODUCTS_JSON"] = [
+        dict(name="平鎮高中", code="TEST-P1", customer_code="TEST-C1", grams=600),
+        dict(name="新勢國小", code="TEST-P2", customer_code="TEST-C2"),
+        dict(name="信義國小", code="TEST-P3", customer_code="TEST-C3", grams=600)]
     with app.app_context():
         ingredient = KitchenIngredient(name="高麗菜", base_unit="g", purchase_unit="kg")
         recipe = KitchenRecipe(name="炒高麗菜")
@@ -54,7 +61,7 @@ def payload():
     return {"receipts": [dict(name="高麗菜", include=True, material_code="B001",
         spec_code="B001A025", supplier_code="A025", kg="1.235",
         received_date="2026-11-05")], "meals": [dict(name="測試國小", include=True,
-        product_code="AB005", customer_code="C001", kg="7.2", quantity="12",
+        product_code="TEST-P0", customer_code="TEST-C0", kg="7.2", quantity="12",
         materials=[dict(name="高麗菜", code="B001")])]}
 
 
@@ -91,7 +98,9 @@ def test_small_bentos_merge_into_pingzhen_and_unneeded_schools_are_excluded(app)
         for name, count in (("桃園市平鎮區平鎮高中", 100), ("平鎮高中 (小便當)", 20),
                             ("明原", 10), ("廣豐食品股份有限公司", 10),
                             ("桃園市中壢區國立中央大學附設私立幼兒園", 10),
-                            ("桃園市平鎮區新勢國小附設幼兒園", 10)):
+                            ("桃園市平鎮區新勢國小附設幼兒園", 10),
+                            ("桃園市平鎮區新勢國小", 100),
+                            ("信義幼兒園", 5), ("桃園市中壢區信義國小", 50)):
             school = KitchenSchool(name=name)
             plan = KitchenMenuPlan(service_date=DAY, name=name+"菜單")
             db.session.add_all([school, plan]); db.session.flush()
@@ -102,31 +111,78 @@ def test_small_bentos_merge_into_pingzhen_and_unneeded_schools_are_excluded(app)
         values = draft(DAY)
         pingzhen = next(r for r in values["meals"] if "平鎮" in r["name"])
         assert pingzhen["quantity"] == "120"
-        assert pingzhen["product_code"] == "AA002"
-        assert pingzhen["customer_code"] == "AA002"
+        assert pingzhen["product_code"] == "TEST-P1"
+        assert pingzhen["customer_code"] == "TEST-C1"
         assert pingzhen["kg"] == "72"
         assert len(pingzhen["materials"]) == 1
-        assert len(values["meals"]) == 2  # existing test school + Pingzhen
-        assert len(values["skipped"]) == 4
+        assert len(values["meals"]) == 4  # test school + Pingzhen + 2 primaries
+        assert len(values["skipped"]) == 3
+        xinshi = next(r for r in values["meals"] if "新勢" in r["name"])
+        xinyi = next(r for r in values["meals"] if "信義" in r["name"])
+        assert (xinshi["quantity"], xinshi["product_code"]) == ("110", "TEST-P2")
+        assert (xinyi["quantity"], xinyi["product_code"]) == ("55", "TEST-P3")
+
+
+def test_product_codes_come_from_private_environment_and_invalid_settings_fail_closed(app, monkeypatch):
+    app.config.pop("FTRACE_PRODUCTS_JSON")
+    monkeypatch.setenv("FTRACE_PRODUCTS_JSON", json.dumps([
+        dict(name="測試國小", code="PRIVATE-P", customer_code="PRIVATE-C", grams=600)]))
+    with app.app_context():
+        meal = draft(DAY)["meals"][0]
+        assert (meal["product_code"], meal["customer_code"], meal["kg"]) == ("PRIVATE-P", "PRIVATE-C", "7.2")
+        monkeypatch.setenv("FTRACE_PRODUCTS_JSON", "invalid")
+        meal = draft(DAY)["meals"][0]
+        assert (meal["product_code"], meal["customer_code"], meal["kg"]) == ("", "", "")
 
 
 @pytest.mark.parametrize("kind", SCHEMAS)
 def test_workbook_roundtrip_matches_official_sheets_headers_and_text_cells(kind):
     sheets = build_sheets(kind, DAY, payload())
-    book = load_workbook(export_workbook(kind, sheets), data_only=False)
-    assert book.sheetnames == list(SCHEMAS[kind])
-    for sheet in book:
-        assert list(next(sheet.values)) == SCHEMAS[kind][sheet.title]
-        assert sheet.max_row == len(sheets[sheet.title]) + 1
-        for row in list(sheet)[1:]:
-            for cell in row:
-                if cell.value is not None:
-                    assert cell.data_type == "s"
-                    assert cell.number_format == "@"
-        if sheet.max_row > 1:
-            assert sheet["A2"].value == "2"
-            assert sheet["B2"].value == "2026/11/05"
-            assert sheet["C2"].value == "01"
+    content = export_workbook(kind, sheets).getvalue()
+    assert content[:8] == bytes.fromhex("d0cf11e0a1b11ae1")
+    compound = CompDoc(content)
+    assert compound.get_named_stream("\x01CompObj")
+    assert compound.get_named_stream("\x01Ole")
+    book = xlrd.open_workbook(file_contents=content, formatting_info=True)
+    assert book.sheet_names() == list(SCHEMAS[kind])
+    for sheet in book.sheets():
+        assert sheet.row_values(0) == SCHEMAS[kind][sheet.name]
+        assert sheet.nrows == len(sheets[sheet.name]) + 1
+        for r in range(1, sheet.nrows):
+            for cell in sheet.row(r):
+                if cell.value:
+                    assert cell.ctype == xlrd.XL_CELL_TEXT
+                    xf = book.xf_list[cell.xf_index]
+                    assert book.format_map[xf.format_key].format_str == "@"
+        if sheet.nrows > 1:
+            assert sheet.row_values(1)[:3] == ["2", "2026/11/05", "01"]
+
+
+def test_excel_envelope_repairs_write_access_and_preserves_large_workbook_cells():
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("原料資料")
+    for index in range(1500):
+        sheet.write(index, 0, f"{index:04}-" + "中文原料品名" * 10)
+    raw = BytesIO(); workbook.save(raw)
+    content = excel_envelope(raw.getvalue())
+    before = CompDoc(raw.getvalue()).get_named_stream("Workbook")
+    after = CompDoc(content).get_named_stream("Workbook")
+    import struct
+    offset = 0
+    while True:
+        opcode, size = struct.unpack_from("<HH", before, offset)
+        if opcode == 0x005C:
+            break
+        offset += 4 + size
+    assert size == 112
+    assert before[:offset + 4] == after[:offset + 4]
+    assert before[offset + 4 + size:] == after[offset + 4 + size:]
+    # MS-XLS WriteAccess contains XLUnicodeString, not a bare padded name.
+    assert struct.unpack_from("<HB", after, offset + 4) == (2, 0)
+    assert after[offset + 7:offset + 9] == b"  "
+    read = xlrd.open_workbook(file_contents=content).sheet_by_index(0)
+    assert read.nrows == 1500
+    assert read.cell_value(1499, 0) == "1499-" + "中文原料品名" * 10
 
 
 @pytest.mark.parametrize("field,value", [("kg","NaN"),("kg","Infinity"),
@@ -143,7 +199,7 @@ def test_excluded_receipts_and_duplicate_ingredients():
     data["receipts"].append(dict(name="skip", include=False))
     assert len(build_sheets("receiving", DAY, data)["收貨資料"]) == 1
     data["meals"][0]["materials"] *= 2
-    assert len(build_sheets("manufacture", DAY, data)["製造餐盒原材料"]) == 1
+    assert len(build_sheets("manufacture", DAY, data)["製造餐食原材料"]) == 1
     data["meals"][0]["materials"][0]["code"] = ""
     with pytest.raises(ExportError): build_sheets("manufacture", DAY, data)
 
@@ -158,7 +214,7 @@ def test_routes_render_and_export_without_updating_source_records(app):
             "date":str(DAY), "kind":kind, "payload":json.dumps(payload()), "confirmed":"1"})
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
-        assert load_workbook(BytesIO(response.data)).sheetnames == list(SCHEMAS[kind])
+        assert xlrd.open_workbook(file_contents=response.data).sheet_names() == list(SCHEMAS[kind])
     with app.app_context():
         assert KitchenPurchaseOrderItem.query.one().actual_order_qty == Decimal("1.2345")
         assert KitchenMenuAssignment.query.count() == 2
@@ -172,7 +228,7 @@ def test_export_requires_csrf_with_production_setting(app):
     client = app.test_client()
     response = client.post("/admin/order-tool/ftrace/export", data={
         "date":str(DAY), "kind":"receiving", "payload":json.dumps(payload()), "confirmed":"1"})
-    assert "spreadsheetml" not in response.content_type
+    assert "ms-excel" not in response.content_type
     client.get(f"/admin/order-tool/ftrace?date={DAY}")
     with client.session_transaction() as session:
         token = session["_kitchen_csrf"]

@@ -41,7 +41,7 @@ def ftrace_export():
         return jsonify(error=message), 400
     label = dict(KINDS)[kind]
     response = send_file(stream, as_attachment=True,
-        download_name=f"非追不可_{label}_{day.isoformat()}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        download_name=f"非追不可_{label}_{day.isoformat()}.xls",
+        mimetype="application/vnd.ms-excel")
     response.headers["Cache-Control"] = "no-store"
     return response

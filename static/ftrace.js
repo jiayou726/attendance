@@ -155,13 +155,13 @@
     try {
       const body = new URLSearchParams({date:data.date, kind:settings.kind, payload:JSON.stringify(data), confirmed:'1', _csrf_token:settings.csrf});
       const response = await fetch(settings.url,{method:'POST',body});
-      if (!response.ok || !response.headers.get('Content-Type')?.includes('spreadsheetml')) {
+      if (!response.ok || !response.headers.get('Content-Type')?.includes('application/vnd.ms-excel')) {
         let message = '下載失敗，請重新整理後再試。';
         try {message = (await response.json()).error || message;} catch (_) {}
         throw new Error(message);
       }
       const labels = {receiving:'收貨',manufacture:'製造',delivery:'交貨'};
-      download(await response.blob(),`非追不可_${labels[settings.kind]}_${data.date}.xlsx`); remember(); status('匯入檔已下載，請到非追不可平台匯入。');
+      download(await response.blob(),`非追不可_${labels[settings.kind]}_${data.date}.xls`); remember(); status('匯入檔已下載，請到非追不可平台匯入。');
     } catch (error) {fail(error.message);} finally {button.disabled = false;}
   });
   applyReferences(); render();

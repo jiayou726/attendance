@@ -7,10 +7,11 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+import xlwt
+from flask import current_app
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import selectinload
 
@@ -21,22 +22,49 @@ from models import (KitchenMenuPlan, KitchenMenuAssignment, KitchenMenuPlanItem,
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = json.loads((ROOT / "data/ftrace/schemas.json").read_text())
 KINDS = (("receiving", "收貨"), ("manufacture", "製造"), ("delivery", "交貨"))
-# Read from the user's meal-product pages and transaction export on 2026-11-05.
-# A missing package weight deliberately stays blank; it is never guessed.
-PRODUCTS = (("中平國小", "AB005", 600), ("平鎮高中", "AA002", 600),
-            ("信義國小", "AB008", 600), ("新勢國小", "AB010", None),
-            ("新明國中", "AB011", None))
+
+def configured_products():
+    """Business codes live in private service configuration, never source code."""
+    raw = current_app.config.get("FTRACE_PRODUCTS_JSON",
+                                 os.environ.get("FTRACE_PRODUCTS_JSON", "[]"))
+    try:
+        products = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(products, list):
+            raise ValueError
+        result = {}
+        for product in products:
+            name = product["name"]
+            if not isinstance(name, str) or name in result:
+                raise ValueError
+            if not all(isinstance(product.get(key, ""), str)
+                       for key in ("code", "customer_code")):
+                raise ValueError
+            grams = product.get("grams")
+            if grams is not None and (not Decimal(str(grams)).is_finite()
+                                      or Decimal(str(grams)) <= 0):
+                raise ValueError
+            result[name] = product
+        return result
+    except (ValueError, TypeError, KeyError, InvalidOperation):
+        current_app.logger.warning("Invalid FTRACE_PRODUCTS_JSON; codes require manual confirmation.")
+        return {}
 
 
 def school_group(name):
     """User-confirmed scope: small bentos belong to Pingzhen's meal product."""
     normalized = "".join(name.split())
     if (normalized == "明原" or "廣豐" in normalized
-            or ("中央大學" in normalized and "幼兒園" in normalized)
-            or ("新勢" in normalized and ("附幼" in normalized or "幼兒園" in normalized))):
+            or ("中央大學" in normalized and "幼兒園" in normalized)):
         return None
-    if "平鎮" in normalized or "鎮高" in normalized:
+    if "平鎮高中" in normalized or "鎮高" in normalized:
         return "平鎮高中"
+    if "信義" in normalized:
+        return "信義國小"
+    if "新勢" in normalized:
+        return "新勢國小"
+    for school in ("中平國小", "新明國中"):
+        if school in normalized:
+            return school
     return normalized
 
 
@@ -57,6 +85,7 @@ def _kg(item):
 
 def draft(day):
     from blueprints.order_tool import _menu_item_components
+    products = configured_products()
     receipts = []
     items = (KitchenPurchaseOrderItem.query.join(KitchenPurchaseOrder)
              .filter(KitchenPurchaseOrder.status != "cancelled", or_(
@@ -99,7 +128,8 @@ def draft(day):
                 continue
             key = f"{group}:{plan.meal_type}"
             meal = meals.setdefault(key, dict(key=key, school_key=group,
-                name="平鎮高中（含小便當）" if group == "平鎮高中" else school.name,
+                name=("平鎮高中（含小便當）" if group == "平鎮高中" else
+                      group + "（含幼兒園）" if group in {"新勢國小", "信義國小"} else school.name),
                 meal_type=plan.meal_type, quantity=0, kg="",
                 product_code="", customer_code="", include=True, materials={}, source=[]))
             meal["quantity"] += assignment.headcount
@@ -113,16 +143,14 @@ def draft(day):
         meal["quantity"] = str(meal["quantity"])
         meal["materials"] = list(meal["materials"].values())
         meal["source"] = "、".join(meal["source"])
-        for name, code, grams in PRODUCTS:
-            if name in meal["name"]:
-                meal["product_code"] = code
-                # Verified separately in the downstream-party export; not inferred
-                # from a coincidence between product and customer identifiers.
-                meal["customer_code"] = code
-                if grams:
-                    meal["kg"] = text_number(Decimal(meal["quantity"]) * grams / 1000)
-                    meal["source"] += f"；按平台產品規格 {grams} g／份預填成品重量，請核對實際出餐。"
-                break
+        product = products.get(meal["school_key"])
+        if product:
+            meal["product_code"] = product.get("code", "")
+            meal["customer_code"] = product.get("customer_code", "")
+            grams = product.get("grams")
+            if grams:
+                meal["kg"] = text_number(Decimal(meal["quantity"]) * Decimal(str(grams)) / 1000)
+                meal["source"] += f"；按平台產品規格 {grams} g／份預填成品重量，請核對實際出餐。"
     return dict(date=day.isoformat(), receipts=receipts, meals=list(meals.values()), skipped=sorted(skipped))
 
 
@@ -193,7 +221,7 @@ def build_sheets(kind, day, payload):
                     raise ExportError("原材料格式錯誤。")
                 codes.add(_value(material, "code", "原材料自編碼"))
             sheets["製造資料"].append(key + [kg, qty])
-            sheets["製造餐盒原材料"].extend(key + [c] for c in sorted(codes))
+            sheets["製造餐食原材料"].extend(key + [c] for c in sorted(codes))
         else:
             kg = _number(row, "kg", "交貨總淨重（公斤）", 3)
             qty = _number(row, "quantity", "交貨份數", 2)
@@ -205,26 +233,22 @@ def build_sheets(kind, day, payload):
 
 
 def export_workbook(kind, sheets):
-    workbook = Workbook()
-    workbook.remove(workbook.active)
+    # The live uploader rejects OOXML (.xlsx). Use real BIFF8/OLE .xls,
+    # not a renamed .xlsx, matching the official templates.
+    workbook = xlwt.Workbook(encoding="utf-8")
+    body_style = xlwt.easyxf("align: vert centre, wrap on;", num_format_str="@")
+    header_style = xlwt.easyxf("font: bold on; align: vert centre, wrap on;", num_format_str="@")
     for name, headers in SCHEMAS[kind].items():
-        sheet = workbook.create_sheet(name)
-        sheet.append(headers)
-        for row in sheets[name]:
-            sheet.append(row)
-        for row in sheet:
-            for cell in row:
-                cell.number_format = "@"
-                cell.data_type = "s"  # Codes and dates must remain literal text.
-                cell.alignment = Alignment(vertical="center", wrap_text=True)
-        for cell in sheet[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill("solid", fgColor="244B45")
-        sheet.row_dimensions[1].height = 36
-        for col in sheet.columns:
-            sheet.column_dimensions[col[0].column_letter].width = 24
-        sheet.freeze_panes = "A2"
+        sheet = workbook.add_sheet(name)
+        for r, row in enumerate([headers, *sheets[name]]):
+            for c, value in enumerate(row):
+                sheet.write(r, c, str(value), header_style if r == 0 else body_style)
+        sheet.row(0).height = 720
+        for c in range(len(headers)):
+            sheet.col(c).width = 24 * 256
+        sheet.set_panes_frozen(True)
+        sheet.set_horz_split_pos(1)
     stream = BytesIO()
     workbook.save(stream)
-    stream.seek(0)
-    return stream
+    from services.ftrace_xls import excel_envelope
+    return BytesIO(excel_envelope(stream.getvalue()))

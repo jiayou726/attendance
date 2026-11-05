@@ -9,6 +9,12 @@ from services.ftrace import ROOT, ExportError, _number, _value
 BATCH_SCHEMAS = json.loads((ROOT / 'data/ftrace/batch_schemas.json').read_text())
 
 
+def suggested_batch(code, day):
+    """Existing kitchen convention: material/product code plus ROC receipt/made day."""
+    value = f'{code}{day.year - 1911:03}{day.month:02}{day.day:02}' if code else ''
+    return value if len(value) <= 40 else ''
+
+
 def identifier(row, field, label, required=True):
     value = _value(row, field, label, required)
     if len(value) > 40 or any(ord(c) < 32 for c in value):

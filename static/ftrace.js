@@ -39,6 +39,7 @@
         for (const field of ['include','material_code','spec_code','supplier_code','kg','received_date','product_code','customer_code','quantity','seq','batch','manufactured_date','expiry_date']) {
           if (Object.hasOwn(prior, field)) row[field] = prior[field];
         }
+        if (!Object.hasOwn(prior,'batch')) row.batch = '';
         for (const material of row.materials || []) {
           const previous = prior.materials?.find(m => m.key === material.key);
           material.code = previous?.code || '';
@@ -54,7 +55,7 @@
   data.receipts.forEach((row,i) => { row.seq ||= String(i+1).padStart(2,'0'); });
   data.meals.forEach((row,i) => {
     row.seq ||= String(i+1).padStart(2,'0');
-    row.batch ||= initial.date.replaceAll('-','/');
+    row.batch ||= historicalBatch(row.product_code,initial.date);
     row.manufactured_date ||= initial.date; row.expiry_date ||= initial.date;
   });
   const normalized = value => String(value || '').replace(/[\s　]/g, '');
@@ -145,20 +146,29 @@
     update(); return update;
   }
   function invalidate() { document.getElementById('ftrace-confirm').checked = false; errorBox.hidden = true; status('有尚未暫存的修改。'); }
+  function historicalBatch(code, day) {
+    const match=String(day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!code || !match) return '';
+    const value=`${code}${String(Number(match[1])-1911).padStart(3,'0')}${match[2]}${match[3]}`;
+    return value.length<=40 ? value : '';
+  }
   function action(parent, text, callback) {
     const button = document.createElement('button'); button.type='button'; button.className='btn secondary'; button.textContent=text;
     button.addEventListener('click', callback); parent.append(button); return button;
   }
   function receiptBatchFields(card, fields, row) {
     field(fields,row,'seq','收貨申報流水號');
-    field(fields,row,'batch','原料批號（依包裝或收貨紀錄）');
+    row.batch ||= historicalBatch(row.material_code,row.received_date);
+    const batchInput=field(fields,row,'batch','原料批號（依包裝或收貨紀錄）');
+    const hint=document.createElement('small');hint.className='muted';hint.textContent='內部批號先填原材料碼＋民國收貨日期；有原廠批號或既有批號時請改成原紀錄。';batchInput.parentElement.append(hint);
     field(fields,row,'manufactured_date','原料製造日期（選填）','date');
     field(fields,row,'expiry_date','原料有效日期（選填）','date');
-    action(card,'無廠商批號：以實際收貨日期作內部識別', () => {
-      row.batch=(row.received_date || '').replaceAll('-','/'); render(); invalidate();
+    action(card,'依既有格式重帶：原材料碼＋民國收貨日期', () => {
+      row.batch=historicalBatch(row.material_code,row.received_date); render(); invalidate();
     });
   }
   function mealBatchFields(fields,row) {
+    row.batch ||= historicalBatch(row.product_code,row.manufactured_date);
     field(fields,row,'seq','申報流水號'); field(fields,row,'batch','餐食製造批號');
     field(fields,row,'manufactured_date','餐食製造日期','date');
     field(fields,row,'expiry_date','餐食有效日期','date');
@@ -233,7 +243,10 @@
         field(fields,row,'quantity',settings.kind === 'manufacture' ? '實際製造份數' : '實際交貨份數','number');
         const weightInput = field(fields,row,'kg',settings.kind === 'manufacture' ? '成品總淨重（公斤）' : '交貨總淨重（公斤）','number');
         if (!row.kg) { const reason = document.createElement('small'); reason.className='muted'; reason.textContent='尚未設定每份成品重量，請填實際總公斤數。'; weightInput.parentElement.append(reason); }
-        if (data.batch_mode) mealBatchFields(fields,row);
+        if (data.batch_mode) {
+          mealBatchFields(fields,row);
+          if (settings.kind==='manufacture') action(card,'依既有格式重帶：產品碼＋民國製造日期',()=>{row.batch=historicalBatch(row.product_code,row.manufactured_date);render();invalidate();});
+        }
         if (settings.kind === 'delivery') field(fields,row,'customer_code','下游業者自編碼','text','party-codes');
         else {
           const details = document.createElement('details'); details.open=expanded.has(row.key); const summary = document.createElement('summary'); summary.textContent = `使用原材料（${row.materials.length} 項，請核對編碼）`; details.append(summary);
@@ -280,7 +293,7 @@
   document.getElementById('reset-draft').addEventListener('click', () => {
     const mode = data.batch_mode; data = structuredClone(initial); data.batch_mode = mode;
     data.receipts.forEach((r,i) => r.seq=String(i+1).padStart(2,'0'));
-    data.meals.forEach((r,i) => {r.seq=String(i+1).padStart(2,'0');r.batch=initial.date.replaceAll('-','/');r.manufactured_date=initial.date;r.expiry_date=initial.date;});
+    data.meals.forEach((r,i) => {r.seq=String(i+1).padStart(2,'0');r.batch=historicalBatch(r.product_code,initial.date);r.manufactured_date=initial.date;r.expiry_date=initial.date;});
     batchToggle.addEventListener('change', () => {data.batch_mode=batchToggle.checked; render(); invalidate();});
   applyReferences(); render(); invalidate();
     try {localStorage.removeItem(key);} catch (_) {}

@@ -250,6 +250,9 @@
     }
     document.getElementById('ftrace-download').disabled = rows.length === 0;
     lists();
+    const uploadHelp = document.getElementById('ftrace-upload-help');
+    const job = {receiving:'收貨資料(餐食製造業)',manufacture:'餐食業製造資料',delivery:data.batch_mode ? '交貨資料' : '交貨資料(餐食製造業)'}[settings.kind];
+    uploadHelp.textContent = `下載後，到非追不可對應頁的「資料匯入」，作業名稱選「${job}」，使用下載的 XLS 檔。${data.batch_mode ? '請先收貨，再製造，最後交貨，確認批次已存在。' : ''}平台只新增，請先查是否已申報，避免重複。`;
   }
   function remember() {
     for (const row of data.receipts) {

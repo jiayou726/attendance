@@ -16,7 +16,7 @@
   <div class="ftrace-actions"><button id="save-draft" class="btn secondary" type="button">暫存本次修改</button><button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button><span id="draft-status" role="status"></span></div>
   <label class="ftrace-confirm"><input type="checkbox" id="ftrace-confirm">我已核對所選項目的實際數量、日期與平台編碼。</label>
   <button id="ftrace-download" class="btn" type="button">下載{{ dict(kinds)[kind] }}資料匯入檔</button>
-  <p class="muted">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
+  <p class="muted" id="ftrace-upload-help">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
 </section>
 <datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist>
 <style>

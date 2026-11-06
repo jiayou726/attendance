@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateIndex, CreateTable, ForeignKeyConstraint
 
 import ai_models  # noqa: F401 - register additive kitchen models
+import ftrace_models  # noqa: F401 - register isolated ftrace records
 from extensions import db
 
 
@@ -31,6 +32,8 @@ OPERATIONAL_TABLES = (
     "kitchen_menu_assignment", "kitchen_purchase_order",
     "kitchen_purchase_order_item", "kitchen_menu_draft",
     "kitchen_menu_draft_item",
+    "kitchen_ftrace_document", "kitchen_ftrace_revision",
+    "kitchen_ftrace_import", "kitchen_ftrace_receipt",
 )
 _CONTROL_SCHEMA = "practice_control"
 _CONTROL_TABLE = "account"
@@ -519,6 +522,10 @@ def _ensure_workspace_estimate_columns(account: dict) -> None:
     with bind.begin() as connection:
         if is_postgres:
             _upgrade_postgres_master_views(connection, engine, key)
+        if is_postgres:
+            _clone_operational_tables(connection, key, tuple(t.name for t in ftrace_models.TABLES))
+        else:
+            db.metadata.create_all(connection, tables=list(ftrace_models.TABLES))
         # Old practice tables do not automatically receive newly added
         # columns from public; missing ones cause UndefinedColumn on SELECT.
         upgrades = {

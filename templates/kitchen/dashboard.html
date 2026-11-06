@@ -17,7 +17,7 @@
 <a class="home-action production" href="{{ url_for('order_tool.production_sheet',date=production_nav_date.isoformat()) }}"><span class="home-icon">量</span><span><b>菜色用量表</b><small>選完菜後先看每道菜要用多少食材，再去採購叫貨。</small></span><i>›</i></a>
 <a class="home-action daily-kitchen" href="{{ url_for('order_tool.daily_kitchen_sheet',date=production_nav_date.isoformat()) }}"><span class="home-icon">廚</span><span><b>每日廚房表格</b><small>先在網頁補上食材括號備註，再匯出合菜、便當與小便當表。</small></span><i>›</i></a>
 <a class="home-action ai-menu" href="{{ url_for('order_tool.ai_menu') }}"><span class="home-icon">排</span><span><b>AI 菜單</b><small>依供餐對象、營養、重複與魚類／炸物規則自動排菜，可換菜與鎖定。</small></span><i>›</i></a>
-{% if not session.get('kitchen_practice') %}<a class="home-action supplier" href="{{ url_for('order_tool.ftrace', date=production_nav_date.isoformat()) }}"><span class="home-icon">追</span><span><b>非追不可匯入檔</b><small>選日期，依序核對收貨、製造、交貨，再下載匯入檔。</small></span><i>›</i></a>{% endif %}
+{% if not session.get('kitchen_practice') %}<a class="home-action supplier" href="{{ url_for('order_tool.ftrace', date=production_nav_date.isoformat()) }}"><span class="home-icon">追</span><span><b>非追不可申報／資料區</b><small>匯入歷史收貨、共用儲存收貨／製造／交貨，再下載平台匯入檔。</small></span><i>›</i></a>{% endif %}
 </div></section>
 <style>
 .purchase-week-panel{border:1px solid #e1e6eb;border-radius:14px;margin-top:14px;overflow:hidden}

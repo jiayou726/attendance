@@ -22,7 +22,7 @@
   }
   function prefill(lots, choices) {
     // Never replace a manual link, a split across batches, or guess between choices.
-    if (lots.length !== 1 || choices.length !== 1 || identity.some(k => lots[0][k])) return false;
+    if (lots.length !== 1 || choices.length !== 1 || choices[0].ready === false || identity.some(k => lots[0][k])) return false;
     Object.assign(lots[0], choices[0], {kg: lots[0].kg});
     return true;
   }

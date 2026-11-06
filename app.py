@@ -115,6 +115,8 @@ def _ensure_kitchen_schema_compatibility(app: Flask):
 
         # AI 菜單只增加營養欄位與自己的草稿表；全部 checkfirst / 欄位存在檢查。
         ai_models.ensure_schema(db.engine)
+        from ftrace_models import ensure_schema as ensure_ftrace_schema
+        ensure_ftrace_schema(db.engine)
 
         # Historical supplier prices already live in production.  Apply the
         # conservative, idempotent unit conversion after each deploy so a
@@ -288,4 +290,4 @@ if __name__ == "__main__":
     app = create_app()
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1" and not app.config.get("PRODUCTION", False)
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host=os.environ.get("APP_HOST", "0.0.0.0"), port=port, debug=debug)

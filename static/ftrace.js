@@ -19,9 +19,28 @@
     refs = {...savedRefs, ...Object.fromEntries(['materials','products','parties'].map(k => [k, systemRefs[k].length ? systemRefs[k] : savedRefs[k]]))};
   }
   refs.mappings ||= {};
-  const saved = readSaved(key);
+  let cloudVersion = settings.cloud?.version || 0;
+  let sharedReceipts = settings.receipts || [];
+  let sharedManufacture = settings.manufacture?.payload || null;
+  const saved = settings.cloud?.payload || readSaved(key);
+  function manufactureDraft() { return sharedManufacture || readSaved(`ftrace:v1:${scope}:${initial.date}:manufacture`); }
+  async function refreshReceipts() {
+    const response=await fetch(`${settings.receipts_url}?date=${encodeURIComponent(data.date)}`);
+    if(!response.ok) throw new Error('無法讀取共用收貨資料，請稍後再試。');
+    sharedReceipts=(await response.json()).receipts;
+  }
+  async function saveShared(state='draft') {
+    remember();
+    const body=new URLSearchParams({date:data.date,kind:settings.kind,payload:JSON.stringify(data),version:String(cloudVersion),status:state,_csrf_token:settings.csrf});
+    const response=await fetch(settings.shared_url,{method:'POST',body});
+    const result=await response.json();
+    if(!response.ok) throw new Error(result.error || '共用儲存失敗；修改仍保留在此瀏覽器，請稍後重試。');
+    cloudVersion=result.version;
+    status(`已儲存到共用資料區，版本 ${cloudVersion}；尚不代表平台已申報。`);
+    return result;
+  }
   if (!saved && settings.kind === 'delivery') {
-    const manufacture = readSaved(`ftrace:v1:${scope}:${initial.date}:manufacture`);
+    const manufacture = manufactureDraft();
     if (manufacture?.date === initial.date && Array.isArray(manufacture.meals)) {
       for (const row of data.meals) {
         const made = manufacture.meals.find(m => m.key === row.key);
@@ -47,7 +66,7 @@
         }
       }
     }
-    status('已還原本次暫存；來源新增或移除的項目以目前系統為準，請重新核對數量。');
+    status(settings.cloud?.payload ? `已載入共用資料版本 ${cloudVersion}；修改後請儲存。` : '已還原瀏覽器暫存；請儲存到共用資料區，才能跨電腦使用。');
   }
   data.batch_mode = saved?.batch_mode !== false;
   const batchToggle = document.getElementById('batch-mode');
@@ -174,8 +193,14 @@
     field(fields,row,'expiry_date','餐食有效日期','date');
   }
   function receiptCatalog(materialCode) {
-    try { return FtraceLots.catalog(localStorage,scope,data.date,materialCode); }
-    catch (_) { return []; }
+    let local=[];
+    try { local=FtraceLots.catalog(localStorage,scope,data.date,materialCode); } catch (_) {}
+    const found=new Map();
+    for(const lot of [...sharedReceipts.filter(r=>r.material_code===materialCode && r.report_date<=data.date),...local]) {
+      const id=JSON.stringify(FtraceLots.identity.map(k=>lot[k] || ''));
+      if(!found.has(id)) found.set(id,lot);
+    }
+    return [...found.values()];
   }
   function materialLots(parent,meal,material) {
     const note=document.createElement('p'); note.className='muted';
@@ -183,18 +208,18 @@
     const catalog=receiptCatalog(material.code);
     FtraceLots.prefill(material.lots,catalog);
     const availability = !material.code ? '請先選擇原材料自編碼。' : !catalog.length ?
-      '找不到此原料的完整收貨暫存；請先到收貨頁核對並暫存，或填入平台實際收貨紀錄。' :
-      catalog.length === 1 ? '只有一筆完整收貨暫存，空白批次已自動帶入；請確認實際使用這批。' :
-      `找到 ${catalog.length} 筆收貨暫存，請選實際使用的批次，不會自動猜最新一筆。`;
-    note.textContent=`${availability} 配方估算使用 ${material.estimated_kg || '待補'} 公斤，請依實際領料修改。暫存不代表平台已申報，也未扣庫存。`;
+      '找不到此原料收貨紀錄；請先儲存收貨，或到共用資料區匯入歷史 XLS。' :
+      catalog.length === 1 ? (catalog[0].ready===false ? '這筆歷史收貨尚待核對，請先到共用資料區補齊，不能猜填日期或批號。' : '只有一筆完整收貨紀錄，空白批次已自動帶入；請確認實際使用這批。') :
+      `找到 ${catalog.length} 筆收貨紀錄，請選實際使用的批次，不會自動猜最新一筆。`;
+    note.textContent=`${availability} 配方估算使用 ${material.estimated_kg || '待補'} 公斤，請依實際領料修改。共用草稿不代表平台已申報，也未扣庫存。`;
     parent.append(note);
-    action(parent,'重新讀取收貨暫存',()=>{render();invalidate();});
+    action(parent,'重新讀取共用收貨紀錄',async()=>{try{await refreshReceipts();render();invalidate();}catch(error){fail(error.message);}});
     for (const [index,lot] of material.lots.entries()) {
       const box=document.createElement('div'); box.className='ftrace-lot'; parent.append(box);
       const heading=document.createElement('strong'); heading.textContent=`${material.name}：原料批次 ${index+1}`; box.append(heading);
       const select=document.createElement('select'); select.setAttribute('aria-label',`${meal.name} ${material.name} 選擇收貨批次 ${index+1}`);
-      const empty=document.createElement('option'); empty.value=''; empty.textContent='選已暫存收貨批次，或在下方手填平台既有資料'; select.append(empty);
-      catalog.forEach((r,i) => {const o=document.createElement('option');o.value=String(i);o.textContent=`${r.report_date}／流水號 ${r.seq}／${r.spec_code}／批號 ${r.batch}／收貨 ${r.receipt_kg} 公斤`;select.append(o);});
+      const empty=document.createElement('option'); empty.value=''; empty.textContent='選共用收貨紀錄，或在下方手填平台既有資料'; select.append(empty);
+      catalog.forEach((r,i) => {const o=document.createElement('option');o.value=String(i);o.textContent=`${r.report_date}／流水號 ${r.seq}／${r.spec_code}／批號 ${r.batch}／收貨 ${r.receipt_kg} 公斤／${r.origin || '瀏覽器暫存'}${r.ready===false ? '（待核對）' : ''}`;select.append(o);});
       const selected=catalog.findIndex(r=>FtraceLots.identity.every(k=>(r[k] || '')===(lot[k] || '')));
       if(selected>=0) select.value=String(selected);
       select.addEventListener('change', () => {if(select.value!==''){Object.assign(lot,catalog[Number(select.value)],{kg:lot.kg});render();invalidate();}});
@@ -280,16 +305,50 @@
     try { localStorage.setItem(key, JSON.stringify(data)); localStorage.setItem(referenceKey, JSON.stringify(refs)); status('已暫存到這個瀏覽器。'); return true; }
     catch (_) { fail('瀏覽器無法暫存；仍可直接下載，離開前請先完成匯出。'); return false; }
   }
-  if (settings.kind === 'delivery') action(document.querySelector('.ftrace-actions'),'帶入已暫存製造的批號與數量', () => {
-    const made=readSaved(`ftrace:v1:${scope}:${data.date}:manufacture`);
-    if (!made?.batch_mode) {fail('請先在製造頁核對批號與數量並暫存。');return;}
+  if (settings.kind === 'delivery') action(document.querySelector('.ftrace-actions'),'帶入共用製造的批號與數量', async () => {
+    try {
+      const response=await fetch(`${settings.shared_url}?date=${encodeURIComponent(data.date)}&kind=manufacture`);
+      if(!response.ok) throw new Error('無法讀取共用製造紀錄。');
+      sharedManufacture=(await response.json()).payload;
+    } catch(error) {fail(error.message);return;}
+    const made=manufactureDraft();
+    if (!made?.batch_mode) {fail('請先在製造頁核對批號與數量並儲存到共用資料區。');return;}
     for (const row of data.meals) {
       const source=made.meals?.find(m=>m.key===row.key);
       if(source) for(const field of ['product_code','batch','manufactured_date','expiry_date','kg','quantity']) row[field]=source[field] ?? row[field];
     }
     render();invalidate();
   });
-  document.getElementById('save-draft').addEventListener('click', remember);
+  document.getElementById('save-draft').addEventListener('click', async()=>{
+    try{await saveShared();}catch(error){fail(error.message);}
+  });
+  document.getElementById('restore-browser-draft').addEventListener('click',()=>{
+    const backup=readSaved(key);
+    if(!backup || backup.date!==initial.date || !Array.isArray(backup.receipts) || !Array.isArray(backup.meals)) {
+      fail('這個瀏覽器沒有本日、本類型的備份。');return;
+    }
+    data=structuredClone(backup);batchToggle.checked=data.batch_mode!==false;render();invalidate();
+    status('已載入本機備份，尚未覆蓋共用紀錄；請核對後再儲存。');
+  });
+  document.getElementById('migrate-drafts').addEventListener('click',async()=>{
+    let imported=0,skipped=0;
+    try {
+      for(let i=0;i<localStorage.length;i++) {
+        const name=localStorage.key(i);
+        if(!name?.startsWith(`ftrace:v1:${scope}:`)) continue;
+        const parts=name.split(':');const kind=parts.at(-1);const draft=readSaved(name);
+        if(!['receiving','manufacture','delivery'].includes(kind) || !draft?.date) continue;
+        const body=new URLSearchParams({date:draft.date,kind,payload:JSON.stringify(draft),version:'0',_csrf_token:settings.csrf});
+        const response=await fetch(settings.shared_url,{method:'POST',body});
+        if(response.status===409){skipped++;continue;}
+        const result=await response.json();
+        if(!response.ok) throw new Error(result.error || '移入失敗。');
+        imported++;
+        if(draft.date===data.date && kind===settings.kind) cloudVersion=result.version;
+      }
+      await refreshReceipts();render();status(`已移入 ${imported} 份舊暫存；${skipped} 份已有共用紀錄，保留共用版本未覆蓋。`);
+    }catch(error){fail(`已移入 ${imported} 份。${error.message}`);}
+  });
   document.getElementById('reset-draft').addEventListener('click', () => {
     const mode = data.batch_mode; data = structuredClone(initial); data.batch_mode = mode;
     data.receipts.forEach((r,i) => r.seq=String(i+1).padStart(2,'0'));
@@ -318,7 +377,7 @@
     const button = document.getElementById('ftrace-download'); button.disabled = true; errorBox.hidden = true;
     try {
       if (data.batch_mode && settings.kind === 'delivery') {
-        const made=readSaved(`ftrace:v1:${scope}:${data.date}:manufacture`);
+        const made=manufactureDraft();
         for (const row of data.meals.filter(r=>r.include)) {
           const source=made?.batch_mode && made.meals?.find(m=>m.key===row.key && m.include);
           if(source && ['product_code','batch','manufactured_date','expiry_date'].some(k=>row[k]!==source[k])) throw new Error(`${row.name}：交貨批號／日期與已暫存製造不同，請先帶入製造批號。`);
@@ -333,7 +392,8 @@
         throw new Error(message);
       }
       const labels = {receiving:'收貨',manufacture:'製造',delivery:'交貨'};
-      download(await response.blob(),`非追不可_${labels[settings.kind]}_${data.batch_mode ? '依批號_' : ''}${data.date}.xls`); remember(); status('匯入檔已下載，請到非追不可平台匯入。');
+      const file=await response.blob();await saveShared('exported');
+      download(file,`非追不可_${labels[settings.kind]}_${data.batch_mode ? '依批號_' : ''}${data.date}.xls`);status('已儲存共用紀錄並下載匯入檔；請到平台匯入成功後，在共用資料區標記申報完成。');
     } catch (error) {fail(error.message);} finally {button.disabled = false;}
   });
   batchToggle.addEventListener('change', () => {data.batch_mode=batchToggle.checked; render(); invalidate();});

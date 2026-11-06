@@ -42,3 +42,6 @@ test('never chooses between batches, overwrites manual identity, or fills split 
   }
   assert.equal(prefill([{kg:'1'},{kg:'1'}],[choice]),false);
 });
+test('pending imported receipts are never automatically linked',()=>{
+  assert.equal(prefill([{kg:'2'}],[{report_date:'2026-10-05',seq:'0',spec_code:'TEST-SPEC',received_date:'2026-10-05',ready:false}]),false);
+});

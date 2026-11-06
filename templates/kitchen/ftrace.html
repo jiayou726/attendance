@@ -27,5 +27,6 @@
 <script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token()}|tojson }}</script>
-<script src="{{ url_for('static', filename='ftrace.js', v=6) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace-lots.js', v=1) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=7) }}" defer></script>
 {% endblock %}

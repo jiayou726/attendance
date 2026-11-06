@@ -174,33 +174,29 @@
     field(fields,row,'expiry_date','餐食有效日期','date');
   }
   function receiptCatalog(materialCode) {
-    const found = new Map();
-    for (let i=0;i<localStorage.length;i++) {
-      const name=localStorage.key(i);
-      if (!name.startsWith(`ftrace:v1:${scope}:`) || !name.endsWith(':receiving')) continue;
-      const saved=readSaved(name);
-      if (!saved?.batch_mode || !saved.date || saved.date>data.date) continue;
-      for (const r of saved.receipts || []) {
-        if (!r.include || !r.batch || r.material_code!==materialCode) continue;
-        const lot={report_date:saved.date,seq:r.seq || '',spec_code:r.spec_code || '',batch:r.batch,
-          received_date:'',kg:'',receipt_kg:r.kg || '',name:r.name || ''};
-        found.set(JSON.stringify([saved.date,lot.seq,lot.spec_code,lot.batch]),lot);
-      }
-    }
-    return [...found.values()];
+    try { return FtraceLots.catalog(localStorage,scope,data.date,materialCode); }
+    catch (_) { return []; }
   }
   function materialLots(parent,meal,material) {
     const note=document.createElement('p'); note.className='muted';
-    note.textContent=`配方估算使用 ${material.estimated_kg || '待補'} 公斤，請依實際領料修改。可選已暫存收貨，或手填平台既有批次；暫存不代表平台已申報。`;
-    parent.append(note);
     material.lots ||= [{report_date:'',seq:'',spec_code:'',batch:'',received_date:'',kg:material.estimated_kg || ''}];
+    const catalog=receiptCatalog(material.code);
+    FtraceLots.prefill(material.lots,catalog);
+    const availability = !material.code ? '請先選擇原材料自編碼。' : !catalog.length ?
+      '找不到此原料的完整收貨暫存；請先到收貨頁核對並暫存，或填入平台實際收貨紀錄。' :
+      catalog.length === 1 ? '只有一筆完整收貨暫存，空白批次已自動帶入；請確認實際使用這批。' :
+      `找到 ${catalog.length} 筆收貨暫存，請選實際使用的批次，不會自動猜最新一筆。`;
+    note.textContent=`${availability} 配方估算使用 ${material.estimated_kg || '待補'} 公斤，請依實際領料修改。暫存不代表平台已申報，也未扣庫存。`;
+    parent.append(note);
+    action(parent,'重新讀取收貨暫存',()=>{render();invalidate();});
     for (const [index,lot] of material.lots.entries()) {
       const box=document.createElement('div'); box.className='ftrace-lot'; parent.append(box);
       const heading=document.createElement('strong'); heading.textContent=`${material.name}：原料批次 ${index+1}`; box.append(heading);
       const select=document.createElement('select'); select.setAttribute('aria-label',`${meal.name} ${material.name} 選擇收貨批次 ${index+1}`);
       const empty=document.createElement('option'); empty.value=''; empty.textContent='選已暫存收貨批次，或在下方手填平台既有資料'; select.append(empty);
-      const catalog=receiptCatalog(material.code);
       catalog.forEach((r,i) => {const o=document.createElement('option');o.value=String(i);o.textContent=`${r.report_date}／流水號 ${r.seq}／${r.spec_code}／批號 ${r.batch}／收貨 ${r.receipt_kg} 公斤`;select.append(o);});
+      const selected=catalog.findIndex(r=>FtraceLots.identity.every(k=>(r[k] || '')===(lot[k] || '')));
+      if(selected>=0) select.value=String(selected);
       select.addEventListener('change', () => {if(select.value!==''){Object.assign(lot,catalog[Number(select.value)],{kg:lot.kg});render();invalidate();}});
       box.append(select);
       const form=document.createElement('div'); form.className='ftrace-fields'; box.append(form);
@@ -208,7 +204,7 @@
       const edit={...lot,name:label};
       for (const [key,title,type] of [
         ['report_date','收貨申報年月／日期（YYYY-MM 或 YYYY-MM-DD）','text'],
-        ['seq','收貨申報流水號（同平台）','text'],['spec_code','收貨原料規格碼','text'],
+        ['seq','收貨申報流水號（同平台）','text'],['spec_code','收貨原材料廠商自編碼','text'],
         ['batch','收貨批號（新制）','text'],['received_date','收貨日期（僅舊制無批號時填）','date'],
         ['kg','實際使用淨重（公斤）','number']]) {
         const input=field(form,edit,key,title,type); input.addEventListener('input',()=>{lot[key]=input.value;});
@@ -253,7 +249,11 @@
           const materials = document.createElement('div'); materials.className = 'ftrace-materials';
           for (const material of row.materials) {
             const materialCard = document.createElement('section'); materials.append(materialCard);
-            field(materialCard,material,'code',material.name,'text','material-codes');
+            const originalCode=material.code;
+            const codeInput=field(materialCard,material,'code',material.name,'text','material-codes');
+            codeInput.addEventListener('change',()=>{
+              if(material.code!==originalCode) {delete material.lots;render();invalidate();}
+            });
             if (data.batch_mode) materialLots(materialCard,row,material);
           }
           details.append(materials); card.append(details);

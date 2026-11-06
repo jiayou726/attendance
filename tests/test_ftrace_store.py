@@ -183,6 +183,21 @@ def test_pending_source_cannot_be_forged_by_editing_the_manufacturing_payload(ap
     client.post('/admin/order-tool/ftrace/records',data={'file':(BytesIO(workbook()),'receipt.xls')})
     with app.app_context():
         source=FtraceReceipt.query.one()
-        payload=dict(batch_mode=True,meals=[dict(include=True,materials=[dict(name='測試原料',code='TEST-RAW',lots=[dict(storage_id=source.id,received_date='2026-10-05')])])])
+        payload=dict(date='2026-10-06',batch_mode=True,meals=[dict(include=True,materials=[dict(name='測試原料',code='TEST-RAW',lots=[dict(storage_id=source.id,received_date='2026-10-05')])])])
+        with pytest.raises(ExportError,match='尚待核對'):
+            validate_stored_links(payload,'manufacture')
+
+
+def test_conflicting_cross_file_capacity_is_blocked_even_if_first_source_is_complete(app):
+    from services.ftrace_store import import_receipts, validate_stored_links
+    from services.ftrace import ExportError
+    from extensions import db
+    with app.app_context():
+        import_receipts(workbook(batch=True),'one.xls')
+        first=FtraceReceipt.query.one();lot=json.loads(first.payload_json)
+        changed=dict(lot,receipt_kg='999')
+        db.session.add(FtraceReceipt(import_id=first.import_id,source_row=99,report_date=first.report_date,material_code=first.material_code,name=first.name,payload_json=json.dumps(changed)))
+        db.session.commit()
+        payload=dict(date='2026-10-06',batch_mode=True,meals=[dict(include=True,materials=[dict(name='測試原料',code='TEST-RAW',lots=[dict(lot,storage_id=first.id)])])])
         with pytest.raises(ExportError,match='尚待核對'):
             validate_stored_links(payload,'manufacture')

@@ -523,7 +523,9 @@ def _ensure_workspace_estimate_columns(account: dict) -> None:
         if is_postgres:
             _upgrade_postgres_master_views(connection, engine, key)
         if is_postgres:
-            _clone_operational_tables(connection, key, tuple(t.name for t in ftrace_models.TABLES))
+            missing=tuple(t.name for t in ftrace_models.TABLES if not inspect(connection).has_table(t.name,schema=key))
+            if missing:
+                _clone_operational_tables(connection, key, missing)
         else:
             db.metadata.create_all(connection, tables=list(ftrace_models.TABLES))
         # Old practice tables do not automatically receive newly added

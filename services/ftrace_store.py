@@ -150,6 +150,16 @@ def receipt_catalog(day):
 def validate_stored_links(payload,kind):
     if kind!='manufacture' or not payload.get('batch_mode'):
         return
+    if not any(lot.get('storage_id') for meal in payload.get('meals',[]) for material in meal.get('materials',[]) for lot in material.get('lots',[])):
+        return
+    try:
+        day=date.fromisoformat(payload.get('date',''))
+    except ValueError:
+        raise ExportError('歷史收貨連結缺少製造申報日期。') from None
+    available={}
+    for candidate in receipt_catalog(day):
+        for source_id in candidate.get('source_ids',[]):
+            available[source_id]=candidate
     for meal in payload.get('meals',[]):
         if not meal.get('include'):
             continue
@@ -161,7 +171,7 @@ def validate_stored_links(payload,kind):
                 if not record or record.disabled:
                     raise ExportError('使用的歷史收貨紀錄不存在或已停用，請重新選取。')
                 source=json.loads(record.payload_json)
-                if source.get('issues'):
+                if source.get('issues') or not available.get(record.id,{}).get('ready'):
                     raise ExportError(f'{material.get("name", "原料")}：歷史收貨尚待核對，請先到共用資料區補齊。')
                 if source['material_code']!=material.get('code') or any(str(source.get(k,'') or '')!=str(lot.get(k,'') or '') for k in ('report_date','seq','spec_code','batch','received_date')):
                     raise ExportError('使用的歷史收貨欄位已變更，請重新選取批次。')

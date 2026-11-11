@@ -227,16 +227,29 @@ def test_daily_manufacturing_uses_matching_menu_material_and_saved_same_day_rece
     assert response.status_code==200
     assert 'ms-excel' in response.content_type
 
-    lot['report_date']='2026-11-04'
+    # A genuine older saved receipt must be selectable manually.
+    prior_day=date(2026,11,4)
+    historic=empty_payload(day=prior_day)
+    historic['receipts']=[dict(include=True,material_code='B001',
+        name='高麗菜舊批次',spec_code='B001A025',seq='91',
+        batch='OLDER-LOT',received_date=prior_day.isoformat(),kg='1.235')]
+    assert save(client,historic).status_code==200
+    lot['report_date']=prior_day.isoformat()
+    lot['batch']='OLDER-LOT'
+    response=export()
+    assert response.status_code==200
+
+    # But receipts after the manufacturing day are invalid.
+    lot['report_date']='2026-11-06'
     response=export()
     assert response.status_code==400
-    assert '當日收貨批次' in response.get_json()['error']
+    assert '不可晚於' in response.get_json()['error']
 
     lot['report_date']=DAY.isoformat()
     lot['batch']='NONEXISTENT'
     response=export()
     assert response.status_code==400
-    assert '不在當日可選用' in response.get_json()['error']
+    assert '不在製造日前的可用' in response.get_json()['error']
 
 
 def test_duplicate_shared_and_imported_identity_with_different_weight_not_auto_usable(app):

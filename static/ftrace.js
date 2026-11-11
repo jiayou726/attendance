@@ -180,14 +180,14 @@
     updateIssues();
     status('有尚未暫存的修改。');
   }
-  function fieldTarget(issue) {
+  function fieldTarget(issue, expand = false) {
     if (!issue.rowKey) return null;
     const row = [...editor.querySelectorAll('.ftrace-row')].find(el => el.dataset.rowKey === issue.rowKey);
     if (!row) return null;
     let container = row;
     if (issue.materialIndex !== null) {
       const details = row.querySelector('details');
-      if (details) details.open = true;
+      if (details && expand) details.open = true;
       container = [...row.querySelectorAll('.ftrace-material')].find(el => el.dataset.materialIndex === String(issue.materialIndex));
       if (!container) return row;
       if (issue.lotIndex !== null) {
@@ -198,7 +198,7 @@
     return [...container.querySelectorAll('input[data-ftrace-field]')].find(el => el.dataset.ftraceField === issue.field) || container;
   }
   function jumpToIssue(issue) {
-    const target = fieldTarget(issue);
+    const target = fieldTarget(issue, true);
     if (!target) {
       issuesPanel.scrollIntoView({behavior:'smooth',block:'start'});
       return;

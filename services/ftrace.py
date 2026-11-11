@@ -148,7 +148,7 @@ def draft(day):
                     if is_weight and estimated_kg > 0 else
                     "當日菜單列有此原料；未設定重量或使用個數單位，請填實際收貨公斤數"),
             material_code="", spec_code="", supplier_code="",
-            kg=text_number(estimated_kg) if is_weight and estimated_kg > 0 else "",
+            kg=text_number(estimated_kg, 7) if is_weight and estimated_kg > 0 else "",
             received_date=day.isoformat(),
         ))
     from services.ftrace_references import apply_reference_defaults, reference_data

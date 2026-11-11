@@ -3,7 +3,7 @@ import json
 from datetime import date
 from types import SimpleNamespace
 
-from services.ftrace_registry import receipt_registry, meal_registry
+from services.ftrace_registry import receipt_registry, meal_registry, receipt_dashboard
 from tests.test_ftrace_export import app
 
 
@@ -109,3 +109,45 @@ def test_registry_page_groups_tabs_and_imports_without_mutating_data(app):
         else:
             assert "交貨" in html
     assert client.get("/admin/order-tool/ftrace/records?kind=receiving&q=UNKNOWN").status_code==200
+
+
+def test_receipt_dashboard_shows_real_ready_candidates_not_total_count():
+    ready=imported(id=1)
+    missing=imported(id=2)
+    missing_lot=json.loads(missing.payload_json)
+    missing_lot["batch"]=""
+    missing_lot["received_date"]=""
+    missing.payload_json=json.dumps(missing_lot)
+    rows=receipt_registry([ready,missing],[])
+    candidates=[{"report_date":"2026-10-05","seq":"01","material_code":"R01",
+                 "spec_code":"S01","batch":"LOT-1","received_date":"","ready":True}]
+    totals=receipt_dashboard(rows,candidates,date(2026,10,6))
+    assert totals["total"]==2
+    assert totals["ready"]==1
+    assert totals["review"]==1
+    assert {r["use_state"] for r in rows}=={"ready","review"}
+
+
+def test_receipt_dashboard_preserves_conflict_and_respects_manufacture_date():
+    rows=receipt_registry([imported(kg="20")],[document(kg="25")])
+    candidates=[{"report_date":"2026-10-05","seq":"01","material_code":"R01",
+                 "spec_code":"S01","batch":"LOT-1","received_date":"","ready":True}]
+    totals=receipt_dashboard(rows,candidates,date(2026,10,6))
+    assert totals["ready"]==0 and totals["review"]==1
+
+    rows=receipt_registry([imported()],[])
+    totals=receipt_dashboard(rows,candidates,date(2026,10,4))
+    assert totals["ready"]==0 and totals["other"]==1
+    assert rows[0]["use_label"]=="晚於指定製造日期"
+
+
+def test_registry_summary_is_clickable_and_date_scoped(app):
+    client=app.test_client()
+    response=client.get("/admin/order-tool/ftrace/records?kind=receiving&view=ready&manufacture_date=2026-10-06")
+    assert response.status_code==200
+    html=response.get_data(as_text=True)
+    assert "收貨紀錄總數" in html
+    assert "製造頁可選用" in html
+    assert "需要核對" in html
+    assert "歷史 XLS 匯入來源列" not in html
+    assert "製造日期" in html

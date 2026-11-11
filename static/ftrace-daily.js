@@ -91,57 +91,35 @@
     for (const {material} of group.items) material.code=code;
     return true;
   }
-  function applyDishExclusions(meals, excluded, initialMeals) {
-    // One-manufacturing-document override, never writes to receiving or menus.
-    const skip=new Set(excluded || []);
-    const originals=new Map((initialMeals || []).map(meal=>[meal.key,meal]));
-    let resetLots=0;
+  function setGroupIncluded(meals, group, included) {
+    // One manufacturing document only. Do not modify receiving or menu rows.
+    const keys = new Set(group.items.map(({material})=>clean(material.key)));
+    const names = new Set(group.items.map(({material})=>clean(material.name)));
+    let affected = 0;
     for (const meal of meals || []) {
-      const base=originals.get(meal.key);
-      if (!base || !Array.isArray(base.dishes)) continue;
-      const computed=new Map();
-      for (const dish of base.dishes) {
-        if (skip.has(dish.key)) continue;
-        for (const source of dish.materials || []) {
-          const key=clean(source.key);
-          if (!computed.has(key)) computed.set(key,{
-            key,name:source.name || '', value:0
-          });
-          computed.get(key).value+=grams(source.estimated_kg);
+      if (!meal || (!meal.include && !meal._material_excluded_all)) continue;
+      for (const material of meal.materials || []) {
+        if ((clean(material.key) && keys.has(clean(material.key))) ||
+            (!clean(material.key) && names.has(clean(material.name)))) {
+          if ((material.include !== false) !== included) affected++;
+          material.include = included;
         }
       }
-      const previous=new Map((meal.materials || []).map(material=>[clean(material.key),material]));
-      const defaults=new Map((base.materials || []).map(material=>[clean(material.key),material]));
-      const updated=[];
-      for (const [key, amount] of computed) {
-        const old=previous.get(key);
-        const template=defaults.get(key);
-        const material={...(old || template || {key,name:amount.name,code:''})};
-        const nextWeight=kg(amount.value);
-        if (old && clean(old.estimated_kg)!==nextWeight && Array.isArray(old.lots)) {
-          // Usage changed: previously selected lots no longer prove the new
-          // required quantity. Re-auto-link unique daily lot; otherwise review.
-          delete material.lots;
-          resetLots++;
-        }
-        material.estimated_kg=nextWeight;
-        updated.push(material);
-      }
-      meal.materials=updated;
-      if (!updated.length && meal.include) {
-        meal.include=false;
-        meal._dish_excluded_all=true;
-      } else if (updated.length && meal._dish_excluded_all) {
-        meal.include=true;
-        delete meal._dish_excluded_all;
+      const active=(meal.materials || []).some(material=>material.include!==false);
+      if (!active && meal.include) {
+        meal.include = false;
+        meal._material_excluded_all = true;
+      } else if (active && meal._material_excluded_all) {
+        meal.include = true;
+        delete meal._material_excluded_all;
       }
     }
-    return resetLots;
+    return affected;
   }
   function groupMeals(meals) {
     const groups = new Map();
     for (const meal of meals || []) {
-      if (!meal || !meal.include) continue;
+      if (!meal || (!meal.include && !meal._material_excluded_all)) continue;
       for (const material of meal.materials || []) {
         const code = clean(material.code);
         const key = clean(material.key) ? 'ingredient:' + clean(material.key) :
@@ -151,6 +129,7 @@
         }
         const group = groups.get(key);
         group.items.push({meal, material});
+        if (material.include === false) continue;
         const amount=Number(material.estimated_kg);
         if (Number.isFinite(amount) && amount > 0) group.need += grams(amount);
       }
@@ -205,6 +184,11 @@
     const groups = groupMeals(meals);
     for (const group of groups) {
       group.needKg = kg(group.need);
+      if (group.items.every(({material})=>material.include===false)) {
+        group.state='excluded';
+        group.candidates=[];group.todayCandidates=[];group.capacity=0;
+        continue;
+      }
       group.candidates = group.code ? candidatesFor(receipts, day, group.code, true) : [];
       group.todayCandidates = group.candidates.filter(candidate=>clean(candidate.report_date)===day);
       group.capacity = group.candidates.reduce((sum, candidate) => sum + grams(candidate.receipt_kg), 0);
@@ -246,7 +230,7 @@
     }
     return count;
   }
-  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,applyDishExclusions,groupMeals,keyOf};
+  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,setGroupIncluded,groupMeals,keyOf};
   if (typeof module !== 'undefined' && module.exports) module.exports=api;
   else root.FtraceDaily=api;
 })(typeof window !== 'undefined' ? window : {});

@@ -175,7 +175,6 @@
     update(); return update;
   }
   function invalidate() {
-    document.getElementById('ftrace-confirm').checked = false;
     errorBox.hidden = true;
     updateIssues();
     status('有尚未暫存的修改。');
@@ -473,7 +472,6 @@
       issuesPanel.scrollIntoView({behavior:'smooth',block:'start'});
       return;
     }
-    if (!document.getElementById('ftrace-confirm').checked) {fail('請先核對實際數量並勾選確認。'); return;}
     const button = document.getElementById('ftrace-download'); button.disabled = true; errorBox.hidden = true;
     try {
       if (data.batch_mode && settings.kind === 'delivery') {
@@ -484,7 +482,7 @@
           if(source && (Number(row.kg)>Number(source.kg) || Number(row.quantity)>Number(source.quantity))) throw new Error(`${row.name}：交貨數量或重量大於已暫存製造，請核對。`);
         }
       }
-      const body = new URLSearchParams({date:data.date, kind:settings.kind, payload:JSON.stringify(data), confirmed:'1', _csrf_token:settings.csrf});
+      const body = new URLSearchParams({date:data.date, kind:settings.kind, payload:JSON.stringify(data), _csrf_token:settings.csrf});
       const response = await fetch(settings.url,{method:'POST',body});
       if (!response.ok || !response.headers.get('Content-Type')?.includes('application/vnd.ms-excel')) {
         let message = '下載失敗，請重新整理後再試。';

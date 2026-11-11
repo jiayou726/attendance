@@ -452,7 +452,9 @@
         const warning=document.createElement('span');warning.className='ftrace-daily-warning';
         warning.textContent='同原料分成多批，單批不足：請在餐食明細核對實際拆批';
         actions.append(warning);
-        splitLots();continue;
+        splitLots();
+        addReceivingMatcher(group,actions,index,false);
+        continue;
       }
       const select=document.createElement('select');
       select.setAttribute('aria-label',group.name+' 選擇當日收貨批次');

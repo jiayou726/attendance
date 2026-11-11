@@ -77,7 +77,10 @@
     status(settings.cloud?.payload ? `已載入共用資料版本 ${cloudVersion}；修改後請儲存。` : '已還原瀏覽器暫存；請儲存到共用資料區，才能跨電腦使用。');
   }
   data.batch_mode = saved?.batch_mode !== false;
-  if (settings.kind === 'manufacture') data.daily_receiving_only = true;
+  if (settings.kind === 'manufacture') {
+    data.daily_receiving_only = true; // Existing flag: validate against saved receipts, including earlier days.
+    data.excluded_dishes = Array.isArray(saved?.excluded_dishes) ? [...saved.excluded_dishes] : [];
+  }
   const batchToggle = document.getElementById('batch-mode');
   batchToggle.checked = data.batch_mode;
   data.receipts.forEach((row,i) => { row.seq ||= String(i+1).padStart(2,'0'); });
@@ -318,7 +321,7 @@
   }
   function receiptCatalog(materialCode) {
     if (settings.kind === 'manufacture' && data.daily_receiving_only) {
-      return sharedReceipts.filter(r => r.material_code === materialCode && r.report_date === data.date);
+      return sharedReceipts.filter(r => r.material_code === materialCode && r.report_date <= data.date);
     }
     let local=[];
     try { local=FtraceLots.catalog(localStorage,scope,data.date,materialCode); } catch (_) {}
@@ -336,36 +339,36 @@
     const list = document.getElementById('ftrace-daily-list');
     stats.replaceChildren(); list.replaceChildren();
     const groups = FtraceDaily.inspect(data.meals,sharedReceipts,data.date);
-    const todayChoices = FtraceDaily.receiptChoices(sharedReceipts,data.date);
+    const choicesBeforeDay = FtraceDaily.receiptChoices(sharedReceipts,data.date);
     function addReceivingMatcher(group, actions, index, expanded=false) {
       const container=document.createElement('details');
       container.className='ftrace-daily-matcher';
       container.open=expanded;
       const header=document.createElement('summary');
-      header.textContent='選擇當日收貨原料（名稱不同也可）';
+      header.textContent='搜尋收貨批次（含以前日期）';
       container.append(header);
       const hint=document.createElement('small');
-      hint.textContent='依收貨時填的名稱、編碼與批號搜尋。選一次就套用到所有學校，不會修改收貨資料。';
+      hint.textContent='優先自動帶入當日收貨；也可依品名、日期、編碼或批號選以前的收貨，選一次套用所有學校。';
       container.append(hint);
-      if (!todayChoices.length) {
+      if (!choicesBeforeDay.length) {
         const notice=document.createElement('p');
         notice.className='ftrace-daily-warning';
-        notice.textContent='今天尚無資料完整的收貨批次；請先確認收貨已儲存、批號及重量。';
+        notice.textContent='製造日以前沒有完整的收貨批次；請先確認收貨已儲存、批號及重量。';
         container.append(notice);
         actions.append(container);return;
       }
       const label=document.createElement('label');
-      label.textContent='搜尋／選擇實際收貨的原料';
+      label.textContent='搜尋原料名稱、批號、編碼或收貨日期';
       const input=document.createElement('input');
       input.type='search';
-      input.setAttribute('aria-label',group.name+' 對應今日收貨');
+      input.setAttribute('aria-label',group.name+' 選擇以前或當日的收貨批次');
       input.setAttribute('list','ftrace-daily-options-'+index);
       input.placeholder='輸入收貨名稱或原材料編碼';
       const datalist=document.createElement('datalist');
       datalist.id='ftrace-daily-options-'+index;
       const choices=new Map();
-      todayChoices.forEach((receipt,i)=>{
-        const display=(receipt.name||'未命名收貨')+'｜'+receipt.material_code+
+      choicesBeforeDay.forEach((receipt,i)=>{
+        const display=receipt.report_date+'｜'+(receipt.name||'未命名收貨')+'｜'+receipt.material_code+
           '｜'+(receipt.batch || receipt.received_date)+'｜流水號'+receipt.seq+
           '｜'+receipt.receipt_kg+'kg｜'+(i+1);
         const option=document.createElement('option');option.value=display;
@@ -376,13 +379,13 @@
       const apply=action(container,'確認對應，套用全部學校',()=>{
         const receipt=choices.get(input.value.trim());
         if (!receipt) {
-          fail('請從今日收貨建議清單選擇原料，不能只輸入未儲存的名稱。');return;
+          fail('請從已儲存的收貨建議清單選擇原料，不能只輸入未儲存的名稱。');return;
         }
         if (!FtraceDaily.matchReceiving(group,receipt,sharedReceipts,data.date)) {
-          fail(group.name+'：所選收貨批次合計不足菜單需求，或配方未設定重量；請核對後再套用。');return;
+          fail(group.name+'：所選日期的收貨批次不足菜單需求，或配方未設定重量；請核對後再套用。');return;
         }
         render();invalidate();remember();
-        status(group.name+' 已對應到今日收貨「'+receipt.name+'」（'+receipt.material_code+'），同步套用 '+group.items.length+' 筆餐食；請核對後儲存或匯出。');
+        status(group.name+' 已對應 '+receipt.report_date+' 收貨「'+receipt.name+'」（'+receipt.material_code+'），同步套用 '+group.items.length+' 筆餐食；請核對後儲存或匯出。');
       });
       actions.append(container);
     }
@@ -391,8 +394,8 @@
       el.textContent=message;stats.append(el);
     }
     metric('菜單原料 '+groups.length+' 種');
-    metric('已對應 '+groups.filter(g=>g.state==='linked').length+' 種','good');
-    metric('需確認 '+groups.filter(g=>g.state!=='linked').length+' 種','bad');
+    metric('已對應 '+groups.filter(g=>['linked','linked-past'].includes(g.state)).length+' 種','good');
+    metric('需確認 '+groups.filter(g=>!['linked','linked-past'].includes(g.state)).length+' 種','bad');
     if (!data.batch_mode) {
       const warning=document.createElement('p');warning.className='ftrace-daily-warning';
       warning.textContent='目前是非批號申報，無法串接當日收貨批次。';
@@ -412,16 +415,22 @@
       extra.textContent=group.code+'｜菜單估計 '+group.needKg+' 公斤｜'+group.items.length+' 筆餐食';
       info.append(extra);
       const actions=document.createElement('div');actions.className='ftrace-daily-choice';line.append(actions);
-      if (group.state==='linked') {
+      if (group.state==='linked' || group.state==='linked-past') {
         const passed=document.createElement('span');passed.className='ftrace-daily-good';
-        passed.textContent='已對上當日收貨';actions.append(passed);
+        passed.textContent=group.state==='linked'?'已對上當日收貨':'已選用以前日期收貨';actions.append(passed);
         addReceivingMatcher(group,actions,index,false);
         continue;
       }
       if (group.state==='no-code' || group.state==='missing') {
         const missing=document.createElement('span');missing.className='ftrace-daily-warning';
-        missing.textContent=group.state==='no-code'?'尚未取得原料編碼，請從今日收貨選擇對應原料':'目前編碼對不上當日收貨，可依收貨名稱搜尋配對';
+        missing.textContent=group.state==='no-code'?'尚未取得原料編碼，請從收貨紀錄選擇對應原料':'目前編碼找不到收貨批次，可搜尋不同品名或之前日期';
         actions.append(missing);
+        addReceivingMatcher(group,actions,index,true);
+        continue;
+      }
+      if (group.state==='manual') {
+        const hint=document.createElement('span');hint.className='ftrace-daily-warning';
+        hint.textContent='無法自動對應當日收貨，請手動選擇以前的批次';actions.append(hint);
         addReceivingMatcher(group,actions,index,true);
         continue;
       }
@@ -431,7 +440,7 @@
       }
       if (group.state==='insufficient') {
         const missing=document.createElement('span');missing.className='ftrace-daily-warning';
-        missing.textContent='當日收貨 '+(group.capacity/1e7).toFixed(3)+' 公斤，少於菜單預估用量';
+        missing.textContent='當日可自動對應的批次不足菜單需求，請手動確認其他收貨批次';
         actions.append(missing);
         addReceivingMatcher(group,actions,index,false);
         continue;
@@ -447,7 +456,7 @@
         });
         button.title='只改製造草稿，不修改收貨重量或收貨紀錄';
       };
-      const valid=group.candidates.filter(candidate=>Math.round(Number(candidate.receipt_kg)*1e7)>=group.need);
+      const valid=group.todayCandidates.filter(candidate=>Math.round(Number(candidate.receipt_kg)*1e7)>=group.need);
       if (!valid.length) {
         const warning=document.createElement('span');warning.className='ftrace-daily-warning';
         warning.textContent='同原料分成多批，單批不足：請在餐食明細核對實際拆批';
@@ -475,7 +484,7 @@
         render();invalidate();
         status(group.name+'：已將今日收貨批次帶入 '+group.items.length+' 筆餐食；請核對實際領料。');
       });
-      if (group.candidates.length>1) splitLots();
+      if (group.todayCandidates.length>1) splitLots();
       addReceivingMatcher(group,actions,index,false);
     }
     const refresh=document.getElementById('ftrace-daily-refresh');
@@ -498,7 +507,7 @@
     const catalog=receiptCatalog(material.code);
     if (!data.daily_receiving_only) FtraceLots.prefill(material.lots,catalog);
     const availability = !material.code ? '請先選擇原材料自編碼。' : !catalog.length ?
-      (data.daily_receiving_only ? '今天沒有對應的收貨批次，請先完成當日收貨。' : '找不到此原料收貨紀錄；請先儲存收貨，或到共用資料區匯入歷史 XLS。') :
+      (data.daily_receiving_only ? '目前沒有這項原料可核對的收貨批次，可在上方搜尋其它名稱。' : '找不到此原料收貨紀錄；請先儲存收貨，或到共用資料區匯入歷史 XLS。') :
       catalog.length === 1 ? (catalog[0].ready===false ? '這筆歷史收貨尚待核對，請先到共用資料區補齊，不能猜填日期或批號。' : '只有一筆完整收貨紀錄，空白批次已自動帶入；請確認實際使用這批。') :
       `找到 ${catalog.length} 筆收貨紀錄，請選實際使用的批次，不會自動猜最新一筆。`;
     note.textContent=`${availability} 配方估算使用 ${material.estimated_kg || '待補'} 公斤，請依實際領料修改。共用草稿不代表平台已申報，也未扣庫存。`;

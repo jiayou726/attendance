@@ -24,3 +24,15 @@ def test_download_saves_shared_record_before_starting_file_download():
     assert "if (settings.kind === 'receiving' && !window.confirm(" in script
     assert "目前畫面上尚未儲存的修改會被取代" in script
     assert "本頁未儲存的修改與本日瀏覽器備份將被捨棄" in script
+
+
+def test_no_redundant_manual_acknowledgement_on_export():
+    template = (ROOT / "templates/kitchen/ftrace.html").read_text()
+    script = (ROOT / "static/ftrace.js").read_text()
+    endpoint = (ROOT / "blueprints/ftrace_export.py").read_text()
+    assert 'id="ftrace-confirm"' not in template
+    assert "getElementById('ftrace-confirm')" not in script
+    assert "confirmed:'1'" not in script
+    # Keep the separate acknowledgement for marking a document as platform-submitted.
+    assert "if request.form.get('confirmed')!='1':" in endpoint
+    assert 'if request.form.get("confirmed") != "1":' not in endpoint

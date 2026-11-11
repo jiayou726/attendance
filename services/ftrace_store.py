@@ -161,41 +161,41 @@ def receipt_catalog(day):
 
 
 def validate_daily_manufacture(day, payload):
-    """Prevent wrong-day/unknown lots in opt-in same-day menu manufacturing."""
+    """Allow known receipts on/before manufacturing day, never a future lot."""
     if not (payload.get('daily_receiving_only') and payload.get('batch_mode')):
         return
     from decimal import Decimal, InvalidOperation
     catalog={}
     for lot in receipt_catalog(day):
-        if lot.get('report_date')!=day.isoformat() or lot.get('ready') is not True:
+        if not lot.get('report_date') or lot.get('report_date')>day.isoformat() or lot.get('ready') is not True:
             continue
         key=(str(lot.get('material_code') or ''),) + tuple(str(lot.get(field) or '') for field in
               ('report_date','seq','spec_code','batch','received_date'))
         catalog[key]=lot
     if not catalog:
-        raise ExportError('本日尚無可使用的收貨批次，請先完成當日收貨。')
+        raise ExportError('製造日前尚無可使用的收貨批次，請先完成收貨或匯入歷史紀錄。')
     for meal in payload.get('meals',[]):
         if not meal.get('include'):
             continue
         for material in meal.get('materials',[]):
             code=str(material.get('code') or '')
             if not material.get('lots'):
-                raise ExportError(f'{material.get("name","原料")}：尚未對應當日收貨批次。')
+                raise ExportError(f'{material.get("name","原料")}：尚未對應已儲存的收貨批次。')
             for lot in material['lots']:
-                if lot.get('report_date')!=day.isoformat():
-                    raise ExportError(f'{material.get("name","原料")}：製造只能對應 {day.isoformat()} 當日收貨批次。')
+                if not lot.get('report_date') or lot.get('report_date')>day.isoformat():
+                    raise ExportError(f'{material.get("name","原料")}：收貨申報日期不可晚於 {day.isoformat()} 製造日期。')
                 key=(code,) + tuple(str(lot.get(field) or '') for field in
                     ('report_date','seq','spec_code','batch','received_date'))
                 source=catalog.get(key)
                 if not source:
-                    raise ExportError(f'{material.get("name","原料")}：批號不在當日可選用收貨紀錄中，請重新對應。')
+                    raise ExportError(f'{material.get("name","原料")}：批號不在製造日前的可用收貨紀錄中，請重新對應。')
                 try:
                     actual=Decimal(str(source.get('receipt_kg') or '0'))
                     used=Decimal(str(lot.get('kg') or '0'))
                 except (InvalidOperation, ValueError):
                     raise ExportError('原料收貨／製造重量無效。') from None
                 if actual<=0 or used<=0 or used>actual:
-                    raise ExportError(f'{material.get("name","原料")}：使用重量超過當日收貨或數量無效。')
+                    raise ExportError(f'{material.get("name","原料")}：使用重量超過該批次收貨量或數量無效。')
                 # Always use the saved source amount to protect the cross-school
                 # capacity check in build_batch_sheets from altered browser data.
                 lot['receipt_kg']=str(source['receipt_kg'])

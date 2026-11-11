@@ -9,10 +9,11 @@
   const kg = v => (v / 1e7).toFixed(7).replace(/0+$/, '').replace(/\.$/, '');
   const keyOf = row => identity.map(k => clean(row[k])).join('|');
 
-  function candidatesFor(receipts, day, code) {
+  function candidatesFor(receipts, day, code, includePast = false) {
     const matches = new Map();
     for (const receipt of receipts || []) {
-      if (clean(receipt.material_code) !== code || clean(receipt.report_date) !== day) continue;
+      if (clean(receipt.material_code) !== code || !clean(receipt.report_date) ||
+          (includePast ? clean(receipt.report_date)>day : clean(receipt.report_date)!==day)) continue;
       const id = keyOf(receipt);
       const amount = Number(receipt.receipt_kg);
       if (receipt.ready !== true || !clean(receipt.spec_code) ||
@@ -30,20 +31,21 @@
     // Search by the receipt's actual declared name and code, not the menu name.
     const byCode = new Map();
     for (const receipt of receipts || []) {
-      if (clean(receipt.report_date)!==day || !clean(receipt.material_code)) continue;
+      if (!clean(receipt.report_date) || clean(receipt.report_date)>day || !clean(receipt.material_code)) continue;
       const code=clean(receipt.material_code);
       if (!byCode.has(code)) byCode.set(code,[]);
       byCode.get(code).push(receipt);
     }
     const choices=[];
     for (const [code, rows] of byCode) {
-      const ready=candidatesFor(rows,day,code);
+      const ready=candidatesFor(rows,day,code,true);
       for (const receipt of ready) {
         choices.push(receipt);
       }
     }
-    return choices.sort((a,b)=>(clean(a.name)+clean(a.material_code)+keyOf(a)).localeCompare(
-      clean(b.name)+clean(b.material_code)+keyOf(b), 'zh-Hant'));
+    return choices.sort((a,b)=>clean(b.report_date).localeCompare(clean(a.report_date)) ||
+      (clean(a.name)+clean(a.material_code)+keyOf(a)).localeCompare(
+        clean(b.name)+clean(b.material_code)+keyOf(b), 'zh-Hant'));
   }
   function inheritReceiptCodes(meals, receipts, day) {
     // Both menu and saved receiving rows retain the same internal ingredient
@@ -73,21 +75,68 @@
   }
   function matchReceiving(group, receipt, receipts, day) {
     // Explicit user action: rename/code mismatch can be resolved once for all
-    // meals, but only against a real valid same-day receipt.
+    // meals, against any valid saved receipt on/before manufacturing day.
     if (!group.items.length || !(group.need>0) ||
         !receiptChoices(receipts,day).includes(receipt)) return false;
     const code=clean(receipt.material_code);
-    const candidates=candidatesFor(receipts,day,code);
+    const candidates=candidatesFor(receipts,clean(receipt.report_date),code);
     const capacity=candidates.reduce((sum,item)=>sum+grams(item.receipt_kg),0);
     if (capacity<group.need || group.items.some(({material})=>
       !(grams(material.estimated_kg)>0))) return false;
     const proposed={...group,code,candidates,capacity};
     const assigned=grams(receipt.receipt_kg)>=group.need
-      ? assign(proposed,receipt,day,true)
+      ? assign(proposed,receipt,clean(receipt.report_date),true)
       : distribute(proposed,day);
     if (!assigned) return false;
     for (const {material} of group.items) material.code=code;
     return true;
+  }
+  function applyDishExclusions(meals, excluded, initialMeals) {
+    // One-manufacturing-document override, never writes to receiving or menus.
+    const skip=new Set(excluded || []);
+    const originals=new Map((initialMeals || []).map(meal=>[meal.key,meal]));
+    let resetLots=0;
+    for (const meal of meals || []) {
+      const base=originals.get(meal.key);
+      if (!base || !Array.isArray(base.dishes)) continue;
+      const computed=new Map();
+      for (const dish of base.dishes) {
+        if (skip.has(dish.key)) continue;
+        for (const source of dish.materials || []) {
+          const key=clean(source.key);
+          if (!computed.has(key)) computed.set(key,{
+            key,name:source.name || '', value:0
+          });
+          computed.get(key).value+=grams(source.estimated_kg);
+        }
+      }
+      const previous=new Map((meal.materials || []).map(material=>[clean(material.key),material]));
+      const defaults=new Map((base.materials || []).map(material=>[clean(material.key),material]));
+      const updated=[];
+      for (const [key, amount] of computed) {
+        const old=previous.get(key);
+        const template=defaults.get(key);
+        const material={...(old || template || {key,name:amount.name,code:''})};
+        const nextWeight=kg(amount.value);
+        if (old && clean(old.estimated_kg)!==nextWeight && Array.isArray(old.lots)) {
+          // Usage changed: previously selected lots no longer prove the new
+          // required quantity. Re-auto-link unique daily lot; otherwise review.
+          delete material.lots;
+          resetLots++;
+        }
+        material.estimated_kg=nextWeight;
+        updated.push(material);
+      }
+      meal.materials=updated;
+      if (!updated.length && meal.include) {
+        meal.include=false;
+        meal._dish_excluded_all=true;
+      } else if (updated.length && meal._dish_excluded_all) {
+        meal.include=true;
+        delete meal._dish_excluded_all;
+      }
+    }
+    return resetLots;
   }
   function groupMeals(meals) {
     const groups = new Map();
@@ -111,7 +160,7 @@
   function linked(item, candidate, day) {
     const lots = item.material.lots;
     return Array.isArray(lots) && lots.length === 1 &&
-      clean(lots[0].report_date) === day && keyOf(lots[0]) === keyOf(candidate) &&
+      clean(lots[0].report_date) <= day && keyOf(lots[0]) === keyOf(candidate) &&
       Number(lots[0].kg) > 0;
   }
   function fullyLinked(group,day) {
@@ -119,7 +168,7 @@
     for (const {material} of group.items) {
       if (!Array.isArray(material.lots) || !material.lots.length) return false;
       for (const lot of material.lots) {
-        if (clean(lot.report_date)!==day) return false;
+        if (!clean(lot.report_date) || clean(lot.report_date)>day) return false;
         const key=keyOf(lot);
         const used=grams(lot.kg);
         if (!remaining.has(key) || !(used>0) || used>remaining.get(key)) return false;
@@ -156,22 +205,24 @@
     const groups = groupMeals(meals);
     for (const group of groups) {
       group.needKg = kg(group.need);
-      group.candidates = group.code ? candidatesFor(receipts, day, group.code) : [];
+      group.candidates = group.code ? candidatesFor(receipts, day, group.code, true) : [];
+      group.todayCandidates = group.candidates.filter(candidate=>clean(candidate.report_date)===day);
       group.capacity = group.candidates.reduce((sum, candidate) => sum + grams(candidate.receipt_kg), 0);
       if (!group.code) group.state='no-code';
       else if (!group.candidates.length) group.state='missing';
       else if (group.need <= 0) group.state='no-usage';
-      else if (group.capacity < group.need) group.state='insufficient';
       else if (fullyLinked(group,day))
-        group.state='linked';
-      else if (group.candidates.length === 1 && grams(group.candidates[0].receipt_kg) >= group.need)
+        group.state=group.items.some(({material})=>material.lots.some(lot=>clean(lot.report_date)!==day)) ? 'linked-past' : 'linked';
+      else if (!group.todayCandidates.length) group.state='manual';
+      else if (group.todayCandidates.reduce((sum,r)=>sum+grams(r.receipt_kg),0) < group.need) group.state='insufficient';
+      else if (group.todayCandidates.length === 1 && grams(group.todayCandidates[0].receipt_kg) >= group.need)
         group.state='auto';
       else group.state='multiple';
     }
     return groups;
   }
   function assign(group, candidate, day, overwrite = false) {
-    if (clean(candidate.report_date) !== day || candidate.ready !== true ||
+    if (!clean(candidate.report_date) || clean(candidate.report_date)>day || candidate.ready !== true ||
         clean(candidate.material_code) !== group.code ||
         grams(candidate.receipt_kg) < group.need || !(group.need > 0)) return false;
     if (!overwrite && group.items.some(({material}) =>
@@ -191,11 +242,11 @@
   function autoApply(meals, receipts, day) {
     let count=0;
     for (const group of inspect(meals,receipts,day)) {
-      if (group.state==='auto' && assign(group,group.candidates[0],day)) count++;
+      if (group.state==='auto' && assign(group,group.todayCandidates[0],day)) count++;
     }
     return count;
   }
-  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,groupMeals,keyOf};
+  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,applyDishExclusions,groupMeals,keyOf};
   if (typeof module !== 'undefined' && module.exports) module.exports=api;
   else root.FtraceDaily=api;
 })(typeof window !== 'undefined' ? window : {});

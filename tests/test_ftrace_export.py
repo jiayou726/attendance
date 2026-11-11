@@ -441,3 +441,17 @@ def test_shared_party_registry_preserves_private_aliases_and_role_scoping(app, m
         data["meals"][0]["customer_code"] = "已人工確認的客戶碼"
         refs.apply_reference_defaults(data, references)
         assert data["meals"][0]["customer_code"] == "已人工確認的客戶碼"
+
+
+def test_manufacturing_receives_individual_dishes_without_removing_receiving_menu_data(app):
+    with app.app_context():
+        from extensions import db
+        original = draft(DAY)
+        assert len(original['receipts']) == 1
+        assert original['receipts'][0]['kg'] == '0.96'
+        meal = original['meals'][0]
+        assert 'dishes' in meal and len(meal['dishes']) == 2
+        assert all(dish['key'] and dish['name'] and dish['materials'] for dish in meal['dishes'])
+        assert sorted(dish['materials'][0]['estimated_kg'] for dish in meal['dishes']) == ['0.16','0.8']
+        assert meal['materials'][0]['estimated_kg'] == '0.96'
+        assert not db.session.new and not db.session.dirty and not db.session.deleted

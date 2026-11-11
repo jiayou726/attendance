@@ -143,8 +143,8 @@
           } else if (made && (report.length === 7 ? report + '-01' : report) > made) {
             add(row, 'report_date', '不能使用製造日期之後申報收貨的原料', materialIndex, lotIndex);
           }
-          if (data.daily_receiving_only && report && report !== data.date) {
-            add(row, 'report_date', '只對應當日收貨：請選擇 '+data.date+' 的收貨批次', materialIndex, lotIndex);
+          if (data.daily_receiving_only && report && report > data.date) {
+            add(row, 'report_date', '收貨日期不可晚於製造日期 '+data.date+'；可選當日或以前的收貨', materialIndex, lotIndex);
           }
           checkCode(row, lot, 'seq', '收貨流水號', materialIndex, lotIndex, false);
           const spec = checkCode(row, lot, 'spec_code', '收貨原材料廠商自編碼', materialIndex, lotIndex);

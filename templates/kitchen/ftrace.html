@@ -13,12 +13,40 @@
   <p class="muted">系統先帶入已對照的原料、規格與供應商編碼，可直接編輯。無法唯一對應的欄位請補選，再核對實際數量。</p>
   <details><summary>平台編碼對照（可補充或備份）</summary><p class="muted">系統已設定的對照會自動載入，不需每個瀏覽器重新匯入。也可載入自己的對照 JSON；手動修改與草稿會記住在這個瀏覽器，不會修改菜單、採購或平台紀錄。</p><label class="btn secondary">載入編碼對照<input id="ftrace-reference" type="file" accept=".json,application/json"></label><button class="btn secondary" id="ftrace-save-reference" type="button">備份編碼對照</button><p id="reference-status" role="status"></p></details>
   <p class="notice">{% if kind == 'receiving' %}來源：當日有供餐的學校菜單、各校供餐人數與菜色配方（含當日專用配方）；依食材彙總預估公斤數，不依賴採購單的送達日期或已叫貨狀態。這是預估量而非實收量，請逐項核對實際收貨日期、重量、供應商及批號；個數類或未設定用量者請填實際重量。當日收貨清單只列出當日菜單原料；既有歷史收貨可在共用資料區及各版本紀錄查詢，不會混進當日新申報。{% else %}來源：當日有供餐的各校菜單與人數，葷素合併、不同餐別分開。成品重量請依實際出餐核對；原料投入重量不會直接當作成品重量。{% endif %}</p>
-  <label class="ftrace-confirm"><input type="checkbox" id="batch-mode" checked>依批號申報（收貨、製造、交貨串接）</label><p class="muted">內部批號沿用「原材料／產品自編碼＋民國日期」預填，可修改；原料有原廠批號或已申報批號時，請以原紀錄為準。餐食製造日、有效日先帶供餐日期，請核對實際日期；製造請選用已申報的收貨批次。按「儲存到共用資料區」可跨電腦接續編輯與選取收貨；瀏覽器暫存保留作備份。儲存不代表平台已申報，也尚未扣庫存。</p><div id="ftrace-editor"></div>
+  <label class="ftrace-confirm"><input type="checkbox" id="batch-mode" checked>依批號申報（收貨、製造、交貨串接）</label><p class="muted">內部批號沿用「原材料／產品自編碼＋民國日期」預填，可修改；原料有原廠批號或已申報批號時，請以原紀錄為準。餐食製造日、有效日先帶供餐日期，請核對實際日期；製造請選用已申報的收貨批次。{% if kind == "receiving" %}按下方「自動儲存並下載收貨 XLS」，會先儲存到共用資料區再下載；只想存檔、不下載才按「只儲存，暫不下載」。{% else %}按「儲存到共用資料區」可跨電腦接續編輯與選取收貨。{% endif %}瀏覽器暫存保留作備份。儲存不代表平台已申報，也尚未扣庫存。</p><div id="ftrace-editor"></div>
   {% if kind != 'receiving' %}<p class="muted">小便當併入平鎮高中；新勢幼、信義幼併入各自國小。{% if data.skipped %}依設定不列入：{{ data.skipped|join('、') }}。{% endif %}</p>{% endif %}
   <div id="ftrace-error" class="notice" role="alert" hidden></div>
-  <div class="ftrace-actions"><button id="save-draft" class="btn secondary" type="button">儲存到共用資料區</button><button id="restore-browser-draft" class="btn secondary" type="button">載入本機備份</button><button id="migrate-drafts" class="btn secondary" type="button">移入此瀏覽器的舊暫存</button><button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button><span id="draft-status" role="status"></span></div>
+  {% if kind == 'receiving' %}
+  <div class="ftrace-save-help">
+    <strong>下載時會自動儲存，不必再按一次儲存。</strong>
+    <p>只想先保存、稍後再下載，才需要按「只儲存，暫不下載」。資料會存到共用資料區，可跨裝置繼續編輯。</p>
+  </div>
+  {% endif %}
+  <div class="ftrace-actions">
+    <button id="save-draft" class="btn secondary" type="button">{{ '只儲存，暫不下載' if kind == 'receiving' else '儲存到共用資料區' }}</button>
+    <span id="draft-status" role="status" aria-live="polite"></span>
+  </div>
+  {% if kind == 'receiving' %}
+  <details class="ftrace-advanced-actions">
+    <summary>進階操作：找回備份／重新帶入資料</summary>
+    <p class="muted">這些不是正常下載的必要步驟。只有需要找回舊資料，或重新建立目前的表單時才使用。</p>
+    <div class="ftrace-actions">
+      <button id="restore-browser-draft" class="btn secondary" type="button">找回這台電腦的暫存</button>
+      <button id="migrate-drafts" class="btn secondary" type="button">將舊暫存搬入共用資料</button>
+      <button id="reset-draft" class="btn danger" type="button">放棄本頁修改，重新帶入</button>
+    </div>
+    <p class="muted">「找回」不會立即覆蓋共用資料；「搬入」會跳過已存在的共用文件；「重新帶入」會捨棄本頁尚未儲存的修改及本日的瀏覽器備份，不會直接刪除共用文件。</p>
+  </details>
+  {% else %}
+  <div class="ftrace-actions">
+    <button id="restore-browser-draft" class="btn secondary" type="button">載入本機備份</button>
+    <button id="migrate-drafts" class="btn secondary" type="button">移入此瀏覽器的舊暫存</button>
+    <button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button>
+  </div>
+  {% endif %}
   <label class="ftrace-confirm"><input type="checkbox" id="ftrace-confirm">我已核對所選項目的實際數量、日期與平台編碼。</label>
-  <button id="ftrace-download" class="btn" type="button">下載{{ dict(kinds)[kind] }}資料匯入檔</button>
+  <button id="ftrace-download" class="btn" type="button">{{ '自動儲存並下載收貨 XLS' if kind == 'receiving' else '下載' ~ dict(kinds)[kind] ~ '資料匯入檔' }}</button>
+  {% if kind == 'receiving' %}<p class="muted">下載成功後，共用文件會標記為「已匯出」；這不代表已經上傳至非追不可官方平台。</p>{% endif %}
   <p class="muted" id="ftrace-upload-help">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
 </section>
 <aside class="ftrace-issues" id="ftrace-issues" aria-label="匯入資料待修正清單">
@@ -52,6 +80,13 @@
 .ftrace-input-invalid{border:2px solid #c43826!important;background:#fff8f7}
 .ftrace-target-flash{outline:3px solid #f5a623!important;outline-offset:3px}
 .ftrace-issues-footnote{padding-top:10px;border-top:1px solid #e5e7eb}
+.ftrace-save-help{padding:12px 14px;background:#edf6fd;border:1px solid #b8d9f0;border-radius:10px;margin:16px 0 4px;color:#24445f}
+.ftrace-save-help strong{display:block;font-size:14px}
+.ftrace-save-help p{margin:5px 0 0;font-size:13px;line-height:1.6}
+.ftrace-advanced-actions{border-top:1px solid #e5e7eb;margin:12px 0 16px;padding:12px 0}
+.ftrace-advanced-actions summary{font-size:13px;font-weight:650;color:#475467;cursor:pointer}
+.ftrace-advanced-actions .btn.danger{background:#fff0ee;color:#b42318;border:1px solid #f5c3bd}
+.ftrace-advanced-actions .btn.danger:hover{background:#ffe0dc}
 @media(max-width:1050px){.ftrace-workspace{grid-template-columns:1fr}.ftrace-issues{position:static;max-height:none;order:-1}}
 @media(max-width:600px){.ftrace-picker>*{width:100%}.ftrace-steps{gap:6px}.ftrace-row{padding:12px}.ftrace-fields{grid-template-columns:1fr}.ftrace-actions .btn{width:100%}}
 </style>

@@ -1,12 +1,14 @@
 {% extends 'kitchen/base.html' %}
 {% block title %}非追不可匯入檔{% endblock %}
+{% block body_class %}ftrace-page{% endblock %}
 {% block content %}
 <section class="card">
   <div class="top"><div><span class="eyebrow">餐食製造業</span><h1>非追不可匯入檔</h1><p class="muted">先帶入系統資料，核對實際數量與平台自編碼後，下載檔案到非追不可的「資料匯入」。</p></div><a class="btn secondary" href="{{ url_for('order_tool.index') }}">回首頁</a></div>
   <form class="ftrace-picker" method="get"><label>申報日期<input type="date" name="date" value="{{ data.date }}" required></label><label>資料類型<select name="kind">{% for value,label in kinds %}<option value="{{ value }}" {{ 'selected' if kind == value else '' }}>{{ loop.index }}. {{ label }}資料</option>{% endfor %}</select></label><button class="btn" type="submit">帶入當日資料</button></form>
   <nav class="ftrace-steps" aria-label="申報順序">{% for value,label in kinds %}<a class="btn {{ '' if kind == value else 'secondary' }}" href="{{ url_for('order_tool.ftrace', date=data.date, kind=value) }}" {{ 'aria-current=step' if kind == value else '' }}>{{ loop.index }}　{{ label }}</a>{% endfor %}</nav>
 </section>
-<section class="card">
+<div class="ftrace-workspace">
+<section class="card ftrace-editor-card">
   <p><a class="btn secondary" href="{{ url_for('order_tool.ftrace_records') }}">共用資料區／匯入歷史收貨</a></p>
   <p class="muted">系統先帶入已對照的原料、規格與供應商編碼，可直接編輯。無法唯一對應的欄位請補選，再核對實際數量。</p>
   <details><summary>平台編碼對照（可補充或備份）</summary><p class="muted">系統已設定的對照會自動載入，不需每個瀏覽器重新匯入。也可載入自己的對照 JSON；手動修改與草稿會記住在這個瀏覽器，不會修改菜單、採購或平台紀錄。</p><label class="btn secondary">載入編碼對照<input id="ftrace-reference" type="file" accept=".json,application/json"></label><button class="btn secondary" id="ftrace-save-reference" type="button">備份編碼對照</button><p id="reference-status" role="status"></p></details>
@@ -19,15 +21,44 @@
   <button id="ftrace-download" class="btn" type="button">下載{{ dict(kinds)[kind] }}資料匯入檔</button>
   <p class="muted" id="ftrace-upload-help">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>
 </section>
+<aside class="ftrace-issues" id="ftrace-issues" aria-label="匯入資料待修正清單">
+  <div class="ftrace-issues-heading">
+    <h2>待修正欄位</h2>
+    <span id="ftrace-issues-count" class="ftrace-count" role="status" aria-live="polite">檢查中</span>
+  </div>
+  <p class="muted">一次列出所有欄位問題。點選項目會跳到該欄位；修改正確後會自動從清單消失。</p>
+  <div id="ftrace-issues-list"></div>
+  <p class="muted ftrace-issues-footnote">僅檢查勾選的項目；最後下載仍會由伺服器再次驗證。</p>
+</aside>
+</div>
 <datalist id="material-codes"></datalist><datalist id="product-codes"></datalist><datalist id="party-codes"></datalist>
 <style>
 .ftrace-picker,.ftrace-actions,.ftrace-steps{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}.ftrace-picker label{display:grid;gap:6px}.ftrace-steps .btn{flex:1;text-align:center}.ftrace-row{border:1px solid #dce4e2;border-radius:12px;padding:16px;margin:16px 0}.ftrace-row h3{margin:0 0 4px}.ftrace-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}.ftrace-fields label{display:grid;gap:5px;font-size:.92rem}.ftrace-fields input{width:100%;box-sizing:border-box;min-height:42px}.ftrace-confirm{display:flex;align-items:center;gap:8px;margin:20px 0}.ftrace-materials{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:12px}.ftrace-materials label{display:grid;gap:4px}.ftrace-row input[type=checkbox]{width:18px;height:18px}.ftrace-row summary{cursor:pointer}.ftrace-picker select{min-height:42px}.ftrace-row .muted{overflow-wrap:anywhere}#ftrace-error{background:#fff0ee;color:#9d271b}#ftrace-download:disabled{opacity:.6}#ftrace-reference{display:block;max-width:100%}
 .ftrace-lot{border:1px solid #bfd1db;border-radius:8px;padding:12px;margin:10px 0}.ftrace-lot select{width:100%;min-height:42px}.ftrace-materials:has(.ftrace-lot){display:block}.ftrace-fields select{min-width:0}.ftrace-spec-picker{min-width:0}.ftrace-spec-picker summary{padding:8px;background:#edf4f7;border-radius:6px;font-weight:600}.ftrace-spec-options{display:grid;gap:6px;max-height:320px;overflow:auto;padding:6px 0}.ftrace-spec-options button{display:block;width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.5;padding:10px;border:1px solid #bfcfd8;border-radius:6px;background:#fff;color:#203744;cursor:pointer}.ftrace-spec-options button:hover,.ftrace-spec-options button:focus{background:#e9f3ff;border-color:#326baf}
+.ftrace-page .wrap{max-width:1640px}
+.ftrace-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,360px);align-items:start;gap:18px}
+.ftrace-editor-card{min-width:0}
+.ftrace-issues{position:sticky;top:16px;max-height:calc(100dvh - 32px);overflow:auto;background:#fff;border:1px solid #dce4e2;border-radius:14px;padding:18px;box-shadow:0 2px 8px rgba(16,24,40,.05)}
+.ftrace-issues-heading{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.ftrace-issues-heading h2{margin:0;font-size:19px}
+.ftrace-count{flex-shrink:0;border-radius:18px;background:#fff0ee;color:#a42117;padding:5px 10px;font-size:12px;font-weight:750}
+.ftrace-count.is-clear{background:#eaf8ef;color:#146d3b}
+.ftrace-issues-list{display:grid;gap:8px}
+.ftrace-issue-group{margin:12px 0 0;border-top:1px solid #e5e7eb;padding-top:10px}
+.ftrace-issue-group h3{font-size:13px;margin:0 0 7px;overflow-wrap:anywhere}
+.ftrace-issue-link{display:block;width:100%;border:1px solid #ffd5d0;border-radius:8px;background:#fff8f7;color:#9d271b;padding:10px;text-align:left;white-space:normal;font:inherit;font-size:13px;line-height:1.5;cursor:pointer;margin:6px 0}
+.ftrace-issue-link:hover,.ftrace-issue-link:focus{background:#ffece8;border-color:#b42318;outline-offset:2px}
+.ftrace-all-clear{padding:14px 0;font-weight:650;color:#146d3b}
+.ftrace-input-invalid{border:2px solid #c43826!important;background:#fff8f7}
+.ftrace-target-flash{outline:3px solid #f5a623!important;outline-offset:3px}
+.ftrace-issues-footnote{padding-top:10px;border-top:1px solid #e5e7eb}
+@media(max-width:1050px){.ftrace-workspace{grid-template-columns:1fr}.ftrace-issues{position:static;max-height:none;order:-1}}
 @media(max-width:600px){.ftrace-picker>*{width:100%}.ftrace-steps{gap:6px}.ftrace-row{padding:12px}.ftrace-fields{grid-template-columns:1fr}.ftrace-actions .btn{width:100%}}
 </style>
 <script id="ftrace-data" type="application/json">{{ data|tojson }}</script>
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token(), 'shared_url':url_for('order_tool.ftrace_shared_save'), 'receipts_url':url_for('order_tool.ftrace_receipts'), 'cloud':cloud, 'manufacture':manufacture, 'receipts':receipts}|tojson }}</script>
 <script src="{{ url_for('static', filename='ftrace-lots.js', v=3) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace.js', v=9) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace-validation.js', v=1) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=10) }}" defer></script>
 {% endblock %}

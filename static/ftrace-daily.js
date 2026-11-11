@@ -26,13 +26,77 @@
     }
     return [...matches.values()].filter(r => r.ready === true);
   }
+  function receiptChoices(receipts, day) {
+    // Search by the receipt's actual declared name and code, not the menu name.
+    const byCode = new Map();
+    for (const receipt of receipts || []) {
+      if (clean(receipt.report_date)!==day || !clean(receipt.material_code)) continue;
+      const code=clean(receipt.material_code);
+      if (!byCode.has(code)) byCode.set(code,[]);
+      byCode.get(code).push(receipt);
+    }
+    const choices=[];
+    for (const [code, rows] of byCode) {
+      const ready=candidatesFor(rows,day,code);
+      for (const receipt of ready) {
+        choices.push(receipt);
+      }
+    }
+    return choices.sort((a,b)=>(clean(a.name)+clean(a.material_code)+keyOf(a)).localeCompare(
+      clean(b.name)+clean(b.material_code)+keyOf(b), 'zh-Hant'));
+  }
+  function inheritReceiptCodes(meals, receipts, day) {
+    // Both menu and saved receiving rows retain the same internal ingredient
+    // key. This is stronger evidence than the external name or alias.
+    const keyed = new Map();
+    for (const receipt of receipts || []) {
+      const materialKey=clean(receipt.material_key), code=clean(receipt.material_code);
+      if (clean(receipt.report_date)!==day || !materialKey || !code) continue;
+      if (!keyed.has(materialKey)) keyed.set(materialKey,new Set());
+      keyed.get(materialKey).add(code);
+    }
+    let changed=0;
+    for (const meal of meals || []) {
+      for (const material of meal.materials || []) {
+        const codes=keyed.get(clean(material.key));
+        if (!codes || codes.size!==1) continue;
+        const chosen=[...codes][0];
+        if (clean(material.code)===chosen) continue;
+        // Never overwrite an earlier user-selected lot/identity.
+        if (Array.isArray(material.lots) && material.lots.some(lot =>
+          identity.some(field=>clean(lot?.[field])))) continue;
+        material.code=chosen;
+        changed++;
+      }
+    }
+    return changed;
+  }
+  function matchReceiving(group, receipt, receipts, day) {
+    // Explicit user action: rename/code mismatch can be resolved once for all
+    // meals, but only against a real valid same-day receipt.
+    if (!group.items.length || !(group.need>0) ||
+        !receiptChoices(receipts,day).includes(receipt)) return false;
+    const code=clean(receipt.material_code);
+    const candidates=candidatesFor(receipts,day,code);
+    const capacity=candidates.reduce((sum,item)=>sum+grams(item.receipt_kg),0);
+    if (capacity<group.need || group.items.some(({material})=>
+      !(grams(material.estimated_kg)>0))) return false;
+    const proposed={...group,code,candidates,capacity};
+    const assigned=grams(receipt.receipt_kg)>=group.need
+      ? assign(proposed,receipt,day,true)
+      : distribute(proposed,day);
+    if (!assigned) return false;
+    for (const {material} of group.items) material.code=code;
+    return true;
+  }
   function groupMeals(meals) {
     const groups = new Map();
     for (const meal of meals || []) {
       if (!meal || !meal.include) continue;
       for (const material of meal.materials || []) {
         const code = clean(material.code);
-        const key = code || 'missing-code:' + clean(material.key || material.name);
+        const key = clean(material.key) ? 'ingredient:' + clean(material.key) :
+          (code ? 'code:' + code : 'missing-code:' + clean(material.name));
         if (!groups.has(key)) {
           groups.set(key, {key, code, name:clean(material.name), items:[], need:0});
         }
@@ -131,7 +195,7 @@
     }
     return count;
   }
-  const api={inspect,assign,distribute,autoApply,candidatesFor,groupMeals,keyOf};
+  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,groupMeals,keyOf};
   if (typeof module !== 'undefined' && module.exports) module.exports=api;
   else root.FtraceDaily=api;
 })(typeof window !== 'undefined' ? window : {});

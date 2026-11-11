@@ -73,6 +73,10 @@
           if (settings.kind === 'manufacture') material.include=previous?.include!==false;
           if (Array.isArray(previous?.lots)) material.lots = previous.lots;
         }
+        if (settings.kind==='manufacture' && !row.include &&
+            row.materials.length && row.materials.every(material=>material.include===false)) {
+          row._material_excluded_all=true;
+        }
       }
     }
     status(settings.cloud?.payload ? `已載入共用資料版本 ${cloudVersion}；修改後請儲存。` : '已還原瀏覽器暫存；請儲存到共用資料區，才能跨電腦使用。');
@@ -413,12 +417,13 @@
     for (const [index, group] of groups.entries()) {
       const line=document.createElement('div');line.className='ftrace-daily-line';list.append(line);
       const info=document.createElement('div');line.append(info);
-      const title=document.createElement('strong');title.textContent=group.name || '未命名原料';info.append(title);
+      const titleLine=document.createElement('div');titleLine.className='ftrace-material-title';info.append(titleLine);
+      const title=document.createElement('strong');title.textContent=group.name || '未命名原料';titleLine.append(title);
       const extra=document.createElement('small');
       extra.textContent=group.code+'｜菜單估計 '+group.needKg+' 公斤｜'+group.items.length+' 筆餐食';
       info.append(extra);
       const actions=document.createElement('div');actions.className='ftrace-daily-choice';line.append(actions);
-      const remove=action(info,group.state==='excluded'?'還原':'× 不納入製造',()=>{
+      const remove=action(titleLine,group.state==='excluded'?'還原':'× 不納入製造',()=>{
         const count=FtraceDaily.setGroupIncluded(data.meals,group,group.state==='excluded');
         render();invalidate();
         status(group.name+(group.state==='excluded'?' 已還原到本次製造。':' 已從本次製造排除。')+

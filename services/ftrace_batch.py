@@ -87,8 +87,11 @@ def build_batch_sheets(kind, day, payload):
             continue
         sheets['製造資料'].append(key + [batch, fmt(made), fmt(expiry), kg, qty])
         materials = row.get('materials')
-        if not isinstance(materials, list) or not materials or len(materials) > 1000:
+        if not isinstance(materials, list) or len(materials) > 1000:
             raise ExportError('請核對製造使用的原材料批次。')
+        materials = [m for m in materials if not isinstance(m, dict) or m.get('include') is not False]
+        if not materials:
+            raise ExportError('已排除全部製造原料，請取消這筆製造或還原原料。')
         for material in materials:
             if not isinstance(material, dict):
                 raise ExportError('原材料批次格式錯誤。')

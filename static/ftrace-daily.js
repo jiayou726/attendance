@@ -50,6 +50,44 @@
       clean(lots[0].report_date) === day && keyOf(lots[0]) === keyOf(candidate) &&
       Number(lots[0].kg) > 0;
   }
+  function fullyLinked(group,day) {
+    const remaining=new Map(group.candidates.map(candidate=>[keyOf(candidate),grams(candidate.receipt_kg)]));
+    for (const {material} of group.items) {
+      if (!Array.isArray(material.lots) || !material.lots.length) return false;
+      for (const lot of material.lots) {
+        if (clean(lot.report_date)!==day) return false;
+        const key=keyOf(lot);
+        const used=grams(lot.kg);
+        if (!remaining.has(key) || !(used>0) || used>remaining.get(key)) return false;
+        remaining.set(key,remaining.get(key)-used);
+      }
+    }
+    return true;
+  }
+  // Explicitly requested allocation across several same-day lots. It is only
+  // a menu-based proposal; real stock picking must be confirmed before export.
+  function distribute(group, day) {
+    if (!group.code || !(group.need>0) || group.capacity < group.need ||
+        !group.candidates.length || group.items.some(item=>!(grams(item.material.estimated_kg)>0))) return false;
+    const sorted=[...group.candidates].sort((a,b)=>String(a.seq).localeCompare(String(b.seq)));
+    const left=sorted.map(lot=>grams(lot.receipt_kg));
+    const proposals=[];
+    for (const {material} of group.items) {
+      let needed=grams(material.estimated_kg);
+      const selected=[];
+      for (let i=0;i<sorted.length && needed>0;i++) {
+        const allocated=Math.min(needed,left[i]);
+        if (allocated<=0) continue;
+        selected.push({...sorted[i],kg:kg(allocated)});
+        delete selected[selected.length-1].issues;
+        left[i]-=allocated;needed-=allocated;
+      }
+      if (needed>0 || !selected.length) return false;
+      proposals.push({material,selected});
+    }
+    for (const proposal of proposals) proposal.material.lots=proposal.selected;
+    return true;
+  }
   function inspect(meals, receipts, day) {
     const groups = groupMeals(meals);
     for (const group of groups) {
@@ -60,7 +98,7 @@
       else if (!group.candidates.length) group.state='missing';
       else if (group.need <= 0) group.state='no-usage';
       else if (group.capacity < group.need) group.state='insufficient';
-      else if (group.candidates.some(candidate => group.items.every(item => linked(item,candidate,day))))
+      else if (fullyLinked(group,day))
         group.state='linked';
       else if (group.candidates.length === 1 && grams(group.candidates[0].receipt_kg) >= group.need)
         group.state='auto';
@@ -93,7 +131,7 @@
     }
     return count;
   }
-  const api={inspect,assign,autoApply,candidatesFor,groupMeals,keyOf};
+  const api={inspect,assign,distribute,autoApply,candidatesFor,groupMeals,keyOf};
   if (typeof module !== 'undefined' && module.exports) module.exports=api;
   else root.FtraceDaily=api;
 })(typeof window !== 'undefined' ? window : {});

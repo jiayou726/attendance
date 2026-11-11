@@ -332,7 +332,11 @@
     if(!backup || backup.date!==initial.date || !Array.isArray(backup.receipts) || !Array.isArray(backup.meals)) {
       fail('這個瀏覽器沒有本日、本類型的備份。');return;
     }
-    data=structuredClone(backup);batchToggle.checked=data.batch_mode!==false;render();invalidate();
+    data=structuredClone(backup);
+    if (settings.kind === 'receiving') {
+      data.receipts = FtraceLots.reconcileMenuReceipts(initial.receipts, backup.receipts);
+    }
+    batchToggle.checked=data.batch_mode!==false;render();invalidate();
     status('已載入本機備份，尚未覆蓋共用紀錄；請核對後再儲存。');
   });
   document.getElementById('migrate-drafts').addEventListener('click',async()=>{

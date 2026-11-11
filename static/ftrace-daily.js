@@ -91,6 +91,53 @@
     for (const {material} of group.items) material.code=code;
     return true;
   }
+  function applyDishExclusions(meals, excluded, initialMeals) {
+    // One-manufacturing-document override, never writes to receiving or menus.
+    const skip=new Set(excluded || []);
+    const originals=new Map((initialMeals || []).map(meal=>[meal.key,meal]));
+    let resetLots=0;
+    for (const meal of meals || []) {
+      const base=originals.get(meal.key);
+      if (!base || !Array.isArray(base.dishes)) continue;
+      const computed=new Map();
+      for (const dish of base.dishes) {
+        if (skip.has(dish.key)) continue;
+        for (const source of dish.materials || []) {
+          const key=clean(source.key);
+          if (!computed.has(key)) computed.set(key,{
+            key,name:source.name || '', value:0
+          });
+          computed.get(key).value+=grams(source.estimated_kg);
+        }
+      }
+      const previous=new Map((meal.materials || []).map(material=>[clean(material.key),material]));
+      const defaults=new Map((base.materials || []).map(material=>[clean(material.key),material]));
+      const updated=[];
+      for (const [key, amount] of computed) {
+        const old=previous.get(key);
+        const template=defaults.get(key);
+        const material={...(old || template || {key,name:amount.name,code:''})};
+        const nextWeight=kg(amount.value);
+        if (old && clean(old.estimated_kg)!==nextWeight && Array.isArray(old.lots)) {
+          // Usage changed: previously selected lots no longer prove the new
+          // required quantity. Re-auto-link unique daily lot; otherwise review.
+          delete material.lots;
+          resetLots++;
+        }
+        material.estimated_kg=nextWeight;
+        updated.push(material);
+      }
+      meal.materials=updated;
+      if (!updated.length && meal.include) {
+        meal.include=false;
+        meal._dish_excluded_all=true;
+      } else if (updated.length && meal._dish_excluded_all) {
+        meal.include=true;
+        delete meal._dish_excluded_all;
+      }
+    }
+    return resetLots;
+  }
   function groupMeals(meals) {
     const groups = new Map();
     for (const meal of meals || []) {
@@ -195,11 +242,11 @@
   function autoApply(meals, receipts, day) {
     let count=0;
     for (const group of inspect(meals,receipts,day)) {
-      if (group.state==='auto' && assign(group,group.candidates[0],day)) count++;
+      if (group.state==='auto' && assign(group,group.todayCandidates[0],day)) count++;
     }
     return count;
   }
-  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,groupMeals,keyOf};
+  const api={inspect,assign,distribute,autoApply,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,applyDishExclusions,groupMeals,keyOf};
   if (typeof module !== 'undefined' && module.exports) module.exports=api;
   else root.FtraceDaily=api;
 })(typeof window !== 'undefined' ? window : {});

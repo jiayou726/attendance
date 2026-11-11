@@ -412,7 +412,7 @@
         FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
         render();invalidate();
       });
-      return;
+      // Material removal stays usable even in legacy (non-batch) mode.
     }
     for (const [index, group] of groups.entries()) {
       const line=document.createElement('div');line.className='ftrace-daily-line';list.append(line);
@@ -435,6 +435,11 @@
         line.classList.add('excluded');remove.classList.add('btn-restore');
         const note=document.createElement('span');note.className='muted';
         note.textContent='本次製造不申報此原料';actions.append(note);
+        continue;
+      }
+      if (!data.batch_mode) {
+        const note=document.createElement('span');note.className='muted';
+        note.textContent='非批號申報：此原料將按本次製造設定處理';actions.append(note);
         continue;
       }
       if (group.state==='linked' || group.state==='linked-past') {

@@ -415,6 +415,7 @@
     if(!backup || backup.date!==initial.date || !Array.isArray(backup.receipts) || !Array.isArray(backup.meals)) {
       fail('這個瀏覽器沒有本日、本類型的備份。');return;
     }
+    if (settings.kind === 'receiving' && !window.confirm('確定要載入這台電腦的舊暫存嗎？目前畫面上尚未儲存的修改會被取代；共用資料不會直接被修改。')) return;
     data=structuredClone(backup);
     if (settings.kind === 'receiving') {
       data.receipts = FtraceLots.reconcileMenuReceipts(initial.receipts, backup.receipts);
@@ -423,6 +424,7 @@
     status('已載入本機備份，尚未覆蓋共用紀錄；請核對後再儲存。');
   });
   document.getElementById('migrate-drafts').addEventListener('click',async()=>{
+    if (settings.kind === 'receiving' && !window.confirm('將這台電腦的舊暫存搬入共用資料區？已有共用文件會跳過，不會覆蓋。')) return;
     let imported=0,skipped=0;
     try {
       for(let i=0;i<localStorage.length;i++) {
@@ -442,6 +444,7 @@
     }catch(error){fail(`已移入 ${imported} 份。${error.message}`);}
   });
   document.getElementById('reset-draft').addEventListener('click', () => {
+    if (settings.kind === 'receiving' && !window.confirm('確定重新帶入系統資料？本頁未儲存的修改與本日瀏覽器備份將被捨棄。已儲存的共用資料不會被刪除。')) return;
     const mode = data.batch_mode; data = structuredClone(initial); data.batch_mode = mode;
     data.receipts.forEach((r,i) => r.seq=String(i+1).padStart(2,'0'));
     data.meals.forEach((r,i) => {r.seq=String(i+1).padStart(2,'0');r.batch=historicalBatch(r.product_code,initial.date);r.manufactured_date=initial.date;r.expiry_date=initial.date;});
@@ -490,7 +493,10 @@
       }
       const labels = {receiving:'收貨',manufacture:'製造',delivery:'交貨'};
       const file=await response.blob();await saveShared('exported');
-      download(file,`非追不可_${labels[settings.kind]}_${data.batch_mode ? '依批號_' : ''}${data.date}.xls`);status('已儲存共用紀錄並下載匯入檔；請到平台匯入成功後，在共用資料區標記申報完成。');
+      download(file,`非追不可_${labels[settings.kind]}_${data.batch_mode ? '依批號_' : ''}${data.date}.xls`);
+      status(settings.kind === 'receiving' ?
+        '收貨資料已自動儲存到共用資料區（已匯出），並已開始下載 XLS；不必再按「只儲存」。請另外到非追不可平台匯入。' :
+        '已儲存共用紀錄並下載匯入檔；請到平台匯入成功後，在共用資料區標記申報完成。');
     } catch (error) {fail(error.message);} finally {button.disabled = false;}
   });
   batchToggle.addEventListener('change', () => {data.batch_mode=batchToggle.checked; render(); invalidate();});

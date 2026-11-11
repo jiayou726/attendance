@@ -12,12 +12,10 @@ from pathlib import Path
 
 import xlwt
 from flask import current_app
-from sqlalchemy import or_, and_
 from sqlalchemy.orm import selectinload
 
 from models import (KitchenMenuPlan, KitchenMenuAssignment, KitchenMenuPlanItem,
-                    KitchenRecipe, KitchenRecipeIngredient, KitchenPurchaseOrder,
-                    KitchenPurchaseOrderItem)
+                    KitchenRecipe, KitchenRecipeIngredient)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = json.loads((ROOT / "data/ftrace/schemas.json").read_text())
@@ -75,37 +73,12 @@ def text_number(value, places=3):
     return format(number, "f").rstrip("0").rstrip(".") if number else "0"
 
 
-def _kg(item):
-    # Quantity × conversion is a weight only when the snapshot base unit is g.
-    if item.base_unit_snapshot != "g":
-        return ""
-    return text_number(Decimal(item.actual_order_qty or 0) *
-                       Decimal(item.grams_per_purchase_unit_snapshot or 0) / 1000)
-
-
 def draft(day):
     from blueprints.order_tool import _menu_item_components
     products = configured_products()
-    receipts = []
-    items = (KitchenPurchaseOrderItem.query.join(KitchenPurchaseOrder)
-             .filter(KitchenPurchaseOrder.status != "cancelled", or_(
-                 KitchenPurchaseOrderItem.delivery_date == day,
-                 and_(KitchenPurchaseOrderItem.delivery_date.is_(None),
-                      KitchenPurchaseOrder.service_date == day)))
-             .options(selectinload(KitchenPurchaseOrderItem.ingredient),
-                      selectinload(KitchenPurchaseOrderItem.supplier),
-                      selectinload(KitchenPurchaseOrderItem.order))
-             .order_by(KitchenPurchaseOrderItem.id).all())
-    for item in items:
-        receipts.append(dict(key=str(item.id), include=True,
-            material_key=str(item.ingredient_id or f"purchase-{item.id}"),
-            supplier_key=str(item.supplier_id or item.order.supplier_id or ""),
-            name=item.ingredient_name_snapshot,
-            supplier_name=item.supplier_name_snapshot or item.order.supplier_name_snapshot,
-            source=f"採購單 #{item.order_id}：{item.actual_order_qty} {item.purchase_unit_snapshot}",
-            material_code="", spec_code="", supplier_code="", kg=_kg(item),
-            received_date=(item.delivery_date or day).isoformat()))
-
+    # Receiving and manufacturing must derive from the same served menu items,
+    # rather than unconfirmed purchase-order snapshots and delivery dates.
+    receiving_materials = {}
     plans = (KitchenMenuPlan.query.filter_by(service_date=day)
              .options(selectinload(KitchenMenuPlan.assignments).selectinload(KitchenMenuAssignment.school),
                       selectinload(KitchenMenuPlan.items).selectinload(KitchenMenuPlanItem.recipe)
@@ -137,6 +110,12 @@ def draft(day):
             for component in components:
                 ingredient = component.ingredient
                 if ingredient is not None:
+                    receiving = receiving_materials.setdefault(ingredient.id, dict(
+                        ingredient=ingredient, estimated_kg=Decimal("0")))
+                    if (ingredient.base_unit or "g") == "g":
+                        receiving["estimated_kg"] += (
+                            Decimal(component.grams_per_person or 0) * assignment.headcount / 1000
+                        )
                     material = meal["materials"].setdefault(str(ingredient.id), dict(
                         key=str(ingredient.id), name=ingredient.name, code="", estimated_kg=""))
                     if (ingredient.base_unit or "g") == "g":
@@ -155,6 +134,23 @@ def draft(day):
                 meal["grams_per_portion"] = text_number(grams)
                 meal["kg"] = text_number(Decimal(meal["quantity"]) * Decimal(str(grams)) / 1000)
                 meal["source"] += f"；按平台產品規格 {grams} g／份預填成品重量，請核對實際出餐。"
+    receipts = []
+    for entry in sorted(receiving_materials.values(), key=lambda row: (row["ingredient"].name, row["ingredient"].id)):
+        ingredient = entry["ingredient"]
+        estimated_kg = entry["estimated_kg"]
+        is_weight = (ingredient.base_unit or "g") == "g"
+        supplier = ingredient.supplier
+        receipts.append(dict(
+            key=f"menu:{ingredient.id}", include=True,
+            material_key=str(ingredient.id), supplier_key=str(ingredient.supplier_id or ""),
+            name=ingredient.name, supplier_name=supplier.name if supplier else "",
+            source=("當日菜單與供餐人數的原料估算；請核對實際收貨重量"
+                    if is_weight and estimated_kg > 0 else
+                    "當日菜單列有此原料；未設定重量或使用個數單位，請填實際收貨公斤數"),
+            material_code="", spec_code="", supplier_code="",
+            kg=text_number(estimated_kg) if is_weight and estimated_kg > 0 else "",
+            received_date=day.isoformat(),
+        ))
     from services.ftrace_references import apply_reference_defaults, reference_data
     result = apply_reference_defaults(dict(date=day.isoformat(), receipts=receipts,
         meals=list(meals.values()), skipped=sorted(skipped)), reference_data())

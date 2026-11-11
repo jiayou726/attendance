@@ -50,31 +50,9 @@
   }
   if (saved && saved.date === initial.date && Array.isArray(saved.receipts) && Array.isArray(saved.meals)) {
     if (settings.kind === 'receiving') {
-      // Reconcile older purchase-based receipts by ingredient, without dropping
-      // confirmed weights, original batches, or multiple historical lots.
-      const currentByMaterial = new Map(data.receipts.map(row => [String(row.material_key), row]));
-      const savedByMaterial = new Map();
-      for (const row of saved.receipts) {
-        const material = String(row.material_key || '');
-        if (!savedByMaterial.has(material)) savedByMaterial.set(material, []);
-        savedByMaterial.get(material).push(row);
-      }
-      const historicalRows = [];
-      for (const [material, rows] of savedByMaterial) {
-        const current = material && currentByMaterial.get(material);
-        if (current && rows.length === 1) {
-          const prior = rows[0];
-          for (const field of ['include','material_code','spec_code','supplier_code','kg','received_date','seq','batch']) {
-            if (Object.hasOwn(prior,field)) current[field] = prior[field];
-          }
-        } else {
-          // Preserve duplicate lots and older receipt rows absent from the menu.
-          historicalRows.push(...rows);
-        }
-      }
-      const preservedMaterials = new Set(historicalRows.map(row => String(row.material_key || '')).filter(Boolean));
-      data.receipts = [...historicalRows,
-        ...data.receipts.filter(row => !preservedMaterials.has(String(row.material_key || '')))];
+      // Keep only ingredients present in today's served menus. Historical
+      // out-of-menu rows remain in the shared document's version history.
+      data.receipts = FtraceLots.reconcileMenuReceipts(data.receipts, saved.receipts);
     }
     // For manufacture/delivery, only currently served menu entries are shown.
     for (const group of ['receipts', 'meals']) {

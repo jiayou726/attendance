@@ -44,6 +44,8 @@ def ftrace_export():
         kind = request.form.get("kind")
         day = date.fromisoformat(request.form.get("date", ""))
         store.validate_stored_links(payload,kind)
+        if kind=='manufacture':
+            store.validate_daily_manufacture(day,payload)
         if kind=='delivery' and payload.get('batch_mode'):
             made=store.document(day,'manufacture')
             if made:

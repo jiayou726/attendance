@@ -61,8 +61,9 @@
     </a>
   </div>
   <p class="muted">「製造頁可選用」只表示已符合本系統批次候選條件，不代表已在非追不可申報成功，也不等於剩餘庫存。需要核對的資料不會影響其他正常收貨紀錄。
-  {% if summary.other %}另外 {{ summary.other }} 筆已停用或晚於指定製造日期，不列入可選用和需核對。{% endif %}</p>
+  {% if summary.other %}另外 {{ summary.other }} 筆已停用或晚於指定製造日期，不列入可選用和需核對。{% endif %}上方數字是全部收貨紀錄的統計；下方的搜尋與月份只影響清單。</p>
 </section>
+{% endif %}
 
 <section class="card ftrace-register-list">
   <div class="top">

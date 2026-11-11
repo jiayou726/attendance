@@ -100,12 +100,13 @@
       if (savedSpec) row.spec_code = savedSpec.code;
       else row.spec_code ||= supplierSpecs.length === 1 ? supplierSpecs[0].code : specs.length === 1 ? specs[0].code : '';
       if (savedSupplier) row.supplier_code = savedSupplier.code;
-      else row.supplier_code ||= match(refs.parties, row.supplier_name)?.code || '';
+      else row.supplier_code ||= match(refs.parties.filter(p => !p.relation || p.relation[1] === '1'), row.supplier_name)?.code || '';
     }
     for (const row of data.meals) {
       const product = refs.mappings[`school:${row.school_key}`] || match(refs.products, row.name);
       row.product_code ||= product?.code || '';
-      row.customer_code ||= product?.customer_code || match(refs.parties, row.name)?.code || '';
+      const customers = refs.parties.filter(p => !p.relation || p.relation[0] === '1');
+      row.customer_code ||= product?.customer_code || match(customers, row.school_key)?.code || match(customers, row.name)?.code || '';
       const grams = product?.grams || row.grams_per_portion || refs.products.find(p => p.code === row.product_code)?.grams;
       if (!row.kg && grams) row.kg = String(Math.round(Number(row.quantity) * Number(grams)) / 1000);
       for (const material of row.materials) material.code ||= refs.mappings[`material:${material.key}`]?.code || match(refs.materials, material.name)?.code || '';

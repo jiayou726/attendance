@@ -403,3 +403,33 @@ def test_batch_suggestions_follow_existing_material_or_product_code_and_roc_date
         assert value['receipts'][0]['batch']=='TEST-M1151105'
         assert value['receipts'][0]['seq']=='01'
         assert value['meals'][0]['manufactured_date']==DAY.isoformat()
+
+
+def test_shared_party_registry_preserves_private_aliases_and_role_scoping(app, monkeypatch):
+    from services import ftrace_references as refs
+    parties = [
+        dict(name="正確供應商有限公司", code="A001", relation="010000", aliases=["每日採購單"]),
+        dict(name="平鎮高中", code="AA002", relation="100000", aliases=[]),
+        dict(name="琮元寶實業有限公司", code="A021", relation="010000", aliases=[]),
+        dict(name="琮元寶實業有限公司", code="A038", relation="010000", aliases=[]),
+    ]
+    monkeypatch.setattr(refs, "_db_parties", lambda: parties)
+    with app.app_context():
+        app.config["FTRACE_REFERENCES_JSON"] = dict(materials=[], products=[],
+            parties=[dict(name="舊供應商名稱", code="A001", aliases=["舊別名"])])
+        references = refs.reference_data()
+        assert len(references["parties"]) == 4
+        matched = [p for p in references["parties"] if p["code"] == "A001"]
+        assert len(matched) == 1 and "舊別名" in matched[0]["aliases"]
+        data = dict(receipts=[
+            dict(name="食材", supplier_name="每日採購單", supplier_code=""),
+            dict(name="食材", supplier_name="平鎮高中", supplier_code=""),
+            dict(name="食材", supplier_name="琮元寶實業有限公司", supplier_code=""),
+        ], meals=[dict(name="平鎮高中（含小便當）", school_key="平鎮高中",
+                      customer_code="", materials=[])])
+        refs.apply_reference_defaults(data, references)
+        assert [r["supplier_code"] for r in data["receipts"]] == ["A001", "", ""]
+        assert data["meals"][0]["customer_code"] == "AA002"
+        data["meals"][0]["customer_code"] = "已人工確認的客戶碼"
+        refs.apply_reference_defaults(data, references)
+        assert data["meals"][0]["customer_code"] == "已人工確認的客戶碼"

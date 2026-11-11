@@ -13,7 +13,7 @@ from extensions import db
 from models import (KitchenIngredient, KitchenMenuPlan, KitchenMenuPlanItem,
                     KitchenMenuAssignment, KitchenPurchaseOrder,
                     KitchenPurchaseOrderItem, KitchenRecipe,
-                    KitchenRecipeIngredient, KitchenSchool)
+                    KitchenRecipeIngredient, KitchenSchool, KitchenSupplier)
 from services.ftrace import SCHEMAS, ExportError, build_sheets, draft, export_workbook
 from services.ftrace_xls import excel_envelope
 
@@ -31,7 +31,8 @@ def app(tmp_path):
         dict(name="信義國小", code="TEST-P3", customer_code="TEST-C3", grams=600)]
     app.config["FTRACE_REFERENCES_JSON"] = dict(materials=[], products=[], parties=[])
     with app.app_context():
-        ingredient = KitchenIngredient(name="高麗菜", base_unit="g", purchase_unit="kg")
+        ingredient = KitchenIngredient(name="高麗菜", base_unit="g", purchase_unit="kg",
+                                       supplier=KitchenSupplier(name="每日採購單"))
         recipe = KitchenRecipe(name="炒高麗菜")
         school = KitchenSchool(name="測試國小", default_headcount=10)
         db.session.add_all([ingredient, recipe, school])
@@ -121,28 +122,61 @@ def test_compressed_private_references_load_without_exposing_unrelated_fields(ap
 def test_drafts_are_read_only_and_do_not_treat_raw_weight_as_finished_weight(app):
     with app.app_context():
         values = draft(DAY)
-        assert values["receipts"][0]["kg"] == "1.235"
+        assert values["receipts"][0]["kg"] == "0.96"  # (10 + 2) servings * 80 g
         assert len(values["meals"]) == 1
         assert values["meals"][0]["quantity"] == "12"
         assert values["meals"][0]["kg"] == ""
         assert len(values["meals"][0]["materials"]) == 1
         assert not db.session.new and not db.session.dirty and not db.session.deleted
-        item = KitchenPurchaseOrderItem.query.one()
-        item.base_unit_snapshot = "個"
+        # The base unit of the menu ingredient, not the purchase snapshot,
+        # determines whether the system can estimate kilograms.
+        ingredient = KitchenIngredient.query.one()
+        ingredient.base_unit = "個"
         db.session.flush()
         assert draft(DAY)["receipts"][0]["kg"] == ""
 
 
-def test_receipt_selection_uses_delivery_date_and_ignores_cancelled_orders(app):
+def test_receipt_uses_served_menu_date_not_purchase_delivery_or_order_state(app):
     with app.app_context():
         item = KitchenPurchaseOrderItem.query.one()
         item.delivery_date = date(2026, 11, 4)
-        db.session.flush()
-        assert draft(DAY)["receipts"] == []
-        assert len(draft(date(2026, 11, 4))["receipts"]) == 1
+        item.ordered = False
+        item.actual_order_qty = Decimal("99")
         item.order.status = "cancelled"
         db.session.flush()
+        receipts = draft(DAY)["receipts"]
+        assert len(receipts) == 1
+        assert receipts[0]["key"] == f"menu:{KitchenIngredient.query.one().id}"
+        assert receipts[0]["kg"] == "0.96"
         assert draft(date(2026, 11, 4))["receipts"] == []
+
+
+def test_receipt_and_manufacturing_skip_unserved_and_cancelled_plans(app):
+    with app.app_context():
+        plans = KitchenMenuPlan.query.order_by(KitchenMenuPlan.id).all()
+        assignment = plans[0].assignments[0]
+        assignment.service_status = "no_service"
+        db.session.flush()
+        assert draft(DAY)["receipts"][0]["kg"] == "0.16"
+        assert draft(DAY)["meals"][0]["quantity"] == "2"
+        assignment.service_status = "serving"
+        plans[1].status = "cancelled"
+        db.session.flush()
+        assert draft(DAY)["receipts"][0]["kg"] == "0.8"
+        assert draft(DAY)["meals"][0]["quantity"] == "10"
+
+
+def test_receipt_matches_manufacturing_menu_specific_recipe_overrides(app):
+    with app.app_context():
+        ingredient = KitchenIngredient.query.one()
+        first_plan = KitchenMenuPlan.query.order_by(KitchenMenuPlan.id).first()
+        first_plan.items[0].ingredients_override_json = json.dumps([
+            {"ingredient_id": ingredient.id, "grams_per_person": 150}
+        ])
+        db.session.flush()
+        values = draft(DAY)
+        assert values["receipts"][0]["kg"] == "1.66"
+        assert values["meals"][0]["materials"][0]["estimated_kg"] == "1.66"
 
 
 def test_small_bentos_merge_into_pingzhen_and_unneeded_schools_are_excluded(app):

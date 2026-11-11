@@ -1,12 +1,162 @@
 {% extends 'kitchen/base.html' %}
-{% block title %}非追不可共用資料區{% endblock %}
+{% block title %}非追不可資料庫{% endblock %}
+{% block body_class %}ftrace-register{% endblock %}
 {% block content %}
-<section class="card"><h1>非追不可共用資料區</h1><p>歷史收貨與新建收貨、製造、交貨存於系統資料庫，同一工作區可跨電腦使用。原始檔與修改版本保留；儲存、下載匯入檔均不代表已完成平台申報。</p><a class="btn" href="{{ url_for('order_tool.ftrace') }}">建立／編輯申報資料</a></section>
-<section class="card"><h2>匯入既有收貨</h2><p>上傳非追不可「資料匯出」取得的完整 XLS，可讀舊版收貨與依批號收貨。相同檔案不重複匯入。缺批號、實際收貨日期或有重複識別的紀錄會標為待核對，不會猜填。</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><label>收貨原始檔<input type="file" name="file" accept=".xls" required></label><label><input type="checkbox" name="report_is_received" value="1">已確認本檔的日申報日期就是實際收貨日（只補空白，不改既有批號）</label><button class="btn">匯入收貨原始 XLS</button></form>
-{% for row,s in imports %}<p><a href="{{ url_for('order_tool.ftrace_import_original',import_id=row.id) }}">{{ row.filename }}</a>　{{ s.start }}～{{ s.end }}；{{ s.source_rows }} 原始列／{{ s.records }} 筆，初次匯入待核對 {{ s.pending }} 筆，重複識別 {{ s.duplicate_groups }} 組。{{ s.date_basis or '' }}</p>{% else %}<p>尚未匯入歷史收貨。</p>{% endfor %}</section>
-<section class="card"><h2>收貨歷史查詢</h2><form method="get"><label>食材名稱／原材料碼<input name="q" value="{{ q }}"></label><label>申報月份<input type="month" name="month" value="{{ month }}"></label><button class="btn secondary">查詢</button></form><p>共 {{ pagination.total }} 筆。重量是原始收貨量，尚未建立期初庫存及跨日扣帳，不能當成剩餘庫存。</p>
-<div style="overflow:auto"><table><thead><tr><th>申報日期／流水號</th><th>原材料</th><th>原材料廠商自編碼</th><th>批號／實際收貨日</th><th>收貨公斤</th><th>供應商</th><th>狀態</th></tr></thead><tbody>
-{% for row,lot in receipts %}<tr><td>{{ row.report_date }}／{{ lot.seq }}</td><td>{{ row.material_code }}<br>{{ row.name }}</td><td>{{ lot.spec_code }}</td><td>{{ lot.batch or lot.received_date or '待補實際收貨日期／批號' }}</td><td>{{ lot.receipt_kg }}</td><td>{% for s in lot.suppliers %}{{ s.code }} {{ s.name }}<br>{% endfor %}</td><td>{% if row.disabled %}已停用{% elif lot.issues %}{{ lot.issues|join('；') }}{% else %}已可選用{% endif %}<br><a href="{{ url_for('order_tool.ftrace_receipt_edit',receipt_id=row.id) }}">核對／補齊</a></td></tr>{% endfor %}
-</tbody></table></div><p>{% if pagination.has_prev %}<a href="{{ url_for('order_tool.ftrace_records',page=pagination.prev_num,q=q,month=month) }}">上一頁</a>{% endif %}　第 {{ pagination.page }}／{{ pagination.pages or 1 }} 頁　{% if pagination.has_next %}<a href="{{ url_for('order_tool.ftrace_records',page=pagination.next_num,q=q,month=month) }}">下一頁</a>{% endif %}</p></section>
-<section class="card"><h2>已儲存的收貨／製造／交貨</h2><p>顯示所選月份的共用紀錄；點日期繼續編輯，或查看完整版本及申報狀態。</p><table><thead><tr><th>日期</th><th>類型</th><th>狀態</th><th>版本</th><th>操作</th></tr></thead><tbody>{% for d in documents %}<tr><td><a href="{{ url_for('order_tool.ftrace',date=d.day,kind=d.kind) }}">{{ d.day }}</a></td><td>{{ kinds[d.kind] }}</td><td>{{ {'draft':'草稿','exported':'已下載匯入檔，待平台確認','submitted':'使用者已確認平台申報完成'}[d.status] }}</td><td>{{ d.version }}</td><td><a href="{{ url_for('order_tool.ftrace_document_history',document_id=d.id) }}">版本／申報狀態</a></td></tr>{% else %}<tr><td colspan="5">尚無共用紀錄；既有瀏覽器草稿可在編輯頁移入。</td></tr>{% endfor %}</tbody></table><p>{% if docs_pagination.has_prev %}<a href="{{ url_for('order_tool.ftrace_records',docs_page=docs_pagination.prev_num,month=month,q=q) }}">上一頁紀錄</a>{% endif %}　第 {{ docs_pagination.page }}／{{ docs_pagination.pages or 1 }} 頁　{% if docs_pagination.has_next %}<a href="{{ url_for('order_tool.ftrace_records',docs_page=docs_pagination.next_num,month=month,q=q) }}">下一頁紀錄</a>{% endif %}</p></section>
+<section class="card ftrace-register-header">
+  <div class="top">
+    <div>
+      <span class="eyebrow">非追不可資料管理</span>
+      <h1>收貨、製造、交貨紀錄</h1>
+      <p class="muted">三種資料分開看，批號與來源保留，查詢不用先知道資料存在哪一張表。</p>
+    </div>
+    <a class="btn" href="{{ url_for('order_tool.ftrace') }}">建立／編輯匯入檔</a>
+  </div>
+  <div class="ftrace-flow-guide">
+    <span>① 收貨：原料實際收到哪一批</span>
+    <span>② 製造：餐食用了哪批原料</span>
+    <span>③ 交貨：餐食交給哪個客戶</span>
+  </div>
+  <p class="ftrace-register-note">這裡是<strong>本系統的申報紀錄</strong>，不是非追不可官方資料庫的同步副本。「已下載」不等於「已在平台申報成功」；只有人工到官方平台確認後，才可標記為已申報。</p>
+</section>
+
+<nav class="ftrace-register-tabs" aria-label="資料類型">
+  <a class="{{ 'active' if registry_kind=='receiving' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='receiving',month=month,q=q) }}" {{ 'aria-current=page' if registry_kind=='receiving' else '' }}><strong>收貨</strong><span>{{ registry_counts.receiving }} 筆識別</span></a>
+  <a class="{{ 'active' if registry_kind=='manufacture' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='manufacture',month=month,q=q) }}" {{ 'aria-current=page' if registry_kind=='manufacture' else '' }}><strong>製造</strong><span>{{ registry_counts.manufacture }} 筆餐食</span></a>
+  <a class="{{ 'active' if registry_kind=='delivery' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='delivery',month=month,q=q) }}" {{ 'aria-current=page' if registry_kind=='delivery' else '' }}><strong>交貨</strong><span>{{ registry_counts.delivery }} 筆餐食</span></a>
+</nav>
+
+{% if registry_kind=='receiving' %}
+<section class="card">
+  <h2>收貨資料已合併顯示，不會重複計數</h2>
+  <div class="ftrace-register-stats">
+    <div><strong>{{ summary.imported }}</strong><span>歷史 XLS 匯入來源列</span></div>
+    <div><strong>{{ summary.shared_receipts }}</strong><span>共用收貨文件來源列</span></div>
+    <div><strong>{{ registry_counts.receiving }}</strong><span>去重後收貨識別</span></div>
+    <div><strong>{{ summary.overlaps }}</strong><span>多來源／重複識別</span></div>
+    <div><strong>{{ summary.conflicts }}</strong><span>重量不一致，待核對</span></div>
+  </div>
+  <p class="muted">同申報日期、流水號、原料碼、規格碼、批號／實際收貨日的完整紀錄會合併顯示，來源不會消失。資料不完整時不任意合併。重量是原始收貨量，<strong>不是目前庫存</strong>，也不代表已在官方平台申報。</p>
+</section>
+{% endif %}
+
+<section class="card ftrace-register-list">
+  <div class="top">
+    <div><h2>{{ {'receiving':'收貨批次清單','manufacture':'製造餐食清單','delivery':'交貨餐食清單'}[registry_kind] }}</h2><p class="muted">目前篩選 {{ total_found }} 筆；每頁最多 50 筆。</p></div>
+    <a class="btn secondary" href="{{ url_for('order_tool.ftrace',kind=registry_kind) }}">新增{{ kinds[registry_kind] }}資料</a>
+  </div>
+  <form method="get" class="ftrace-register-filter">
+    <input type="hidden" name="kind" value="{{ registry_kind }}">
+    <label>搜尋{{ '原料名稱／編碼／批號' if registry_kind=='receiving' else '學校／產品碼／批號' }}<input name="q" value="{{ q }}" placeholder="輸入名稱或編碼"></label>
+    <label>申報月份<input type="month" name="month" value="{{ month }}"></label>
+    <button class="btn secondary" type="submit">查詢</button>
+    <a class="btn secondary" href="{{ url_for('order_tool.ftrace_records',kind=registry_kind) }}">清除條件</a>
+  </form>
+  {% if registry_kind=='receiving' %}
+    <div class="ftrace-register-table-wrap"><table class="ftrace-register-table">
+      <thead><tr><th>收貨申報日／流水號</th><th>原材料</th><th>規格碼</th><th>批號／實際收貨日</th><th>公斤</th><th>資料來自哪裡</th><th>目前狀態</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for row in registry_rows %}
+      <tr>
+        <td>{{ row.day }}<small>流水號 {{ row.seq or '未填' }}</small></td>
+        <td><strong>{{ row.name or '未命名原料' }}</strong><small>{{ row.code or '原料碼未填' }}</small></td>
+        <td>{{ row.spec or '未填' }}</td>
+        <td>{{ row.batch or row.received_date or '未填' }}</td>
+        <td>{{ row.weight or '未填' }}</td>
+        <td>{{ row.source_label }}{% if row.duplicate %}<small>同識別合併顯示，來源保留</small>{% endif %}</td>
+        <td><span class="ftrace-state {{ row.level }}">{{ row.state }}</span>{% if row.issues %}<small>{{ row.issues|join('；') }}</small>{% endif %}</td>
+        <td class="ftrace-register-links">
+          {% if row.document_ids %}<a href="{{ url_for('order_tool.ftrace_document_history',document_id=row.document_ids[0]) }}">共用版本</a>{% endif %}
+          {% if row.imported_ids %}<a href="{{ url_for('order_tool.ftrace_receipt_edit',receipt_id=row.imported_ids[0]) }}">歷史核對</a>{% endif %}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="8">沒有符合條件的收貨紀錄。</td></tr>{% endfor %}
+      </tbody></table></div>
+  {% else %}
+    {% if registry_kind=='delivery' %}
+    <p class="muted">交貨會和本系統同日的製造紀錄比對產品編碼、批號、日期、份數與重量。缺製造資料或申報模式不同時會顯示提醒；<strong>通過本系統比對不等於非追不可已接受申報</strong>。</p>
+    {% else %}
+    <p class="muted">製造紀錄保留各校餐食及其原料批次；未用依批號申報的紀錄會明確標示，避免誤以為已串接收貨。</p>
+    {% endif %}
+    <div class="ftrace-register-table-wrap"><table class="ftrace-register-table">
+      <thead><tr><th>申報日期</th><th>餐食／學校</th><th>產品碼／批號</th><th>份數</th><th>公斤</th>{% if registry_kind=='delivery' %}<th>下游業者碼</th>{% endif %}<th>資料檢查</th><th>申報狀態</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for row in registry_rows %}
+      <tr>
+        <td>{{ row.day }}</td>
+        <td><strong>{{ row.name }}</strong><small>流水號 {{ row.seq or '未填' }}</small></td>
+        <td>{{ row.code }}<small>{{ row.batch if row.batch_mode else '非批號模式' }}</small></td>
+        <td>{{ row.quantity }}</td><td>{{ row.kg }}</td>
+        {% if registry_kind=='delivery' %}<td>{{ row.customer or '未填' }}</td>{% endif %}
+        <td><span class="ftrace-state {{ row.level }}">{{ row.state }}</span></td>
+        <td>{{ {'draft':'共用草稿','exported':'已下載，平台未確認','submitted':'平台已申報（人工確認）'}.get(row.document_status,'狀態待核對') }}</td>
+        <td class="ftrace-register-links">
+          <a href="{{ url_for('order_tool.ftrace',date=row.day,kind=registry_kind) }}">開啟資料</a>
+          <a href="{{ url_for('order_tool.ftrace_document_history',document_id=row.document_id) }}">版本／狀態</a>
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="{{ 9 if registry_kind=='delivery' else 8 }}">沒有符合條件的{{ kinds[registry_kind] }}紀錄。</td></tr>{% endfor %}
+      </tbody></table></div>
+  {% endif %}
+  {% if pages>1 %}
+  <nav class="ftrace-register-pages" aria-label="清單分頁">
+    {% if page>1 %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page-1,q=q,month=month) }}">上一頁</a>{% endif %}
+    <span>第 {{ page }}／{{ pages }} 頁</span>
+    {% if page<pages %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page+1,q=q,month=month) }}">下一頁</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+
+{% if registry_kind=='receiving' %}
+<details class="card ftrace-register-import">
+  <summary>進階：匯入以前的收貨 XLS、查看原始檔（{{ imports|length }} 份）</summary>
+  <p class="muted">只有需要補入以前在非追不可匯出的收貨紀錄時才上傳。<strong>本系統下載 XLS 已自動存到共用文件，不必在這裡再匯入一次。</strong> 相同檔案不重複匯入；不同檔案有相同收貨識別時會合併顯示並保留來源。</p>
+  <form method="post" enctype="multipart/form-data" class="ftrace-register-import-form">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>歷史收貨原始 XLS<input type="file" name="file" accept=".xls" required></label>
+    <label class="ftrace-import-confirm"><input type="checkbox" name="report_is_received" value="1">我已從原始紀錄確認：本檔每筆日申報日期就是實際收貨日期（僅補沒有批號／日期的空白欄位）</label>
+    <button class="btn" type="submit">匯入歷史 XLS</button>
+  </form>
+  <h3>已匯入原始檔</h3>
+  {% for row,s in imports %}
+  <p><a href="{{ url_for('order_tool.ftrace_import_original',import_id=row.id) }}">{{ row.filename }}</a>　{{ s.start }}～{{ s.end }}；{{ s.records }} 筆，初次匯入待核對 {{ s.pending }} 筆。</p>
+  {% else %}<p class="muted">尚未匯入歷史 XLS。</p>{% endfor %}
+</details>
+{% endif %}
+
+<style>
+.ftrace-register .wrap{max-width:1600px}
+.ftrace-register-header h1{margin-bottom:8px}
+.ftrace-flow-guide{display:flex;flex-wrap:wrap;gap:9px;margin:15px 0}
+.ftrace-flow-guide span{padding:9px 12px;background:#eef3f8;color:#254767;border-radius:9px;font-size:13px;font-weight:650}
+.ftrace-register-note{padding:12px 14px;background:#fff8e6;color:#714d12;border-radius:9px;font-size:13px;line-height:1.6}
+.ftrace-register-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
+.ftrace-register-tabs a{display:flex;flex-direction:column;gap:4px;background:white;border:1px solid #dce4e2;border-radius:12px;padding:14px 18px;color:#344054}
+.ftrace-register-tabs a.active{border:2px solid #1769aa;background:#edf6fd;color:#0f5b91}
+.ftrace-register-tabs a strong{font-size:18px}
+.ftrace-register-tabs a span{font-size:12px}
+.ftrace-register-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0}
+.ftrace-register-stats>div{background:#f5f7f9;padding:12px;border-radius:9px}
+.ftrace-register-stats strong{display:block;font-size:24px}
+.ftrace-register-stats span{font-size:12px;color:#475467;line-height:1.4}
+.ftrace-register-filter{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:15px 0}
+.ftrace-register-filter label{flex:1;min-width:200px;display:grid;gap:6px}
+.ftrace-register-filter .btn{flex-shrink:0}
+.ftrace-register-table-wrap{width:100%;overflow-x:auto}
+.ftrace-register-table{width:100%;border-collapse:collapse;font-size:13px;min-width:930px}
+.ftrace-register-table th,.ftrace-register-table td{padding:11px 9px;text-align:left;vertical-align:top;border-bottom:1px solid #e5e7eb}
+.ftrace-register-table th{background:#f4f7fa;color:#344054;white-space:nowrap}
+.ftrace-register-table small{display:block;margin-top:4px;font-size:11px;color:#667085;overflow-wrap:anywhere}
+.ftrace-register-table td{overflow-wrap:anywhere}
+.ftrace-state{display:inline-block;font-weight:650;line-height:1.5}
+.ftrace-state.warn{color:#b42318}.ftrace-state.ok{color:#157347}.ftrace-state.neutral{color:#475467}.ftrace-state.muted{color:#667085}
+.ftrace-register-links a{display:block;margin-bottom:7px;white-space:nowrap}
+.ftrace-register-pages{display:flex;align-items:center;justify-content:center;gap:20px;margin-top:16px}
+.ftrace-register-import{margin-top:16px}
+.ftrace-register-import summary{cursor:pointer;font-weight:700;font-size:16px}
+.ftrace-register-import-form{display:grid;gap:12px;max-width:650px;margin:16px 0}
+.ftrace-import-confirm{display:flex;align-items:center;gap:8px;line-height:1.5}
+.ftrace-import-confirm input{width:auto;min-height:0;flex-shrink:0}
+@media(max-width:850px){.ftrace-register-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ftrace-register-tabs{gap:6px}.ftrace-register-tabs a{padding:10px}.ftrace-register-tabs a strong{font-size:15px}}
+@media(max-width:600px){.ftrace-register-header .top{display:block}.ftrace-register-header .top .btn{margin-top:12px}.ftrace-register-filter{display:grid}.ftrace-register-filter label{min-width:0}}
+</style>
 {% endblock %}

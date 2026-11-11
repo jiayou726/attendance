@@ -299,10 +299,18 @@ def test_routes_render_and_export_without_updating_source_records(app):
         assert response.status_code == 200
         assert "非追不可匯入檔" in response.get_data(as_text=True)
         response = client.post("/admin/order-tool/ftrace/export", data={
-            "date":str(DAY), "kind":kind, "payload":json.dumps(payload()), "confirmed":"1"})
+            "date":str(DAY), "kind":kind, "payload":json.dumps(payload())})
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
         assert xlrd.open_workbook(file_contents=response.data).sheet_names() == list(SCHEMAS[kind])
+    # There is no manual confirmation checkbox. The server must still reject
+    # incomplete selected rows and must not silently export invalid data.
+    invalid = payload()
+    invalid["receipts"][0]["material_code"] = ""
+    response = client.post("/admin/order-tool/ftrace/export", data={
+        "date":str(DAY), "kind":"receiving", "payload":json.dumps(invalid)})
+    assert response.status_code == 400
+    assert "ms-excel" not in response.content_type
     with app.app_context():
         assert KitchenPurchaseOrderItem.query.one().actual_order_qty == Decimal("1.2345")
         assert KitchenMenuAssignment.query.count() == 2
@@ -315,14 +323,14 @@ def test_export_requires_csrf_with_production_setting(app):
     app.config["KITCHEN_CSRF_ENABLED"] = True
     client = app.test_client()
     response = client.post("/admin/order-tool/ftrace/export", data={
-        "date":str(DAY), "kind":"receiving", "payload":json.dumps(payload()), "confirmed":"1"})
+        "date":str(DAY), "kind":"receiving", "payload":json.dumps(payload())})
     assert "ms-excel" not in response.content_type
     client.get(f"/admin/order-tool/ftrace?date={DAY}")
     with client.session_transaction() as session:
         token = session["_kitchen_csrf"]
     response = client.post("/admin/order-tool/ftrace/export", data={
         "date":str(DAY), "kind":"receiving", "payload":json.dumps(payload()),
-        "confirmed":"1", "_csrf_token":token})
+        "_csrf_token":token})
     assert response.status_code == 200
 
 

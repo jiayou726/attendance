@@ -443,15 +443,35 @@ def test_shared_party_registry_preserves_private_aliases_and_role_scoping(app, m
         assert data["meals"][0]["customer_code"] == "已人工確認的客戶碼"
 
 
-def test_manufacturing_receives_individual_dishes_without_removing_receiving_menu_data(app):
-    with app.app_context():
-        from extensions import db
-        original = draft(DAY)
-        assert len(original['receipts']) == 1
-        assert original['receipts'][0]['kg'] == '0.96'
-        meal = original['meals'][0]
-        assert 'dishes' in meal and len(meal['dishes']) == 2
-        assert all(dish['key'] and dish['name'] and dish['materials'] for dish in meal['dishes'])
-        assert sorted(dish['materials'][0]['estimated_kg'] for dish in meal['dishes']) == ['0.16','0.8']
-        assert meal['materials'][0]['estimated_kg'] == '0.96'
-        assert not db.session.new and not db.session.dirty and not db.session.deleted
+
+def test_material_x_excludes_only_manufacturing_material_not_receiving_or_sibling():
+    # Legacy XLS: excluded ingredient should not appear in manufacturing sheet.
+    value=payload()
+    value['meals'][0]['materials'].append(dict(
+        name='排除的食材',code='',include=False))
+    before=json.dumps(value['receipts'],sort_keys=True)
+    sheets=build_sheets('manufacture',DAY,value)
+    assert len(sheets['製造餐食原材料'])==1
+    assert sheets['製造餐食原材料'][0][-1]=='B001'
+    assert len(build_sheets('receiving',DAY,value)['收貨資料'])==1
+    assert json.dumps(value['receipts'],sort_keys=True)==before
+    value['meals'][0]['materials'][0]['include']=False
+    with pytest.raises(ExportError,match='已排除所有原材料'):
+        build_sheets('manufacture',DAY,value)
+
+
+def test_material_x_excludes_invalid_lots_from_lot_based_manufacturing():
+    value=batch_payload()
+    good=value['meals'][0]['materials'][0]
+    value['meals'][0]['materials'].append(dict(
+        name='不納入製造',code='',include=False,
+        lots=[dict(report_date='2030-01-01',kg='999')]))
+    before=json.dumps(value['receipts'],sort_keys=True)
+    sheets=build_sheets('manufacture',DAY,value)
+    assert len(sheets['製造餐食資料原材料供應商'])==1
+    assert sheets['製造餐食資料原材料供應商'][0][-1]=='0.96'
+    assert len(build_sheets('receiving',DAY,value)['收貨資料批號資訊'])==1
+    assert json.dumps(value['receipts'],sort_keys=True)==before
+    good['include']=False
+    with pytest.raises(ExportError,match='已排除全部製造原料'):
+        build_sheets('manufacture',DAY,value)

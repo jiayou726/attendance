@@ -178,6 +178,8 @@ def validate_daily_manufacture(day, payload):
         if not meal.get('include'):
             continue
         for material in meal.get('materials',[]):
+            if material.get('include') is False:
+                continue
             code=str(material.get('code') or '')
             if not material.get('lots'):
                 raise ExportError(f'{material.get("name","原料")}：尚未對應已儲存的收貨批次。')
@@ -203,7 +205,9 @@ def validate_daily_manufacture(day, payload):
 def validate_stored_links(payload,kind):
     if kind!='manufacture' or not payload.get('batch_mode'):
         return
-    if not any(lot.get('storage_id') for meal in payload.get('meals',[]) for material in meal.get('materials',[]) for lot in material.get('lots',[])):
+    if not any(lot.get('storage_id') for meal in payload.get('meals',[]) if meal.get('include')
+               for material in meal.get('materials',[]) if material.get('include') is not False
+               for lot in material.get('lots',[])):
         return
     try:
         day=date.fromisoformat(payload.get('date',''))
@@ -217,6 +221,8 @@ def validate_stored_links(payload,kind):
         if not meal.get('include'):
             continue
         for material in meal.get('materials',[]):
+            if material.get('include') is False:
+                continue
             for lot in material.get('lots',[]):
                 if not lot.get('storage_id'):
                     continue

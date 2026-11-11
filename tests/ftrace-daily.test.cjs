@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {inspect,autoApply,assign,distribute,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,applyDishExclusions} = require('../static/ftrace-daily.js');
+const {inspect,autoApply,assign,distribute,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving,setGroupIncluded} = require('../static/ftrace-daily.js');
 
 const DAY='2026-10-14';
 const makeMeal=(key,qty,code='K011',name='白米')=>({
@@ -171,48 +171,48 @@ test('future receipts cannot appear in manually searchable choices',()=>{
  const group=inspect(meals,[past],DAY)[0];
  assert.equal(matchReceiving(group,future,[past,future],DAY),false);
 });
-test('dish exclusion recalculates only manufacturing and removes unique dish material',()=>{
- const base=[
-  {key:'school1',include:true,materials:[
-    {key:'rice',name:'米',code:'R',estimated_kg:'5'},
-    {key:'carrot',name:'紅蘿蔔',code:'C',estimated_kg:'3'}],
-   dishes:[
-    {key:'plan1:item1',name:'炒飯',materials:[
-      {key:'rice',name:'米',estimated_kg:'5'}, {key:'carrot',name:'紅蘿蔔',estimated_kg:'1'}]},
-    {key:'plan1:item2',name:'紅蘿蔔湯',materials:[
-      {key:'carrot',name:'紅蘿蔔',estimated_kg:'2'}]}
-   ]},
-  {key:'school2',include:true,materials:[
-    {key:'rice',name:'米',code:'R',estimated_kg:'4'},
-    {key:'carrot',name:'紅蘿蔔',code:'C',estimated_kg:'1'}],
-   dishes:[
-    {key:'plan1:item1',name:'炒飯',materials:[
-      {key:'rice',name:'米',estimated_kg:'4'}, {key:'carrot',name:'紅蘿蔔',estimated_kg:'1'}]}
-   ]}
- ];
- const meals=structuredClone(base);
- const savedReceipts=[{name:'米',receipt_kg:'12'},{name:'紅蘿蔔',receipt_kg:'6'}];
- meals[0].materials[1].lots=[{report_date:DAY,seq:'01',kg:'3'}];
- const before=JSON.stringify(base),beforeReceipts=JSON.stringify(savedReceipts);
- assert.equal(applyDishExclusions(meals,['plan1:item1'],base),1);
- assert.deepEqual(meals[0].materials.map(m=>[m.name,m.estimated_kg]),[['紅蘿蔔','2']]);
- assert.equal(meals[0].materials[0].lots,undefined); // weight changed, must recheck selected lot
- assert.equal(meals[1].include,false); // no manufacturing ingredients remain for this school
- assert.deepEqual(meals[1].materials,[]);
- assert.equal(JSON.stringify(base),before);
- assert.equal(JSON.stringify(savedReceipts),beforeReceipts);
- assert.equal(applyDishExclusions(meals,[],base),0);
- assert.deepEqual(meals[0].materials.map(m=>m.name),['米','紅蘿蔔']);
- assert.equal(meals[1].include,true);
-});
-test('removing one dish never changes the ingredients from another dish',()=>{
- const base=[{key:'meal',include:true,materials:[{key:'R',code:'R',estimated_kg:'6'}],
-   dishes:[
-    {key:'d1',materials:[{key:'R',estimated_kg:'2'}]},
-    {key:'d2',materials:[{key:'R',estimated_kg:'4'}]}
-   ]}];
- const meals=structuredClone(base);
- applyDishExclusions(meals,['d1'],base);
- assert.equal(meals[0].materials[0].estimated_kg,'4');
+test('x excludes one ingredient in all schools but does not change receiving or menu',()=>{
+ const schoolA={key:'A',include:true,materials:[
+  {key:'rice',name:'白米',code:'R',estimated_kg:'5',lots:[{batch:'R1'}]},
+  {key:'carrot',name:'紅蘿蔔',code:'C',estimated_kg:'2',lots:[{batch:'C1'}]}
+ ]};
+ const schoolB={key:'B',include:true,materials:[
+  {key:'rice',name:'白米',code:'R',estimated_kg:'7',lots:[{batch:'R1'}]},
+  {key:'carrot',name:'紅蘿蔔',code:'C',estimated_kg:'3',lots:[{batch:'C1'}]}
+ ]};
+ const meals=structuredClone([schoolA,schoolB]);
+ const receipts=[{name:'白米',kg:'20'},{name:'紅蘿蔔',kg:'10'}];
+ const before=JSON.stringify([schoolA,schoolB]);
+ const beforeReceipt=JSON.stringify(receipts);
+ const group=inspect(meals,[],DAY).find(g=>g.name==='白米');
+ assert.equal(setGroupIncluded(meals,group,false),2);
+ assert.deepEqual(meals.map(m=>m.materials[0].include),[false,false]);
+ assert.deepEqual(meals.map(m=>m.materials[1].include),[undefined,undefined]);
  assert.equal(meals[0].include,true);
+ assert.equal(inspect(meals,[],DAY).find(g=>g.name==='白米').state,'excluded');
+ assert.equal(JSON.stringify([schoolA,schoolB]),before);
+ assert.equal(JSON.stringify(receipts),beforeReceipt);
+ const restore=inspect(meals,[],DAY).find(g=>g.name==='白米');
+ assert.equal(setGroupIncluded(meals,restore,true),2);
+ assert.deepEqual(meals.map(m=>m.materials[0].include),[true,true]);
+ assert.equal(meals[0].materials[0].lots[0].batch,'R1');
+});
+test('x on last material disables meal, restore makes it visible again even after JSON save',()=>{
+ const meals=[makeMeal('A',8),makeMeal('B',3)];
+ const group=inspect(meals,[],DAY)[0];
+ assert.equal(setGroupIncluded(meals,group,false),2);
+ assert.ok(meals.every(m=>m.include===false && m._material_excluded_all));
+ const saved=JSON.parse(JSON.stringify(meals));
+ const excluded=inspect(saved,[],DAY)[0];
+ assert.equal(excluded.state,'excluded');
+ assert.equal(setGroupIncluded(saved,excluded,true),2);
+ assert.ok(saved.every(m=>m.include===true && !m._material_excluded_all));
+ assert.equal(inspect(saved,[],DAY)[0].needKg,'11');
+});
+test('excluded ingredient cannot be automatically filled or used for matching',()=>{
+ const meals=[makeMeal('schoolA',3)];
+ const receipts=[lot('K011','9')];
+ setGroupIncluded(meals,inspect(meals,receipts,DAY)[0],false);
+ assert.equal(autoApply(meals,receipts,DAY),0);
+ assert.equal(inspect(meals,receipts,DAY)[0].state,'excluded');
 });

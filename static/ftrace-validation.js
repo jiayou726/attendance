@@ -115,11 +115,13 @@
         continue;
       }
 
-      if (!Array.isArray(row.materials) || !row.materials.length || row.materials.length > 1000) {
+      if (!Array.isArray(row.materials) || row.materials.length > 1000 ||
+          !row.materials.some(material=>material && material.include!==false)) {
         add(row, 'materials', '請核對製造使用的原材料項目');
         continue;
       }
       row.materials.forEach((material, materialIndex) => {
+        if (material && material.include===false) return;
         if (!material || typeof material !== 'object') {
           add(row, 'materials', '原材料資料格式錯誤');
           return;

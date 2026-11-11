@@ -11,7 +11,7 @@
 <section class="card ftrace-editor-card">
   <p><a class="btn secondary" href="{{ url_for('order_tool.ftrace_records') }}">共用資料區／匯入歷史收貨</a></p>
   {% if kind == 'manufacture' %}
-  <p class="muted">依當天菜單與各校供餐人數計算原料用量，<strong>當日收貨符合條件會自動帶入</strong>；以前日期的收貨可手動搜尋、選擇。也能按「× 不納入製造」只從這次製造扣除某道菜，不變更收貨或原始菜單。</p>
+  <p class="muted">依當日菜單與各校供餐人數計算用量，<strong>當日收貨符合條件會自動帶入</strong>；以前日期收貨可手動搜尋。每個原料旁的「× 不納入製造」只排除本次製造的該原料，不更改收貨或原始菜單。</p>
   {% else %}
   <p class="muted">系統先帶入已對照的原料、規格與供應商編碼，可直接編輯。無法唯一對應的欄位請補選，再核對實際數量。</p>
   {% endif %}
@@ -21,7 +21,7 @@
     <div class="ftrace-daily-head"><div><h2>當日菜單 × 收貨批次</h2><p class="muted">當日收貨優先自動帶入，舊收貨可手動選；同原料一次套用各校。</p></div><button type="button" class="btn secondary" id="ftrace-daily-refresh">重新讀取收貨紀錄</button></div>
     <div class="ftrace-daily-stats" id="ftrace-daily-stats" aria-live="polite"></div>
     <div id="ftrace-daily-list"></div>
-    <p class="muted">菜單與收貨可能使用不同名稱：可以搜尋當日或之前的收貨品名、編碼及批號，選一次套用所有學校。原料使用公斤沿用菜單估算；「不納入製造」只影響本次製造內容，不會修改菜單、收貨重量或批號。</p>
+    <p class="muted">菜單與收貨可能使用不同名稱：可以搜尋當日或之前的收貨品名、編碼及批號，選一次套用所有學校。每個食材列旁的「× 不納入製造」只影響本次製造，並可按「還原」恢復，不會修改收貨。</p>
   </section>
   {% endif %}
   <p class="notice">{% if kind == 'receiving' %}來源：當日有供餐的學校菜單、各校供餐人數與菜色配方（含當日專用配方）；依食材彙總預估公斤數，不依賴採購單的送達日期或已叫貨狀態。這是預估量而非實收量，請逐項核對實際收貨日期、重量、供應商及批號；個數類或未設定用量者請填實際重量。當日收貨清單只列出當日菜單原料；既有歷史收貨可在共用資料區及各版本紀錄查詢，不會混進當日新申報。{% else %}來源：當日有供餐的各校菜單與人數，葷素合併、不同餐別分開。成品重量請依實際出餐核對；原料投入重量不會直接當作成品重量。{% endif %}</p>
@@ -110,15 +110,12 @@
 .ftrace-daily-matcher input[type=search]{width:100%;box-sizing:border-box;min-height:40px}
 .ftrace-daily-matcher small{margin-top:6px;line-height:1.5}
 .ftrace-daily-matcher button{margin-top:4px}
-.ftrace-dish-exclusions{padding:12px;border:1px solid #d1dce6;border-radius:10px;margin-bottom:14px;background:#fff}
-.ftrace-dish-exclusions>summary{font-weight:750;cursor:pointer}
-.ftrace-dish-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid #e8ecf1;font-size:13px}
-.ftrace-dish-row>span{overflow-wrap:anywhere}
-.ftrace-dish-row button{padding:7px 10px;white-space:nowrap;border-color:#dbe2eb;color:#b42318;background:#fff}
-.ftrace-dish-row.excluded{opacity:.67}
-.ftrace-dish-row.excluded>span{text-decoration:line-through}
-.ftrace-dish-row.excluded button{color:#1769aa}
-@media(max-width:550px){.ftrace-dish-row{align-items:start}.ftrace-dish-row button{font-size:12px}}
+.ftrace-material-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ftrace-material-title strong{display:inline;font-size:14px}
+.ftrace-daily-line.excluded{background:#f6f7f9;opacity:.8}
+.ftrace-daily-line.excluded strong{text-decoration:line-through}
+.ftrace-material-exclude{display:inline-block;margin-top:0!important;padding:3px 8px!important;border:1px solid #e5baba!important;border-radius:6px!important;background:#fff!important;color:#a12620!important;font-size:12px!important;cursor:pointer}
+.ftrace-material-exclude.btn-restore{border-color:#afcde5!important;color:#145b90!important}
 .ftrace-daily-good{color:#136c3d;font-weight:650}.ftrace-daily-warning{color:#a92317;font-weight:650}
 @media(max-width:650px){.ftrace-daily-head{display:block}.ftrace-daily-head button{margin-top:8px}.ftrace-daily-line{grid-template-columns:1fr}}
 .ftrace-save-help{padding:12px 14px;background:#edf6fd;border:1px solid #b8d9f0;border-radius:10px;margin:16px 0 4px;color:#24445f}
@@ -135,7 +132,7 @@
 <script id="ftrace-references" type="application/json">{{ references|tojson }}</script>
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token(), 'shared_url':url_for('order_tool.ftrace_shared_save'), 'receipts_url':url_for('order_tool.ftrace_receipts'), 'cloud':cloud, 'manufacture':manufacture, 'receipts':receipts}|tojson }}</script>
 <script src="{{ url_for('static', filename='ftrace-lots.js', v=3) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace-validation.js', v=2) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace-daily.js', v=3) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace.js', v=13) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace-validation.js', v=3) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace-daily.js', v=4) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=14) }}" defer></script>
 {% endblock %}

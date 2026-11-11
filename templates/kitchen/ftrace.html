@@ -44,7 +44,6 @@
     <button id="reset-draft" class="btn secondary" type="button">重新帶入系統資料</button>
   </div>
   {% endif %}
-  <label class="ftrace-confirm"><input type="checkbox" id="ftrace-confirm">我已核對所選項目的實際數量、日期與平台編碼。</label>
   <button id="ftrace-download" class="btn" type="button">{{ '自動儲存並下載收貨 XLS' if kind == 'receiving' else '下載' ~ dict(kinds)[kind] ~ '資料匯入檔' }}</button>
   {% if kind == 'receiving' %}<p class="muted">下載成功後，共用文件會標記為「已匯出」；這不代表已經上傳至非追不可官方平台。</p>{% endif %}
   <p class="muted" id="ftrace-upload-help">下載後，在非追不可的「{{ dict(kinds)[kind] }}資料（餐盒／旅館）」按「資料匯入」，作業名稱選「{{ {'receiving':'收貨資料(餐食製造業)', 'manufacture':'餐食業製造資料', 'delivery':'交貨資料(餐食製造業)'}[kind] }}」，使用下載的 XLS 檔。平台匯入只新增，不會覆寫既有申報，請先確認同一天是否已申報。</p>

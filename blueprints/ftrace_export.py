@@ -41,8 +41,6 @@ def ftrace_export():
         payload = json.loads(request.form.get("payload", ""))
         if not isinstance(payload, dict):
             raise ExportError("匯出資料格式錯誤。")
-        if request.form.get("confirmed") != "1":
-            raise ExportError("請先核對實際數量並勾選確認。")
         kind = request.form.get("kind")
         day = date.fromisoformat(request.form.get("date", ""))
         store.validate_stored_links(payload,kind)

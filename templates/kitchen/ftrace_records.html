@@ -27,17 +27,42 @@
 
 {% if registry_kind=='receiving' %}
 <section class="card">
-  <h2>收貨資料已合併顯示，不會重複計數</h2>
-  <div class="ftrace-register-stats">
-    <div><strong>{{ summary.imported }}</strong><span>歷史 XLS 匯入來源列</span></div>
-    <div><strong>{{ summary.shared_receipts }}</strong><span>共用收貨文件來源列</span></div>
-    <div><strong>{{ registry_counts.receiving }}</strong><span>去重後收貨識別</span></div>
-    <div><strong>{{ summary.overlaps }}</strong><span>多來源／重複識別</span></div>
-    <div><strong>{{ summary.conflicts }}</strong><span>重量不一致，待核對</span></div>
+  <div class="top ftrace-summary-heading">
+    <div>
+      <h2>收貨概況</h2>
+      <p class="muted">只顯示日常需要的三個數字，點選數字可以查看對應紀錄。</p>
+    </div>
+    <form method="get" class="ftrace-date-filter">
+      <input type="hidden" name="kind" value="receiving">
+      <input type="hidden" name="view" value="{{ receipt_view }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <label>以哪一天製造為準？
+        <input type="date" name="manufacture_date" value="{{ manufacture_date }}" required>
+      </label>
+      <button class="btn secondary" type="submit">更新</button>
+    </form>
   </div>
-  <p class="muted">同申報日期、流水號、原料碼、規格碼、批號／實際收貨日的完整紀錄會合併顯示，來源不會消失。資料不完整時不任意合併。重量是原始收貨量，<strong>不是目前庫存</strong>，也不代表已在官方平台申報。</p>
+  <div class="ftrace-register-stats ftrace-useful-stats">
+    <a class="{{ 'active' if receipt_view=='all' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='receiving',view='all',manufacture_date=manufacture_date,q=q,month=month) }}">
+      <strong>{{ summary.total }}</strong>
+      <span>收貨紀錄總數</span>
+      <small>已合併重複識別</small>
+    </a>
+    <a class="{{ 'active' if receipt_view=='ready' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='receiving',view='ready',manufacture_date=manufacture_date,q=q,month=month) }}">
+      <strong>{{ summary.ready }}</strong>
+      <span>製造頁可選用</span>
+      <small>依選定製造日期判斷</small>
+    </a>
+    <a class="{{ 'active' if receipt_view=='review' else '' }}" href="{{ url_for('order_tool.ftrace_records',kind='receiving',view='review',manufacture_date=manufacture_date,q=q,month=month) }}">
+      <strong>{{ summary.review }}</strong>
+      <span>需要核對</span>
+      <small>缺欄位、重複異常或重量衝突</small>
+    </a>
+  </div>
+  <p class="muted">「製造頁可選用」只表示已符合本系統批次候選條件，不代表已在非追不可申報成功，也不等於剩餘庫存。需要核對的資料不會影響其他正常收貨紀錄。
+  {% if summary.other %}另外 {{ summary.other }} 筆已停用或晚於指定製造日期，不列入可選用和需核對。{% endif %}</p>
 </section>
-{% endif %}
 
 <section class="card ftrace-register-list">
   <div class="top">
@@ -46,6 +71,7 @@
   </div>
   <form method="get" class="ftrace-register-filter">
     <input type="hidden" name="kind" value="{{ registry_kind }}">
+    {% if registry_kind=='receiving' %}<input type="hidden" name="manufacture_date" value="{{ manufacture_date }}"><input type="hidden" name="view" value="{{ receipt_view }}">{% endif %}
     <label>搜尋{{ '原料名稱／編碼／批號' if registry_kind=='receiving' else '學校／產品碼／批號' }}<input name="q" value="{{ q }}" placeholder="輸入名稱或編碼"></label>
     <label>申報月份<input type="month" name="month" value="{{ month }}"></label>
     <button class="btn secondary" type="submit">查詢</button>
@@ -63,7 +89,7 @@
         <td>{{ row.batch or row.received_date or '未填' }}</td>
         <td>{{ row.weight or '未填' }}</td>
         <td>{{ row.source_label }}{% if row.duplicate %}<small>同識別合併顯示，來源保留</small>{% endif %}</td>
-        <td><span class="ftrace-state {{ row.level }}">{{ row.state }}</span>{% if row.issues %}<small>{{ row.issues|join('；') }}</small>{% endif %}</td>
+        <td><strong class="ftrace-use-label {{ row.use_state }}">{{ row.use_label }}</strong><small>{{ row.state }}</small>{% if row.issues %}<small>{{ row.issues|join('；') }}</small>{% endif %}</td>
         <td class="ftrace-register-links">
           {% if row.document_ids %}<a href="{{ url_for('order_tool.ftrace_document_history',document_id=row.document_ids[0]) }}">共用版本</a>{% endif %}
           {% if row.imported_ids %}<a href="{{ url_for('order_tool.ftrace_receipt_edit',receipt_id=row.imported_ids[0]) }}">歷史核對</a>{% endif %}
@@ -99,9 +125,9 @@
   {% endif %}
   {% if pages>1 %}
   <nav class="ftrace-register-pages" aria-label="清單分頁">
-    {% if page>1 %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page-1,q=q,month=month) }}">上一頁</a>{% endif %}
+    {% if page>1 %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page-1,q=q,month=month,manufacture_date=manufacture_date,view=receipt_view) }}">上一頁</a>{% endif %}
     <span>第 {{ page }}／{{ pages }} 頁</span>
-    {% if page<pages %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page+1,q=q,month=month) }}">下一頁</a>{% endif %}
+    {% if page<pages %}<a href="{{ url_for('order_tool.ftrace_records',kind=registry_kind,page=page+1,q=q,month=month,manufacture_date=manufacture_date,view=receipt_view) }}">下一頁</a>{% endif %}
   </nav>
   {% endif %}
 </section>
@@ -136,6 +162,19 @@
 .ftrace-register-tabs a span{font-size:12px}
 .ftrace-register-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0}
 .ftrace-register-stats>div{background:#f5f7f9;padding:12px;border-radius:9px}
+.ftrace-useful-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ftrace-useful-stats a{display:flex;flex-direction:column;gap:5px;padding:16px 18px;border-radius:10px;background:#f5f7f9;border:2px solid transparent;color:#17202a;text-decoration:none}
+.ftrace-useful-stats a:hover,.ftrace-useful-stats a:focus{background:#edf6fd;text-decoration:none}
+.ftrace-useful-stats a.active{border-color:#1769aa;background:#edf6fd}
+.ftrace-useful-stats a span{font-weight:700;font-size:14px;color:#344054}
+.ftrace-useful-stats a small{font-size:12px;color:#667085}
+.ftrace-date-filter{display:flex;align-items:end;gap:9px;flex-wrap:wrap}
+.ftrace-date-filter label{display:grid;gap:6px}
+.ftrace-date-filter input{min-width:180px}
+.ftrace-use-label{font-size:12px}
+.ftrace-use-label.ready{color:#157347}
+.ftrace-use-label.review{color:#b42318}
+.ftrace-use-label.other{color:#667085}
 .ftrace-register-stats strong{display:block;font-size:24px}
 .ftrace-register-stats span{font-size:12px;color:#475467;line-height:1.4}
 .ftrace-register-filter{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:15px 0}
@@ -156,7 +195,7 @@
 .ftrace-register-import-form{display:grid;gap:12px;max-width:650px;margin:16px 0}
 .ftrace-import-confirm{display:flex;align-items:center;gap:8px;line-height:1.5}
 .ftrace-import-confirm input{width:auto;min-height:0;flex-shrink:0}
-@media(max-width:850px){.ftrace-register-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ftrace-register-tabs{gap:6px}.ftrace-register-tabs a{padding:10px}.ftrace-register-tabs a strong{font-size:15px}}
-@media(max-width:600px){.ftrace-register-header .top{display:block}.ftrace-register-header .top .btn{margin-top:12px}.ftrace-register-filter{display:grid}.ftrace-register-filter label{min-width:0}}
+@media(max-width:850px){.ftrace-useful-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ftrace-register-tabs{gap:6px}.ftrace-register-tabs a{padding:10px}.ftrace-register-tabs a strong{font-size:15px}}
+@media(max-width:600px){.ftrace-useful-stats{grid-template-columns:1fr}.ftrace-register-header .top{display:block}.ftrace-register-header .top .btn{margin-top:12px}.ftrace-register-filter{display:grid}.ftrace-register-filter label{min-width:0}}
 </style>
 {% endblock %}

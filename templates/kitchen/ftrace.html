@@ -21,7 +21,7 @@
     <div class="ftrace-daily-head"><div><h2>當日菜單 × 當日收貨</h2><p class="muted">同一種原料集中處理一次，不用逐校填寫批號；預估公斤來自當日菜單。</p></div><button type="button" class="btn secondary" id="ftrace-daily-refresh">重新讀取今日收貨</button></div>
     <div class="ftrace-daily-stats" id="ftrace-daily-stats" aria-live="polite"></div>
     <div id="ftrace-daily-list"></div>
-    <p class="muted">沒有收貨、同原料多批或重量不足時，不會自行捏造批號或改寫收貨重量。原料使用公斤可在下方每校餐食進階明細調整。</p>
+    <p class="muted">菜單與收貨可能使用不同名稱：請搜尋當日收貨的實際品名或編碼，選一次即可套用全部學校。原料使用公斤沿用菜單估算；不會修改實際收貨重量或捏造批號。</p>
   </section>
   {% endif %}
   <p class="notice">{% if kind == 'receiving' %}來源：當日有供餐的學校菜單、各校供餐人數與菜色配方（含當日專用配方）；依食材彙總預估公斤數，不依賴採購單的送達日期或已叫貨狀態。這是預估量而非實收量，請逐項核對實際收貨日期、重量、供應商及批號；個數類或未設定用量者請填實際重量。當日收貨清單只列出當日菜單原料；既有歷史收貨可在共用資料區及各版本紀錄查詢，不會混進當日新申報。{% else %}來源：當日有供餐的各校菜單與人數，葷素合併、不同餐別分開。成品重量請依實際出餐核對；原料投入重量不會直接當作成品重量。{% endif %}</p>
@@ -104,6 +104,12 @@
 .ftrace-daily-choice{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
 .ftrace-daily-choice select{max-width:100%;min-width:200px;flex:1;min-height:40px}
 .ftrace-daily-choice button{flex-shrink:0}
+.ftrace-daily-matcher{width:100%;margin-top:6px;border:1px solid #cfdae2;border-radius:8px;padding:9px;background:#fff}
+.ftrace-daily-matcher summary{font-size:13px;font-weight:700;cursor:pointer}
+.ftrace-daily-matcher label{display:grid;gap:5px;margin:9px 0;font-size:13px}
+.ftrace-daily-matcher input[type=search]{width:100%;box-sizing:border-box;min-height:40px}
+.ftrace-daily-matcher small{margin-top:6px;line-height:1.5}
+.ftrace-daily-matcher button{margin-top:4px}
 .ftrace-daily-good{color:#136c3d;font-weight:650}.ftrace-daily-warning{color:#a92317;font-weight:650}
 @media(max-width:650px){.ftrace-daily-head{display:block}.ftrace-daily-head button{margin-top:8px}.ftrace-daily-line{grid-template-columns:1fr}}
 .ftrace-save-help{padding:12px 14px;background:#edf6fd;border:1px solid #b8d9f0;border-radius:10px;margin:16px 0 4px;color:#24445f}
@@ -121,6 +127,6 @@
 <script id="ftrace-settings" type="application/json">{{ {'kind':kind, 'url':url_for('order_tool.ftrace_export'), 'csrf':csrf_token(), 'shared_url':url_for('order_tool.ftrace_shared_save'), 'receipts_url':url_for('order_tool.ftrace_receipts'), 'cloud':cloud, 'manufacture':manufacture, 'receipts':receipts}|tojson }}</script>
 <script src="{{ url_for('static', filename='ftrace-lots.js', v=3) }}" defer></script>
 <script src="{{ url_for('static', filename='ftrace-validation.js', v=1) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace-daily.js', v=1) }}" defer></script>
-<script src="{{ url_for('static', filename='ftrace.js', v=11) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace-daily.js', v=2) }}" defer></script>
+<script src="{{ url_for('static', filename='ftrace.js', v=12) }}" defer></script>
 {% endblock %}

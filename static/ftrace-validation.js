@@ -44,7 +44,7 @@
         return null;
       }
       const number = Number(value);
-      const decimals = (value.split('.')[1] || '').length;
+      const decimals = (value.split('.')[1] || '').replace(/0+$/, '').length;
       if (!Number.isFinite(number) || number <= 0 || number > 999999999 || !/^\d+(\.\d+)?$/.test(value)) {
         add(row, field, label + '必須是有效的正數', materialIndex, lotIndex);
         return null;
@@ -161,12 +161,16 @@
           if (seenLots.has(key)) add(row, 'report_date', '同一原材料重複選取相同批次', materialIndex, lotIndex);
           seenLots.add(key);
           const sharedKey = materialCode + '|' + key;
-          if (used !== null && capacity && Number(capacity) > 0) {
-            const previous = consumption.get(sharedKey) || {used: 0, capacity: Number(capacity)};
+          if (used !== null) {
+            const previous = consumption.get(sharedKey) || {used: 0, capacity: null};
             previous.used += used;
-            previous.capacity = Math.min(previous.capacity, Number(capacity));
+            if (capacity && Number(capacity) > 0) {
+              previous.capacity = previous.capacity === null ? Number(capacity) : Math.min(previous.capacity, Number(capacity));
+            }
             consumption.set(sharedKey, previous);
-            if (previous.used > previous.capacity) add(row, 'kg', '多筆餐食使用此收貨批次的總量超過收貨重量', materialIndex, lotIndex);
+            if (previous.capacity !== null && previous.used > previous.capacity) {
+              add(row, 'kg', '多筆餐食使用此收貨批次的總量超過收貨重量', materialIndex, lotIndex);
+            }
           }
         });
       });

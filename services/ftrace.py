@@ -90,9 +90,7 @@ def draft(day):
     for plan in plans:
         if plan.status == "cancelled":
             continue
-        # Preserve menu dish contributions for one-off manufacturing exclusions.
-        # Receiving still counts *every* served dish and is never modified.
-        dish_components = [(item, _menu_item_components(item)) for item in plan.items]
+        components = [c for item in plan.items for c in _menu_item_components(item)]
         for assignment in plan.assignments:
             if assignment.service_status != "serving" or assignment.headcount <= 0:
                 continue
@@ -106,39 +104,26 @@ def draft(day):
                 name=("平鎮高中（含小便當）" if group == "平鎮高中" else
                       group + "（含幼兒園）" if group in {"新勢國小", "信義國小"} else school.name),
                 meal_type=plan.meal_type, quantity=0, kg="",
-                product_code="", customer_code="", include=True, materials={}, dishes={}, source=[]))
+                product_code="", customer_code="", include=True, materials={}, source=[]))
             meal["quantity"] += assignment.headcount
             meal["source"].append(plan.name)
-            for menu_item, components in dish_components:
-                dish_key=f"{plan.id}:{menu_item.id}"
-                dish=meal["dishes"].setdefault(dish_key, dict(
-                    key=dish_key, name=menu_item.recipe.name if menu_item.recipe else plan.name,
-                    plan_name=plan.name, materials={}))
-                for component in components:
-                    ingredient = component.ingredient
-                    if ingredient is None:
-                        continue
+            for component in components:
+                ingredient = component.ingredient
+                if ingredient is not None:
                     receiving = receiving_materials.setdefault(ingredient.id, dict(
                         ingredient=ingredient, estimated_kg=Decimal("0")))
-                    amount=Decimal("0")
                     if (ingredient.base_unit or "g") == "g":
-                        amount=(Decimal(component.grams_per_person or 0) *
-                                assignment.headcount / 1000)
-                        receiving["estimated_kg"] += amount
+                        receiving["estimated_kg"] += (
+                            Decimal(component.grams_per_person or 0) * assignment.headcount / 1000
+                        )
                     material = meal["materials"].setdefault(str(ingredient.id), dict(
                         key=str(ingredient.id), name=ingredient.name, code="", estimated_kg=""))
-                    dish_material=dish["materials"].setdefault(str(ingredient.id), dict(
-                        key=str(ingredient.id), name=ingredient.name, estimated_kg=""))
-                    if amount:
-                        for target in (material,dish_material):
-                            target["estimated_kg"]=text_number(
-                                Decimal(target["estimated_kg"] or "0")+amount, 7)
+                    if (ingredient.base_unit or "g") == "g":
+                        material["estimated_kg"] = text_number(Decimal(material["estimated_kg"] or "0") +
+                            Decimal(component.grams_per_person or 0) * assignment.headcount / 1000, 7)
     for meal in meals.values():
         meal["quantity"] = str(meal["quantity"])
         meal["materials"] = list(meal["materials"].values())
-        for dish in meal["dishes"].values():
-            dish["materials"]=list(dish["materials"].values())
-        meal["dishes"]=list(meal["dishes"].values())
         meal["source"] = "、".join(meal["source"])
         product = products.get(meal["school_key"])
         if product:

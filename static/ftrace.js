@@ -224,6 +224,42 @@
       issuesList.append(done);
       return issues;
     }
+    if (settings.kind === 'manufacture' && data.daily_receiving_only) {
+      // Condense dozens of identical missing-lot fields across schools into
+      // one actionable item per ingredient, keeping each original validation.
+      const buckets=new Map();
+      for (const issue of issues) {
+        const meal=data.meals.find(row=>String(row.key)===issue.rowKey);
+        const material=issue.materialIndex === null ? null : meal?.materials?.[issue.materialIndex];
+        const identifier=material ? ('ingredient:'+String(material.code || material.key || material.name)) :
+          ('meal:'+issue.rowKey+':'+issue.field);
+        if (!buckets.has(identifier)) buckets.set(identifier,{
+          issue, title:material ? (material.name || material.code) : issue.rowName,
+          fields:new Set(), meals:new Set(),count:0
+        });
+        const item=buckets.get(identifier);
+        item.count++;item.fields.add(issue.message);item.meals.add(issue.rowKey);
+        const target=fieldTarget(issue);
+        if (target && target.matches('input')) {
+          target.classList.add('ftrace-input-invalid');
+          target.setAttribute('aria-invalid','true');
+        }
+      }
+      issuesCount.textContent=buckets.size+' 組需核對（'+issues.length+' 處欄位）';
+      for (const item of buckets.values()) {
+        const section=document.createElement('section');section.className='ftrace-issue-group';
+        const heading=document.createElement('h3');
+        heading.textContent=item.title+'｜'+item.meals.size+' 筆餐食';
+        section.append(heading);
+        const button=document.createElement('button');button.type='button';
+        button.className='ftrace-issue-link';
+        button.textContent=[...item.fields].slice(0,2).join('；')+
+          (item.fields.size>2?'（另有 '+(item.fields.size-2)+' 種欄位問題）':'');
+        button.addEventListener('click',()=>jumpToIssue(item.issue));section.append(button);
+        issuesList.append(section);
+      }
+      return issues;
+    }
     const groups = new Map();
     for (const issue of issues) {
       const target = fieldTarget(issue);

@@ -26,7 +26,34 @@
     Object.assign(lots[0], choices[0], {kg: lots[0].kg});
     return true;
   }
-  const api = {catalog, prefill, identity};
+  // Only current day's menu materials belong in a new receiving export.
+  // Preserve an unambiguous existing edit for the same ingredient, but never
+  // reinsert archived purchases or choose arbitrarily between two old lots.
+  function reconcileMenuReceipts(menuReceipts, savedReceipts) {
+    if (!Array.isArray(menuReceipts)) return [];
+    const saved = Array.isArray(savedReceipts) ? savedReceipts : [];
+    const counts = new Map();
+    for (const row of saved) {
+      const key = String(row?.material_key || '');
+      if (!key) continue;
+      if (!counts.has(key)) counts.set(key, []);
+      counts.get(key).push(row);
+    }
+    const fields = ['include','material_code','spec_code','supplier_code',
+      'kg','received_date','seq','batch','manufactured_date','expiry_date'];
+    return menuReceipts.map(row => {
+      const matches = counts.get(String(row.material_key || '')) || [];
+      const exact = matches.find(old => old.key === row.key);
+      const prior = exact || (matches.length === 1 ? matches[0] : null);
+      if (!prior) return {...row};
+      const restored = {...row};
+      for (const field of fields) {
+        if (Object.hasOwn(prior, field)) restored[field] = prior[field];
+      }
+      return restored;
+    });
+  }
+  const api = {catalog, prefill, identity, reconcileMenuReceipts};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FtraceLots = api;
 })(typeof window === 'undefined' ? {} : window);

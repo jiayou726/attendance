@@ -29,7 +29,8 @@ jobs:
           node --check static/order_flow_tour_steps.js
           node --check static/kitchen_ui.js
           node --check static/ftrace.js
-          node --test tests/ftrace-lots.test.cjs
+          node --check static/ftrace-validation.js
+          node --test tests/ftrace-lots.test.cjs tests/ftrace-validation.test.cjs
 
   postgres-practice-import:
     runs-on: ubuntu-latest

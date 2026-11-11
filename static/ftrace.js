@@ -8,6 +8,9 @@
   const referenceKey = `ftrace:references:v1:${scope}`;
   const editor = document.getElementById('ftrace-editor');
   const errorBox = document.getElementById('ftrace-error');
+  const issuesPanel = document.getElementById('ftrace-issues');
+  const issuesCount = document.getElementById('ftrace-issues-count');
+  const issuesList = document.getElementById('ftrace-issues-list');
   let data = structuredClone(initial);
   const systemRefs = JSON.parse(document.getElementById('ftrace-references').textContent);
   let refs = {...systemRefs, mappings: {}};
@@ -122,6 +125,7 @@
     const wrapper = document.createElement('label'); wrapper.textContent = label;
     const input = document.createElement('input'); input.type = type; input.value = row[name] ?? '';
     input.setAttribute('aria-label', `${row.name || ''} ${label}`);
+    input.dataset.ftraceField = name;
     if (type === 'number') { input.min = '0'; input.step = name === 'quantity' ? '.01' : '.001'; }
     if (list) input.setAttribute('list', list);
     input.addEventListener('input', () => { row[name] = input.value; invalidate(); });
@@ -170,7 +174,85 @@
     input.addEventListener('input', () => update());
     update(); return update;
   }
-  function invalidate() { document.getElementById('ftrace-confirm').checked = false; errorBox.hidden = true; status('有尚未暫存的修改。'); }
+  function invalidate() {
+    document.getElementById('ftrace-confirm').checked = false;
+    errorBox.hidden = true;
+    updateIssues();
+    status('有尚未暫存的修改。');
+  }
+  function fieldTarget(issue, expand = false) {
+    if (!issue.rowKey) return null;
+    const row = [...editor.querySelectorAll('.ftrace-row')].find(el => el.dataset.rowKey === issue.rowKey);
+    if (!row) return null;
+    let container = row;
+    if (issue.materialIndex !== null) {
+      const details = row.querySelector('details');
+      if (details && expand) details.open = true;
+      container = [...row.querySelectorAll('.ftrace-material')].find(el => el.dataset.materialIndex === String(issue.materialIndex));
+      if (!container) return row;
+      if (issue.lotIndex !== null) {
+        container = [...container.querySelectorAll('.ftrace-lot')].find(el => el.dataset.lotIndex === String(issue.lotIndex));
+        if (!container) return row;
+      }
+    }
+    return [...container.querySelectorAll('input[data-ftrace-field]')].find(el => el.dataset.ftraceField === issue.field) || container;
+  }
+  function jumpToIssue(issue) {
+    const target = fieldTarget(issue, true);
+    if (!target) {
+      issuesPanel.scrollIntoView({behavior:'smooth',block:'start'});
+      return;
+    }
+    target.scrollIntoView({behavior:'smooth',block:'center'});
+    if (target.matches('input')) target.focus({preventScroll:true});
+    target.classList.add('ftrace-target-flash');
+    setTimeout(() => target.classList.remove('ftrace-target-flash'), 1800);
+  }
+  function updateIssues() {
+    const issues = FtraceValidation.validate(data, settings.kind, manufactureDraft());
+    issuesCount.textContent = issues.length ? issues.length + ' 處待修正' : '全部通過';
+    issuesCount.classList.toggle('is-clear', issues.length === 0);
+    issuesList.replaceChildren();
+    for (const input of editor.querySelectorAll('.ftrace-input-invalid')) {
+      input.classList.remove('ftrace-input-invalid');
+      input.removeAttribute('aria-invalid');
+    }
+    if (!issues.length) {
+      const done = document.createElement('p');
+      done.className = 'ftrace-all-clear';
+      done.textContent = '勾選項目的欄位檢查已通過，可以核對後下載。';
+      issuesList.append(done);
+      return issues;
+    }
+    const groups = new Map();
+    for (const issue of issues) {
+      const target = fieldTarget(issue);
+      if (target && target.matches('input')) {
+        target.classList.add('ftrace-input-invalid');
+        target.setAttribute('aria-invalid', 'true');
+      }
+      const groupKey = issue.rowKey || '__all';
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push(issue);
+    }
+    for (const entries of groups.values()) {
+      const section = document.createElement('section');
+      section.className = 'ftrace-issue-group';
+      const heading = document.createElement('h3');
+      heading.textContent = entries[0].rowName + '（' + entries.length + '）';
+      section.append(heading);
+      for (const issue of entries) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'ftrace-issue-link';
+        button.textContent = issue.message;
+        button.addEventListener('click', () => jumpToIssue(issue));
+        section.append(button);
+      }
+      issuesList.append(section);
+    }
+    return issues;
+  }
   function historicalBatch(code, day) {
     const match=String(day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if(!code || !match) return '';
@@ -221,7 +303,7 @@
     parent.append(note);
     action(parent,'重新讀取共用收貨紀錄',async()=>{try{await refreshReceipts();render();invalidate();}catch(error){fail(error.message);}});
     for (const [index,lot] of material.lots.entries()) {
-      const box=document.createElement('div'); box.className='ftrace-lot'; parent.append(box);
+      const box=document.createElement('div'); box.className='ftrace-lot'; box.dataset.lotIndex=String(index); parent.append(box);
       const heading=document.createElement('strong'); heading.textContent=`${material.name}：原料批次 ${index+1}`; box.append(heading);
       const select=document.createElement('select'); select.setAttribute('aria-label',`${meal.name} ${material.name} 選擇收貨批次 ${index+1}`);
       const empty=document.createElement('option'); empty.value=''; empty.textContent='選共用收貨紀錄，或在下方手填平台既有資料'; select.append(empty);
@@ -232,13 +314,12 @@
       box.append(select);
       const form=document.createElement('div'); form.className='ftrace-fields'; box.append(form);
       const label=`${meal.name} ${material.name} 批次${index+1}`;
-      const edit={...lot,name:label};
       for (const [key,title,type] of [
         ['report_date','收貨申報年月／日期（YYYY-MM 或 YYYY-MM-DD）','text'],
         ['seq','收貨申報流水號（同平台）','text'],['spec_code','收貨原材料廠商自編碼','text'],
         ['batch','收貨批號（新制）','text'],['received_date','收貨日期（僅舊制無批號時填）','date'],
         ['kg','實際使用淨重（公斤）','number']]) {
-        const input=field(form,edit,key,title,type); input.addEventListener('input',()=>{lot[key]=input.value;});
+        const input=field(form,lot,key,title,type); input.setAttribute('aria-label',label+' '+title);
       }
       action(box,'移除此原料批次',()=>{material.lots.splice(index,1);render();invalidate();});
     }
@@ -260,7 +341,7 @@
         source.textContent += `；供應商：${row.supplier_name || '待確認'}`;
         const materialInput = field(fields,row,'material_code','原材料自編碼','text','material-codes');
         const updateSpecs = specField(fields,row);
-        materialInput.addEventListener('input', () => updateSpecs(true));
+        materialInput.addEventListener('input', () => { updateSpecs(true); updateIssues(); });
         field(fields,row,'supplier_code','供應商自編碼','text','party-codes');
         field(fields,row,'received_date','實際收貨日期','date');
         field(fields,row,'kg','實收淨重（公斤）','number');
@@ -278,8 +359,8 @@
         else {
           const details = document.createElement('details'); details.open=expanded.has(row.key); const summary = document.createElement('summary'); summary.textContent = `使用原材料（${row.materials.length} 項，請核對編碼）`; details.append(summary);
           const materials = document.createElement('div'); materials.className = 'ftrace-materials';
-          for (const material of row.materials) {
-            const materialCard = document.createElement('section'); materials.append(materialCard);
+          for (const [materialIndex, material] of row.materials.entries()) {
+            const materialCard = document.createElement('section'); materialCard.className='ftrace-material'; materialCard.dataset.materialIndex=String(materialIndex); materials.append(materialCard);
             const originalCode=material.code;
             const codeInput=field(materialCard,material,'code',material.name,'text','material-codes');
             codeInput.addEventListener('change',()=>{
@@ -294,6 +375,7 @@
     }
     document.getElementById('ftrace-download').disabled = rows.length === 0;
     lists();
+    updateIssues();
     const uploadHelp = document.getElementById('ftrace-upload-help');
     const job = {receiving:'收貨資料(餐食製造業)',manufacture:'餐食業製造資料',delivery:data.batch_mode ? '交貨資料' : '交貨資料(餐食製造業)'}[settings.kind];
     uploadHelp.textContent = `下載後，到非追不可對應頁的「資料匯入」，作業名稱選「${job}」，使用下載的 XLS 檔。${data.batch_mode ? '請先收貨，再製造，最後交貨，確認批次已存在。' : ''}平台只新增，請先查是否已申報，避免重複。`;
@@ -363,8 +445,7 @@
     const mode = data.batch_mode; data = structuredClone(initial); data.batch_mode = mode;
     data.receipts.forEach((r,i) => r.seq=String(i+1).padStart(2,'0'));
     data.meals.forEach((r,i) => {r.seq=String(i+1).padStart(2,'0');r.batch=historicalBatch(r.product_code,initial.date);r.manufactured_date=initial.date;r.expiry_date=initial.date;});
-    batchToggle.addEventListener('change', () => {data.batch_mode=batchToggle.checked; render(); invalidate();});
-  applyReferences(); render(); invalidate();
+    applyReferences(); render(); invalidate();
     try {localStorage.removeItem(key);} catch (_) {}
     status('已重新帶入目前系統資料。');
   });
@@ -383,6 +464,12 @@
   function download(blob, name) {const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);}
   document.getElementById('ftrace-save-reference').addEventListener('click', () => { remember(); download(new Blob([JSON.stringify(refs,null,2)],{type:'application/json'}),'非追不可編碼對照.json'); });
   document.getElementById('ftrace-download').addEventListener('click', async () => {
+    const issues = updateIssues();
+    if (issues.length) {
+      fail('共有 ' + issues.length + ' 處需要修正，請使用右側／上方「待修正欄位」清單逐項處理。');
+      issuesPanel.scrollIntoView({behavior:'smooth',block:'start'});
+      return;
+    }
     if (!document.getElementById('ftrace-confirm').checked) {fail('請先核對實際數量並勾選確認。'); return;}
     const button = document.getElementById('ftrace-download'); button.disabled = true; errorBox.hidden = true;
     try {

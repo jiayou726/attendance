@@ -4,6 +4,7 @@ from datetime import date
 from types import SimpleNamespace
 
 from services.ftrace_registry import receipt_registry, meal_registry
+from tests.test_ftrace_export import app
 
 
 def imported(id=1, kg="20", issues=None):
@@ -103,5 +104,8 @@ def test_registry_page_groups_tabs_and_imports_without_mutating_data(app):
         html=response.get_data(as_text=True)
         assert "收貨、製造、交貨紀錄" in html
         assert "本系統的申報紀錄" in html
-        assert "匯入以前的收貨 XLS" in html if kind=="receiving" else "交貨" in html
+        if kind == "receiving":
+            assert "匯入以前的收貨 XLS" in html
+        else:
+            assert "交貨" in html
     assert client.get("/admin/order-tool/ftrace/records?kind=receiving&q=UNKNOWN").status_code==200

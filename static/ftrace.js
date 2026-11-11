@@ -70,6 +70,7 @@
         for (const material of row.materials || []) {
           const previous = prior.materials?.find(m => m.key === material.key);
           material.code = previous?.code || '';
+          if (settings.kind === 'manufacture') material.include=previous?.include!==false;
           if (Array.isArray(previous?.lots)) material.lots = previous.lots;
         }
       }
@@ -79,7 +80,6 @@
   data.batch_mode = saved?.batch_mode !== false;
   if (settings.kind === 'manufacture') {
     data.daily_receiving_only = true; // Existing flag: validate against saved receipts, including earlier days.
-    data.excluded_dishes = Array.isArray(saved?.excluded_dishes) ? [...saved.excluded_dishes] : [];
   }
   const batchToggle = document.getElementById('batch-mode');
   batchToggle.checked = data.batch_mode;
@@ -338,46 +338,6 @@
     const stats = document.getElementById('ftrace-daily-stats');
     const list = document.getElementById('ftrace-daily-list');
     stats.replaceChildren(); list.replaceChildren();
-    const menuDishes=new Map();
-    for (const originalMeal of initial.meals || []) {
-      for (const dish of originalMeal.dishes || []) {
-        if (!menuDishes.has(dish.key)) menuDishes.set(dish.key,dish);
-      }
-    }
-    if (menuDishes.size) {
-      const section=document.createElement('details');
-      section.className='ftrace-dish-exclusions';
-      const heading=document.createElement('summary');
-      heading.textContent='本次製造要納入的菜色（'+menuDishes.size+' 道）';
-      section.append(heading);
-      const info=document.createElement('p');info.className='muted';
-      info.textContent='按「× 不納入製造」只從這次製造資料扣除該道菜的原料用量。收貨紀錄與原本菜單不會變更；可以按還原。';
-      section.append(info);
-      const excluded=new Set(data.excluded_dishes || []);
-      for (const dish of menuDishes.values()) {
-        const row=document.createElement('div');row.className='ftrace-dish-row';
-        const name=document.createElement('span');name.textContent=(dish.plan_name || '當日菜單')+'／'+dish.name;
-        row.append(name);
-        const isExcluded=excluded.has(dish.key);
-        const button=action(row,isExcluded?'還原製造':'× 不納入製造',()=>{
-          const changed=new Set(data.excluded_dishes || []);
-          if (changed.has(dish.key)) changed.delete(dish.key);
-          else changed.add(dish.key);
-          data.excluded_dishes=[...changed];
-          const cleared=FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
-          FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
-          if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
-          render();invalidate();
-          status((changed.has(dish.key)?'不納入製造：':'已還原：')+dish.name+
-            '；已更新製造原料估算。'+(cleared?'用量改變，'+cleared+' 個原料批次需要重新確認。':'')+
-            '原本菜單及收貨不受影響。');
-        });
-        button.setAttribute('aria-label',dish.name+(isExcluded?' 還原製造':' 不納入製造'));
-        if (isExcluded) {row.classList.add('excluded');button.classList.add('btn-restore');}
-        section.append(row);
-      }
-      list.append(section);
-    }
     const groups = FtraceDaily.inspect(data.meals,sharedReceipts,data.date);
     const choicesBeforeDay = FtraceDaily.receiptChoices(sharedReceipts,data.date);
     function addReceivingMatcher(group, actions, index, expanded=false) {
@@ -433,9 +393,12 @@
       const el=document.createElement('span');el.className='ftrace-daily-stat '+cls;
       el.textContent=message;stats.append(el);
     }
-    metric('菜單原料 '+groups.length+' 種');
-    metric('已對應 '+groups.filter(g=>['linked','linked-past'].includes(g.state)).length+' 種','good');
-    metric('需確認 '+groups.filter(g=>!['linked','linked-past'].includes(g.state)).length+' 種','bad');
+    const activeGroups=groups.filter(g=>g.state!=='excluded');
+    const excludedGroups=groups.filter(g=>g.state==='excluded');
+    metric('本次製造原料 '+activeGroups.length+' 種');
+    metric('已對應 '+activeGroups.filter(g=>['linked','linked-past'].includes(g.state)).length+' 種','good');
+    metric('需確認 '+activeGroups.filter(g=>!['linked','linked-past'].includes(g.state)).length+' 種','bad');
+    if (excludedGroups.length) metric('已排除 '+excludedGroups.length+' 種（可還原）');
     if (!data.batch_mode) {
       const warning=document.createElement('p');warning.className='ftrace-daily-warning';
       warning.textContent='目前是非批號申報，無法串接當日收貨批次。';
@@ -455,6 +418,20 @@
       extra.textContent=group.code+'｜菜單估計 '+group.needKg+' 公斤｜'+group.items.length+' 筆餐食';
       info.append(extra);
       const actions=document.createElement('div');actions.className='ftrace-daily-choice';line.append(actions);
+      const remove=action(info,group.state==='excluded'?'還原':'× 不納入製造',()=>{
+        const count=FtraceDaily.setGroupIncluded(data.meals,group,group.state==='excluded');
+        render();invalidate();
+        status(group.name+(group.state==='excluded'?' 已還原到本次製造。':' 已從本次製造排除。')+
+          '共更新 '+count+' 筆餐食原料；不修改收貨或原始菜單。');
+      });
+      remove.classList.add('ftrace-material-exclude');
+      remove.setAttribute('aria-label',group.name+(group.state==='excluded'?' 還原製造':' 不納入製造'));
+      if (group.state==='excluded') {
+        line.classList.add('excluded');remove.classList.add('btn-restore');
+        const note=document.createElement('span');note.className='muted';
+        note.textContent='本次製造不申報此原料';actions.append(note);
+        continue;
+      }
       if (group.state==='linked' || group.state==='linked-past') {
         const passed=document.createElement('span');passed.className='ftrace-daily-good';
         passed.textContent=group.state==='linked'?'已對上當日收貨':'已選用以前日期收貨';actions.append(passed);
@@ -611,9 +588,10 @@
         }
         if (settings.kind === 'delivery') field(fields,row,'customer_code','下游業者自編碼','text','party-codes');
         else {
-          const details = document.createElement('details'); details.open=expanded.has(row.key); const summary = document.createElement('summary'); summary.textContent = `使用原材料（${row.materials.length} 項，請核對編碼）`; details.append(summary);
+          const details = document.createElement('details'); details.open=expanded.has(row.key); const visibleMaterials=row.materials.filter(material=>material.include!==false); const summary = document.createElement('summary'); summary.textContent = `使用原材料（${visibleMaterials.length} 項，請核對編碼）`; details.append(summary);
           const materials = document.createElement('div'); materials.className = 'ftrace-materials';
           for (const [materialIndex, material] of row.materials.entries()) {
+            if (material.include===false) continue;
             const materialCard = document.createElement('section'); materialCard.className='ftrace-material'; materialCard.dataset.materialIndex=String(materialIndex); materials.append(materialCard);
             const originalCode=material.code;
             const codeInput=field(materialCard,material,'code',material.name,'text','material-codes');
@@ -676,8 +654,6 @@
     }
     if (settings.kind === 'manufacture') {
       data.daily_receiving_only=true;
-      data.excluded_dishes=Array.isArray(backup.excluded_dishes)?[...backup.excluded_dishes]:[];
-      FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
       FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
       if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
     }
@@ -712,7 +688,6 @@
     applyReferences();
     if (settings.kind === 'manufacture') {
       data.daily_receiving_only=true;
-      data.excluded_dishes=[];
       FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
       if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
     }
@@ -776,7 +751,6 @@
   });
   applyReferences();
   if (settings.kind === 'manufacture') {
-    FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
     FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
     if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
   }

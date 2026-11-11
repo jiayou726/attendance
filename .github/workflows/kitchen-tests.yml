@@ -30,7 +30,8 @@ jobs:
           node --check static/kitchen_ui.js
           node --check static/ftrace.js
           node --check static/ftrace-validation.js
-          node --test tests/ftrace-lots.test.cjs tests/ftrace-validation.test.cjs
+          node --check static/ftrace-daily.js
+          node --test tests/ftrace-lots.test.cjs tests/ftrace-validation.test.cjs tests/ftrace-daily.test.cjs
 
   postgres-practice-import:
     runs-on: ubuntu-latest

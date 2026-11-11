@@ -201,3 +201,55 @@ def test_conflicting_cross_file_capacity_is_blocked_even_if_first_source_is_comp
         payload=dict(date='2026-10-06',batch_mode=True,meals=[dict(include=True,materials=[dict(name='測試原料',code='TEST-RAW',lots=[dict(lot,storage_id=first.id)])])])
         with pytest.raises(ExportError,match='尚待核對'):
             validate_stored_links(payload,'manufacture')
+
+
+def test_daily_manufacturing_uses_matching_menu_material_and_saved_same_day_receipt(app):
+    from tests.test_ftrace_export import batch_payload
+    client=app.test_client()
+    receive=empty_payload(day=DAY)
+    receive['receipts']=[dict(
+        key='menu:1',include=True,material_code='B001',spec_code='B001A025',
+        supplier_code='A025',seq='91',batch='TEST-RAW-LOT',
+        received_date=DAY.isoformat(),kg='1.235',name='高麗菜',
+    )]
+    assert save(client,receive,kind='receiving').status_code==200
+    made=batch_payload()
+    made['date']=DAY.isoformat()
+    made['daily_receiving_only']=True
+    lot=made['meals'][0]['materials'][0]['lots'][0]
+    lot.update(report_date=DAY.isoformat(),seq='91',
+               spec_code='B001A025',batch='TEST-RAW-LOT',received_date='',
+               kg='0.96')
+    def export():
+        return client.post('/admin/order-tool/ftrace/export',data=dict(
+            date=DAY.isoformat(),kind='manufacture',payload=json.dumps(made)))
+    response=export()
+    assert response.status_code==200
+    assert 'ms-excel' in response.content_type
+
+    lot['report_date']='2026-11-04'
+    response=export()
+    assert response.status_code==400
+    assert '當日收貨批次' in response.get_json()['error']
+
+    lot['report_date']=DAY.isoformat()
+    lot['batch']='NONEXISTENT'
+    response=export()
+    assert response.status_code==400
+    assert '不在當日可選用' in response.get_json()['error']
+
+
+def test_duplicate_shared_and_imported_identity_with_different_weight_not_auto_usable(app):
+    from services.ftrace_store import import_receipts
+    with app.app_context():
+        import_receipts(workbook(batch=True),'original.xls')
+    client=app.test_client()
+    doc=empty_payload(day=date(2026,10,5))
+    doc['receipts']=[dict(include=True,material_code='TEST-RAW',
+       name='測試原料',seq='0',spec_code='TEST-SPEC',batch='TEST-LOT',kg='30')]
+    assert save(client,doc).status_code==200
+    choices=client.get('/admin/order-tool/ftrace/receipts?date=2026-10-05').json['receipts']
+    matched=[item for item in choices if item['material_code']=='TEST-RAW']
+    assert len(matched)==1
+    assert matched[0]['ready'] is False
+    assert any('重量不同' in issue for issue in matched[0]['issues'])

@@ -123,7 +123,7 @@ def ftrace_records():
         return redirect(url_for('order_tool.ftrace_records'))
     # Read-only unified views. Keep imports and shared documents in their
     # original tables; never silently treat an XLS download as platform success.
-    from services.ftrace_registry import receipt_registry, meal_registry
+    from services.ftrace_registry import receipt_registry, meal_registry, receipt_dashboard
     imports=FtraceImport.query.order_by(FtraceImport.id.desc()).all()
     all_imported=FtraceReceipt.query.order_by(FtraceReceipt.report_date.desc(),FtraceReceipt.id.desc()).all()
     all_documents=FtraceDocument.query.order_by(FtraceDocument.day.desc(),FtraceDocument.id.desc()).all()
@@ -142,32 +142,37 @@ def ftrace_records():
         except ValueError:
             month=''
             flash('月份格式請使用 YYYY-MM。','error')
+    manufacture_day=datetime.now(ZoneInfo('Asia/Taipei')).date()
+    requested_day=request.args.get('manufacture_date','').strip()
+    if requested_day:
+        try:
+            manufacture_day=date.fromisoformat(requested_day)
+        except ValueError:
+            flash('製造日期格式錯誤，已使用今天。','error')
+    summary=receipt_dashboard(receipt_rows,store.receipt_catalog(manufacture_day),manufacture_day) if kind=='receiving' else {}
+    receipt_view=request.args.get('view','all')
+    if receipt_view not in ('all','ready','review'):
+        receipt_view='all'
     rows={'receiving':receipt_rows,'manufacture':manufacture_rows,'delivery':delivery_rows}[kind]
+    if kind=='receiving' and receipt_view!='all':
+        rows=[row for row in rows if row['use_state']==receipt_view]
     if month:
         rows=[row for row in rows if row['day'].startswith(month)]
     if search:
         needle=search.casefold()
         keys=('name','code','spec','batch','seq') if kind=='receiving' else ('name','code','customer','batch','seq')
         rows=[row for row in rows if any(needle in str(row.get(key,'')).casefold() for key in keys)]
+    total_found=len(rows)
     page=max(1,request.args.get('page',1,type=int) or 1)
-    pages=max(1,(len(rows)+49)//50)
+    pages=max(1,(total_found+49)//50)
     page=min(page,pages)
     rows=rows[(page-1)*50:page*50]
-    summary=dict(
-        imported=len(all_imported),
-        shared_receipts=sum(1 for row in receipt_rows for source in row['sources'] if source['origin']=='shared'),
-        overlaps=sum(row['duplicate'] for row in receipt_rows),
-        conflicts=sum(row['conflict'] for row in receipt_rows),
-        document_counts={value:sum(doc.kind==value for doc in all_documents) for value in ('receiving','manufacture','delivery')},
-    )
     return render_template('kitchen/ftrace_records.html',
         imports=[(r,json.loads(r.summary_json)) for r in imports],
         registry_kind=kind,registry_rows=rows,registry_counts=registry_counts,
-        summary=summary,page=page,pages=pages,record_total=len(rows) if pages==1 else None,
-        total_found=sum(1 for row in {'receiving':receipt_rows,'manufacture':manufacture_rows,'delivery':delivery_rows}[kind]
-                        if (not month or row['day'].startswith(month)) and
-                        (not search or any(search.casefold() in str(row.get(key,'')).casefold()
-                          for key in (('name','code','spec','batch','seq') if kind=='receiving' else ('name','code','customer','batch','seq'))))),
+        summary=summary,page=page,pages=pages,
+        total_found=total_found,manufacture_date=manufacture_day.isoformat(),
+        receipt_view=receipt_view,
         kinds=dict(KINDS),q=search,month=month),200,{'Cache-Control':'no-store'}
 
 

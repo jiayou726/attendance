@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {inspect,autoApply,assign,distribute,candidatesFor} = require('../static/ftrace-daily.js');
+const {inspect,autoApply,assign,distribute,candidatesFor,receiptChoices,inheritReceiptCodes,matchReceiving} = require('../static/ftrace-daily.js');
 
 const DAY='2026-10-14';
 const makeMeal=(key,qty,code='K011',name='白米')=>({
@@ -78,4 +78,68 @@ test('do not fill a meal that has no recipe weight',()=>{
  const meals=[makeMeal('school',0)];
  assert.equal(autoApply(meals,[lot()],DAY),0);
  assert.equal(inspect(meals,[lot()],DAY)[0].state,'no-usage');
+});
+
+test('inherit platform code from same-day saved receipt internal ingredient ID without relying on name',()=>{
+ const meals=[makeMeal('schoolA',5,''),makeMeal('schoolB',6,'WRONG-CODE')];
+ const receipts=[{...lot('CORRECT','25','REAL-LOT'),material_key:'ingredient:1',name:'實際申報：CAS去骨雞胸'}];
+ assert.equal(inheritReceiptCodes(meals,receipts,DAY),2);
+ assert.deepEqual(meals.map(x=>x.materials[0].code),['CORRECT','CORRECT']);
+ assert.equal(autoApply(meals,receipts,DAY),1);
+ assert.deepEqual(meals.map(x=>x.materials[0].lots[0].kg),['5','6']);
+});
+test('two different codes for the same internal menu ingredient never auto guess',()=>{
+ const meals=[makeMeal('school',2,'')];
+ const receipts=[
+  {...lot('CODE-A','10','LOT-A'),material_key:'ingredient:1'},
+  {...lot('CODE-B','10','LOT-B'),material_key:'ingredient:1'}
+ ];
+ assert.equal(inheritReceiptCodes(meals,receipts,DAY),0);
+ assert.equal(meals[0].materials[0].code,'');
+});
+test('do not override a manually saved manufacture lot when inheriting same-day code',()=>{
+ const meals=[makeMeal('school',2,'OLD')];
+ meals[0].materials[0].lots=[{report_date:DAY,seq:'01',spec_code:'OLD-A',batch:'MANUAL',kg:'2'}];
+ assert.equal(inheritReceiptCodes(meals,[{...lot('NEW'),material_key:'ingredient:1'}],DAY),0);
+ assert.equal(meals[0].materials[0].code,'OLD');
+});
+test('search can match a differently named official receiving material once for multiple schools',()=>{
+ const meals=[makeMeal('schoolA',8,'MENU-CODE','菜單雞肉'),makeMeal('schoolB',12,'MENU-CODE','菜單雞肉')];
+ const source={...lot('REAL-CODE','25','ACTUAL-LOT'),name:'CAS去骨雞胸肉'};
+ const receipts=[source,{...lot('OTHER','10','LOT-OTHER'),name:'另一個食材'}];
+ const choices=receiptChoices(receipts,DAY);
+ assert.ok(choices.some(x=>x.name==='CAS去骨雞胸肉'));
+ const group=inspect(meals,receipts,DAY)[0];
+ assert.equal(group.state,'missing');
+ assert.equal(matchReceiving(group,source,receipts,DAY),true);
+ assert.deepEqual(meals.map(x=>x.materials[0].code),['REAL-CODE','REAL-CODE']);
+ assert.deepEqual(meals.map(x=>x.materials[0].lots[0].batch),['ACTUAL-LOT','ACTUAL-LOT']);
+ assert.deepEqual(meals.map(x=>x.materials[0].lots[0].kg),['8','12']);
+ assert.equal(inspect(meals,receipts,DAY)[0].state,'linked');
+});
+test('manual remap uses multiple same-day batches when aggregate stock covers menu',()=>{
+ const meals=[makeMeal('schoolA',9,'WRONG'),makeMeal('schoolB',6,'WRONG')];
+ const first={...lot('RIGHT','10','FIRST'),name:'實際收貨品名'};
+ const second={...lot('RIGHT','10','SECOND'),name:'實際收貨品名',seq:'02'};
+ const group=inspect(meals,[first,second],DAY)[0];
+ assert.equal(matchReceiving(group,first,[first,second],DAY),true);
+ assert.deepEqual(meals[0].materials[0].lots.map(l=>l.kg),['9']);
+ assert.deepEqual(meals[1].materials[0].lots.map(l=>l.kg),['1','5']);
+ assert.equal(inspect(meals,[first,second],DAY)[0].state,'linked');
+});
+test('cannot map to another date, pending receipt or insufficient receipt',()=>{
+ const source={...lot('REAL','10'),name:'真正收貨'};
+ const pending={...source,ready:false};
+ const meals=[makeMeal('school',11,'WRONG')];
+ const original=JSON.stringify(meals);
+ const group=inspect(meals,[source],DAY)[0];
+ assert.equal(matchReceiving(group,source,[source],DAY),false);
+ assert.equal(matchReceiving(group,pending,[pending],DAY),false);
+ assert.equal(matchReceiving(group,{...source,report_date:'2026-10-13'},[source],DAY),false);
+ assert.equal(JSON.stringify(meals),original);
+});
+test('name search excludes unresolved or conflicting duplicated receipt batches',()=>{
+ const a={...lot('ACTUAL','10'),name:'實際品名'},b={...a,receipt_kg:'11'};
+ const choices=receiptChoices([a,b],DAY);
+ assert.equal(choices.length,0);
 });

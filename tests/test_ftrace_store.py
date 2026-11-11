@@ -253,3 +253,20 @@ def test_duplicate_shared_and_imported_identity_with_different_weight_not_auto_u
     assert len(matched)==1
     assert matched[0]['ready'] is False
     assert any('重量不同' in issue for issue in matched[0]['issues'])
+
+
+def test_same_day_receipt_catalog_keeps_internal_ingredient_key_for_manufacturing(app):
+    client=app.test_client()
+    payload=empty_payload()
+    payload['receipts']=[dict(include=True,material_key='123',
+        material_code='ACTUAL-CODE',spec_code='ACTUAL-SPEC',seq='01',
+        batch='ACTUAL-BATCH',received_date=str(DAY),kg='8.5',name='報表上的另一個名稱')]
+    assert save(client,payload).status_code==200
+    response=client.get(f'/admin/order-tool/ftrace/receipts?date={DAY}')
+    assert response.status_code==200
+    lots=response.json['receipts']
+    assert len(lots)==1
+    assert lots[0]['material_key']=='123'
+    assert lots[0]['material_code']=='ACTUAL-CODE'
+    assert lots[0]['name']=='報表上的另一個名稱'
+    assert lots[0]['ready'] is True

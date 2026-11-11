@@ -136,7 +136,7 @@ def receipt_catalog(day):
                 spec_code=r.get('spec_code',''),batch=r.get('batch','') if payload.get('batch_mode') else '',
                 received_date='' if payload.get('batch_mode') else r.get('received_date',''),
                 receipt_kg=str(r.get('kg','')),kg='',name=r.get('name',''),origin='共用收貨紀錄',
-                document_id=doc.id,document_status=doc.status)
+                material_key=str(r.get('material_key') or ''),document_id=doc.id,document_status=doc.status)
             lot['ready']=bool(lot['seq'] and lot['spec_code'] and (lot['batch'] or lot['received_date']))
             try:
                 lot['ready']=lot['ready'] and float(lot['receipt_kg'])>0

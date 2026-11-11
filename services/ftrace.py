@@ -226,8 +226,11 @@ def build_sheets(kind, day, payload):
             kg = _number(row, "kg", "製造成品總淨重（公斤）", 3)
             qty = _number(row, "quantity", "製造份數", 2)
             materials = row.get("materials")
-            if not isinstance(materials, list) or not materials or len(materials) > 1000:
+            if not isinstance(materials, list) or len(materials) > 1000:
                 raise ExportError(f"{row.get('name', '')}：請填寫當日使用的原材料。")
+            materials = [m for m in materials if not isinstance(m, dict) or m.get('include') is not False]
+            if not materials:
+                raise ExportError(f"{row.get('name', '')}：已排除所有原材料，請取消這筆製造或還原原料。")
             codes = set()
             for material in materials:
                 if not isinstance(material, dict):

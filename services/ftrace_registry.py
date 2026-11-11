@@ -138,6 +138,52 @@ def receipt_registry(imported, documents):
     return sorted(results, key=lambda x: (x["day"], x["code"], x["seq"]), reverse=True)
 
 
+def receipt_dashboard(rows, candidates, as_of):
+    """Mark the actual *ready* candidates for a manufacturing day.
+
+    "Ready" matches the existing batch selector's source catalog, excluding
+    ambiguous, incomplete and conflicting unified records. It is not official
+    platform-submission evidence, and it does not imply available stock.
+    """
+    day = _day(as_of)
+    def identity(record):
+        return (record["day"], record["seq"], record["code"], record["spec"],
+                record["batch"], record["received_date"])
+
+    def candidate_identity(lot):
+        return tuple(_text(lot.get(key)) for key in (
+            "report_date", "seq", "material_code", "spec_code", "batch", "received_date"
+        ))
+
+    usable = {candidate_identity(lot) for lot in candidates if lot.get("ready") is True}
+    totals = {"total": len(rows), "ready": 0, "review": 0, "other": 0, "as_of": day}
+    for row in rows:
+        date_value = row["day"]
+        in_range = date_value and (date_value[:7] <= day[:7] if len(date_value) == 7
+                                   else date_value <= day)
+        try:
+            positive_weight = all(Decimal(_text(s["weight"])) > 0 for s in row["sources"]
+                                  if not s["disabled"])
+        except (InvalidOperation, ValueError, KeyError):
+            positive_weight = False
+        fully_identified = bool(row["day"] and row["code"] and row["spec"]
+                                and (row["batch"] or row["received_date"]))
+        if all(s["disabled"] for s in row["sources"]):
+            state, label = "other", "已停用"
+        elif not in_range:
+            state, label = "other", "晚於指定製造日期"
+        elif row["conflict"] or row["issues"] or not fully_identified or not positive_weight:
+            state, label = "review", "需核對後才能使用"
+        elif identity(row) not in usable:
+            state, label = "review", "尚未符合製造批次選用條件"
+        else:
+            state, label = "ready", "製造頁可選用"
+        row["use_state"] = state
+        row["use_label"] = label
+        totals[state] += 1
+    return totals
+
+
 def _too_much(delivered, produced):
     try:
         return Decimal(_text(delivered)) > Decimal(_text(produced))

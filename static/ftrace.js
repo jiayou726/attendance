@@ -380,11 +380,23 @@
         missing.textContent='當日收貨 '+(group.capacity/1e7).toFixed(3)+' 公斤，少於菜單預估用量';
         actions.append(missing);continue;
       }
+      const splitLots=()=>{
+        const button=action(actions,'依菜單建議跨批分配',()=>{
+          if (!window.confirm('要按當日收貨流水號順序，將菜單預估用量分配至各學校嗎？此為建議分配，請核對實際領料批次再下載。')) return;
+          if (!FtraceDaily.distribute(group,data.date)) {
+            fail('原料使用量無法由當日收貨完整涵蓋，請核對。');return;
+          }
+          render();invalidate();
+          status(group.name+'：已依今日收貨分配至各校，請核對實際使用批號與重量。');
+        });
+        button.title='只改製造草稿，不修改收貨重量或收貨紀錄';
+      };
       const valid=group.candidates.filter(candidate=>Math.round(Number(candidate.receipt_kg)*1e7)>=group.need);
       if (!valid.length) {
         const warning=document.createElement('span');warning.className='ftrace-daily-warning';
         warning.textContent='同原料分成多批，單批不足：請在餐食明細核對實際拆批';
-        actions.append(warning);continue;
+        actions.append(warning);
+        splitLots();continue;
       }
       const select=document.createElement('select');
       select.setAttribute('aria-label',group.name+' 選擇當日收貨批次');
@@ -405,6 +417,7 @@
         render();invalidate();
         status(group.name+'：已將今日收貨批次帶入 '+group.items.length+' 筆餐食；請核對實際領料。');
       });
+      if (group.candidates.length>1) splitLots();
     }
     const refresh=document.getElementById('ftrace-daily-refresh');
     if (!refresh.dataset.bound) {

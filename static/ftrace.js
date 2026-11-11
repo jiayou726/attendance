@@ -488,8 +488,10 @@
       const splitLots=()=>{
         const button=action(actions,'依菜單建議跨批分配',()=>{
           if (!window.confirm('要按當日收貨流水號順序，將菜單預估用量分配至各學校嗎？此為建議分配，請核對實際領料批次再下載。')) return;
-          if (!FtraceDaily.distribute(group,data.date)) {
-            fail('原料使用量無法由當日收貨完整涵蓋，請核對。');return;
+          const dailyGroup={...group,candidates:group.todayCandidates,
+            capacity:group.todayCandidates.reduce((sum,r)=>sum+Math.round(Number(r.receipt_kg)*1e7),0)};
+          if (!FtraceDaily.distribute(dailyGroup,data.date)) {
+            fail('當日多批收貨無法涵蓋菜單用量；可搜尋並手動選擇以前的收貨批次。');return;
           }
           render();invalidate();
           status(group.name+'：已依今日收貨分配至各校，請核對實際使用批號與重量。');

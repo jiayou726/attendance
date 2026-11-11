@@ -338,6 +338,46 @@
     const stats = document.getElementById('ftrace-daily-stats');
     const list = document.getElementById('ftrace-daily-list');
     stats.replaceChildren(); list.replaceChildren();
+    const menuDishes=new Map();
+    for (const originalMeal of initial.meals || []) {
+      for (const dish of originalMeal.dishes || []) {
+        if (!menuDishes.has(dish.key)) menuDishes.set(dish.key,dish);
+      }
+    }
+    if (menuDishes.size) {
+      const section=document.createElement('details');
+      section.className='ftrace-dish-exclusions';
+      const heading=document.createElement('summary');
+      heading.textContent='本次製造要納入的菜色（'+menuDishes.size+' 道）';
+      section.append(heading);
+      const info=document.createElement('p');info.className='muted';
+      info.textContent='按「× 不納入製造」只從這次製造資料扣除該道菜的原料用量。收貨紀錄與原本菜單不會變更；可以按還原。';
+      section.append(info);
+      const excluded=new Set(data.excluded_dishes || []);
+      for (const dish of menuDishes.values()) {
+        const row=document.createElement('div');row.className='ftrace-dish-row';
+        const name=document.createElement('span');name.textContent=(dish.plan_name || '當日菜單')+'／'+dish.name;
+        row.append(name);
+        const isExcluded=excluded.has(dish.key);
+        const button=action(row,isExcluded?'還原製造':'× 不納入製造',()=>{
+          const changed=new Set(data.excluded_dishes || []);
+          if (changed.has(dish.key)) changed.delete(dish.key);
+          else changed.add(dish.key);
+          data.excluded_dishes=[...changed];
+          const cleared=FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
+          FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
+          if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
+          render();invalidate();
+          status((changed.has(dish.key)?'不納入製造：':'已還原：')+dish.name+
+            '；已更新製造原料估算。'+(cleared?'用量改變，'+cleared+' 個原料批次需要重新確認。':'')+
+            '原本菜單及收貨不受影響。');
+        });
+        button.setAttribute('aria-label',dish.name+(isExcluded?' 還原製造':' 不納入製造'));
+        if (isExcluded) {row.classList.add('excluded');button.classList.add('btn-restore');}
+        section.append(row);
+      }
+      list.append(section);
+    }
     const groups = FtraceDaily.inspect(data.meals,sharedReceipts,data.date);
     const choicesBeforeDay = FtraceDaily.receiptChoices(sharedReceipts,data.date);
     function addReceivingMatcher(group, actions, index, expanded=false) {
@@ -634,6 +674,8 @@
     }
     if (settings.kind === 'manufacture') {
       data.daily_receiving_only=true;
+      data.excluded_dishes=Array.isArray(backup.excluded_dishes)?[...backup.excluded_dishes]:[];
+      FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
       FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
       if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
     }
@@ -668,6 +710,7 @@
     applyReferences();
     if (settings.kind === 'manufacture') {
       data.daily_receiving_only=true;
+      data.excluded_dishes=[];
       FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
       if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
     }
@@ -731,6 +774,7 @@
   });
   applyReferences();
   if (settings.kind === 'manufacture') {
+    FtraceDaily.applyDishExclusions(data.meals,data.excluded_dishes,initial.meals);
     FtraceDaily.inheritReceiptCodes(data.meals,sharedReceipts,data.date);
     if (data.batch_mode) FtraceDaily.autoApply(data.meals,sharedReceipts,data.date);
   }

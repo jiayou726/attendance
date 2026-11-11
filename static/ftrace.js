@@ -314,13 +314,12 @@
       box.append(select);
       const form=document.createElement('div'); form.className='ftrace-fields'; box.append(form);
       const label=`${meal.name} ${material.name} 批次${index+1}`;
-      const edit={...lot,name:label};
       for (const [key,title,type] of [
         ['report_date','收貨申報年月／日期（YYYY-MM 或 YYYY-MM-DD）','text'],
         ['seq','收貨申報流水號（同平台）','text'],['spec_code','收貨原材料廠商自編碼','text'],
         ['batch','收貨批號（新制）','text'],['received_date','收貨日期（僅舊制無批號時填）','date'],
         ['kg','實際使用淨重（公斤）','number']]) {
-        const input=field(form,edit,key,title,type); input.addEventListener('input',()=>{lot[key]=input.value;});
+        const input=field(form,lot,key,title,type); input.setAttribute('aria-label',label+' '+title);
       }
       action(box,'移除此原料批次',()=>{material.lots.splice(index,1);render();invalidate();});
     }
@@ -342,7 +341,7 @@
         source.textContent += `；供應商：${row.supplier_name || '待確認'}`;
         const materialInput = field(fields,row,'material_code','原材料自編碼','text','material-codes');
         const updateSpecs = specField(fields,row);
-        materialInput.addEventListener('input', () => updateSpecs(true));
+        materialInput.addEventListener('input', () => { updateSpecs(true); updateIssues(); });
         field(fields,row,'supplier_code','供應商自編碼','text','party-codes');
         field(fields,row,'received_date','實際收貨日期','date');
         field(fields,row,'kg','實收淨重（公斤）','number');

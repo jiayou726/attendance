@@ -442,3 +442,36 @@ def test_shared_party_registry_preserves_private_aliases_and_role_scoping(app, m
         refs.apply_reference_defaults(data, references)
         assert data["meals"][0]["customer_code"] == "已人工確認的客戶碼"
 
+
+
+def test_material_x_excludes_only_manufacturing_material_not_receiving_or_sibling():
+    # Legacy XLS: excluded ingredient should not appear in manufacturing sheet.
+    value=payload()
+    value['meals'][0]['materials'].append(dict(
+        name='排除的食材',code='',include=False))
+    before=json.dumps(value['receipts'],sort_keys=True)
+    sheets=build_sheets('manufacture',DAY,value)
+    assert len(sheets['製造餐食原材料'])==1
+    assert sheets['製造餐食原材料'][0][-1]=='B001'
+    assert len(build_sheets('receiving',DAY,value)['收貨資料'])==1
+    assert json.dumps(value['receipts'],sort_keys=True)==before
+    value['meals'][0]['materials'][0]['include']=False
+    with pytest.raises(ExportError,match='已排除所有原材料'):
+        build_sheets('manufacture',DAY,value)
+
+
+def test_material_x_excludes_invalid_lots_from_lot_based_manufacturing():
+    value=batch_payload()
+    good=value['meals'][0]['materials'][0]
+    value['meals'][0]['materials'].append(dict(
+        name='不納入製造',code='',include=False,
+        lots=[dict(report_date='2030-01-01',kg='999')]))
+    before=json.dumps(value['receipts'],sort_keys=True)
+    sheets=build_sheets('manufacture',DAY,value)
+    assert len(sheets['製造餐食資料原材料供應商'])==1
+    assert sheets['製造餐食資料原材料供應商'][0][-1]=='0.96'
+    assert len(build_sheets('receiving',DAY,value)['收貨資料批號資訊'])==1
+    assert json.dumps(value['receipts'],sort_keys=True)==before
+    good['include']=False
+    with pytest.raises(ExportError,match='已排除全部製造原料'):
+        build_sheets('manufacture',DAY,value)

@@ -121,35 +121,54 @@ def ftrace_records():
         except (ValueError,TypeError) as error:
             db.session.rollback();flash(str(error) if isinstance(error,ExportError) else '檔案格式錯誤。','error')
         return redirect(url_for('order_tool.ftrace_records'))
+    # Read-only unified views. Keep imports and shared documents in their
+    # original tables; never silently treat an XLS download as platform success.
+    from services.ftrace_registry import receipt_registry, meal_registry
     imports=FtraceImport.query.order_by(FtraceImport.id.desc()).all()
-    query=FtraceReceipt.query
+    all_imported=FtraceReceipt.query.order_by(FtraceReceipt.report_date.desc(),FtraceReceipt.id.desc()).all()
+    all_documents=FtraceDocument.query.order_by(FtraceDocument.day.desc(),FtraceDocument.id.desc()).all()
+    receipt_rows=receipt_registry(all_imported,all_documents)
+    manufacture_rows=meal_registry(all_documents,'manufacture')
+    delivery_rows=meal_registry(all_documents,'delivery')
+    registry_counts=dict(receiving=len(receipt_rows),manufacture=len(manufacture_rows),delivery=len(delivery_rows))
+    kind=request.args.get('kind','receiving')
+    if kind not in registry_counts:
+        kind='receiving'
     search=request.args.get('q','').strip()[:100]
-    month=request.args.get('month','').strip()
-    if search:
-        from sqlalchemy import or_
-        query=query.filter(or_(FtraceReceipt.name.contains(search,autoescape=True),FtraceReceipt.material_code.contains(search,autoescape=True)))
+    month=request.args.get('month','').strip()[:7]
     if month:
         try:
             date.fromisoformat(month+'-01')
-            query=query.filter(FtraceReceipt.report_date.startswith(month))
         except ValueError:
+            month=''
             flash('月份格式請使用 YYYY-MM。','error')
+    rows={'receiving':receipt_rows,'manufacture':manufacture_rows,'delivery':delivery_rows}[kind]
+    if month:
+        rows=[row for row in rows if row['day'].startswith(month)]
+    if search:
+        needle=search.casefold()
+        keys=('name','code','spec','batch','seq') if kind=='receiving' else ('name','code','customer','batch','seq')
+        rows=[row for row in rows if any(needle in str(row.get(key,'')).casefold() for key in keys)]
     page=max(1,request.args.get('page',1,type=int) or 1)
-    pagination=query.order_by(FtraceReceipt.report_date.desc(),FtraceReceipt.id).paginate(page=page,per_page=50,error_out=False)
-    docs_query=FtraceDocument.query
-    if month and len(month)==7:
-        try:
-            start=date.fromisoformat(month+'-01')
-            end=date(start.year+1,1,1) if start.month==12 else date(start.year,start.month+1,1)
-            docs_query=docs_query.filter(FtraceDocument.day>=start,FtraceDocument.day<end)
-        except ValueError:
-            pass
-    docs_page=max(1,request.args.get('docs_page',1,type=int) or 1)
-    docs_pagination=docs_query.order_by(FtraceDocument.day.desc(),FtraceDocument.kind).paginate(page=docs_page,per_page=50,error_out=False)
-    docs=docs_pagination.items
-    return render_template('kitchen/ftrace_records.html',imports=[(r,json.loads(r.summary_json)) for r in imports],
-        receipts=[(r,json.loads(r.payload_json)) for r in pagination.items],pagination=pagination,
-        documents=docs,docs_pagination=docs_pagination,kinds=dict(KINDS),q=search,month=month),200,{'Cache-Control':'no-store'}
+    pages=max(1,(len(rows)+49)//50)
+    page=min(page,pages)
+    rows=rows[(page-1)*50:page*50]
+    summary=dict(
+        imported=len(all_imported),
+        shared_receipts=sum(1 for row in receipt_rows for source in row['sources'] if source['origin']=='shared'),
+        overlaps=sum(row['duplicate'] for row in receipt_rows),
+        conflicts=sum(row['conflict'] for row in receipt_rows),
+        document_counts={value:sum(doc.kind==value for doc in all_documents) for value in ('receiving','manufacture','delivery')},
+    )
+    return render_template('kitchen/ftrace_records.html',
+        imports=[(r,json.loads(r.summary_json)) for r in imports],
+        registry_kind=kind,registry_rows=rows,registry_counts=registry_counts,
+        summary=summary,page=page,pages=pages,record_total=len(rows) if pages==1 else None,
+        total_found=sum(1 for row in {'receiving':receipt_rows,'manufacture':manufacture_rows,'delivery':delivery_rows}[kind]
+                        if (not month or row['day'].startswith(month)) and
+                        (not search or any(search.casefold() in str(row.get(key,'')).casefold()
+                          for key in (('name','code','spec','batch','seq') if kind=='receiving' else ('name','code','customer','batch','seq'))))),
+        kinds=dict(KINDS),q=search,month=month),200,{'Cache-Control':'no-store'}
 
 
 @order_bp.get('/ftrace/imports/<int:import_id>/original')

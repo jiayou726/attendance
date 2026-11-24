@@ -3376,7 +3376,7 @@ def _generate_date_orders(
     active_estimates = [
         item for item in existing_items.values()
         if item.ingredient_id in seen_ingredient_ids and not item.ordered
-        and (item.dish_adjustment_qty is not None or item.dish_estimates_json)
+        and (item.dish_adjustment_qty is not None or _dish_estimate_overrides(item))
     ]
     if active_estimates:
         db.session.flush()
@@ -3477,7 +3477,7 @@ def _refresh_stale_draft_procurement(service_date: date, *, commit: bool = True)
     # Also catch obsolete recipe keys and dish-managed totals even when the
     # ingredient's aggregate raw grams happen to be unchanged.
     if not changed and any(
-        not item.ordered and (item.dish_estimates_json or _dish_managed_quantity(item))
+        not item.ordered and (_dish_estimate_overrides(item) or _dish_managed_quantity(item))
         for item in existing.values()
     ):
         sheets = _production_sheet_data(service_date)
@@ -3628,7 +3628,7 @@ def _retain_dish_estimates(item: KitchenPurchaseOrderItem, valid_keys: set[str])
         item.dish_estimates_json = json.dumps(
             {key: _trim_decimal(value) for key, value in retained.items()},
             ensure_ascii=False, sort_keys=True,
-        ) if retained else None
+        )
 
 
 def _invalidate_changed_dish_estimates(service_date: date, before: dict) -> None:

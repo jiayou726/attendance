@@ -2513,6 +2513,11 @@ def menu_item_recipe(row_id: int):
                 None if _bom_signature(components) == _bom_signature(item.recipe.ingredients)
                 else _menu_item_override_payload(components)
             )
+        old_signature = _bom_signature(_menu_item_components(item))
+        has_draft = KitchenPurchaseOrder.query.filter_by(
+            service_date=plan.service_date, status="draft",
+        ).first() is not None
+        before = _dish_estimate_baselines(_production_sheet_data(plan.service_date)) if has_draft else {}
         item.ingredients_override_json = payload
         # Central day's recipe is the default for schools that adopt it.
         # Existing school-specific versions take precedence.
@@ -2532,8 +2537,13 @@ def menu_item_recipe(row_id: int):
             for other in other_items:
                 if other.plan.name.endswith("素食菜單"):
                     continue
-                if other.ingredients_override_json in (None, original):
+                if (other.ingredients_override_json is None
+                        or _bom_signature(_menu_item_components(other)) == old_signature):
                     other.ingredients_override_json = payload
+        if has_draft:
+            db.session.flush()
+            _invalidate_changed_dish_estimates(plan.service_date, before)
+            _refresh_stale_draft_procurement(plan.service_date, commit=False)
         db.session.commit()
         flash("已儲存本次菜單專用配方；共用標準配方及其他日期不受影響。", "success")
         return redirect(redirect_to)
@@ -3245,11 +3255,18 @@ def _generate_date_orders(
     if not ingredient_rows:
         for old_order in existing_orders:
             has_manual_items = any(
-                (item.source_type or "menu") == "manual" or item.manual_override or item.ordered
+                (item.source_type or "menu") == "manual"
+                or (item.manual_override and not _dish_managed_quantity(item)) or item.ordered
                 for item in old_order.items
             )
-            if old_order.status == "draft" and not has_manual_items:
-                db.session.delete(old_order)
+            if old_order.status == "draft":
+                if not has_manual_items:
+                    db.session.delete(old_order)
+                else:
+                    for item in old_order.items:
+                        if ((item.source_type or "menu") == "menu" and not item.ordered
+                                and (not item.manual_override or _dish_managed_quantity(item))):
+                            db.session.delete(item)
         if commit:
             db.session.commit()
         return 0, False
@@ -3346,26 +3363,34 @@ def _generate_date_orders(
                 item.amount = item.actual_order_qty * item.unit_price_snapshot
 
     for ingredient_id, item in existing_items.items():
-        if ingredient_id not in seen_ingredient_ids and not item.manual_override and not item.ordered:
+        if (ingredient_id not in seen_ingredient_ids and not item.ordered
+                and (not item.manual_override or _dish_managed_quantity(item))):
             db.session.delete(item)
 
     for old_order in existing_orders:
         if old_order.id != order.id:
             db.session.delete(old_order)
 
-    # Preserve dish estimates and recompute the total after a changed menu.
-    active_estimates = [item for item in order.items if item.dish_adjustment_qty is not None]
+    # A dish-managed quantity is not an independent procurement override.
+    # Remove estimates for obsolete recipe keys, then sum the current dishes.
+    active_estimates = [
+        item for item in existing_items.values()
+        if item.ingredient_id in seen_ingredient_ids and not item.ordered
+        and (item.dish_adjustment_qty is not None or _dish_estimate_overrides(item))
+    ]
     if active_estimates:
         db.session.flush()
         sheets = _production_sheet_data(service_date)
+        baselines = _dish_estimate_baselines(sheets)
         for item in active_estimates:
-            if item not in db.session.deleted and not item.ordered and not item.manual_override:
+            _retain_dish_estimates(item, set(baselines.get(item.id, {})))
+            if item.dish_adjustment_qty is not None and (
+                _dish_managed_quantity(item) or not item.manual_override
+            ):
                 total = _production_estimate_total(item, sheets)
-                next_qty = total + item.dish_adjustment_qty
-                if next_qty < 0:
-                    item.dish_adjustment_qty = -total
-                    next_qty = Decimal("0")
-                _set_purchase_estimate_total(item, next_qty)
+                next_qty = max(Decimal("0"), total + item.dish_adjustment_qty)
+                if next_qty != item.actual_order_qty:
+                    _set_purchase_estimate_total(item, next_qty)
 
     if commit:
         db.session.commit()
@@ -3413,7 +3438,7 @@ def _procurement_export_sort_key(row, service_date: date):
     )
 
 
-def _refresh_stale_draft_procurement(service_date: date) -> None:
+def _refresh_stale_draft_procurement(service_date: date, *, commit: bool = True) -> None:
     """Refresh an existing draft's menu requirements; never create an order on GET.
 
     Draft lines are snapshots, so a later school-menu edit makes their raw
@@ -3441,15 +3466,35 @@ def _refresh_stale_draft_procurement(service_date: date) -> None:
     # recipes must not trigger a pointless resync on every subsequent GET.
     removable = {
         ingredient_id for ingredient_id, item in existing.items()
-        if ingredient_id not in expected and not item.ordered and not item.manual_override
+        if ingredient_id not in expected and not item.ordered
+        and (not item.manual_override or _dish_managed_quantity(item))
     }
     changed = bool(set(expected) - set(existing) or removable) or any(
         item.required_grams != expected[ingredient_id]["required_amount"]
         for ingredient_id, item in existing.items()
         if ingredient_id in expected
     )
+    # Also catch obsolete recipe keys and dish-managed totals even when the
+    # ingredient's aggregate raw grams happen to be unchanged.
+    if not changed and any(
+        not item.ordered and (_dish_estimate_overrides(item) or _dish_managed_quantity(item))
+        for item in existing.values()
+    ):
+        sheets = _production_sheet_data(service_date)
+        baselines = _dish_estimate_baselines(sheets)
+        changed = any(
+            not item.ordered and (
+                bool(set(_dish_estimate_overrides(item)) - set(baselines.get(item.id, {})))
+                or (_dish_managed_quantity(item)
+                    and item.actual_order_qty != _production_estimate_total(item, sheets))
+            )
+            for item in existing.values()
+            if item.ingredient_id in expected
+        )
     if changed:
-        _generate_date_orders(service_date, requirements=requirements, existing_orders=orders)
+        _generate_date_orders(
+            service_date, requirements=requirements, existing_orders=orders, commit=commit,
+        )
 
 
 def _procurement_rows(service_date: date):
@@ -3557,6 +3602,49 @@ def _dish_estimate_overrides(item: KitchenPurchaseOrderItem) -> dict[str, Decima
     return result
 
 
+def _dish_managed_quantity(item: KitchenPurchaseOrderItem) -> bool:
+    """Zero adjustment means the purchase follows the sum of dish estimates."""
+    return item.dish_adjustment_qty == Decimal("0")
+
+
+def _dish_estimate_baselines(sheets: dict) -> dict:
+    """Track each purchase line's effective recipe and serving count."""
+    result = defaultdict(dict)
+    for dishes in sheets.values():
+        for dish in dishes:
+            for component in dish["components"]:
+                item = component["purchase_item"]
+                if item is not None and not component["conversion_missing"]:
+                    result[item.id][component["estimate_key"]] = (
+                        component["per_person"], dish["headcount"], component["estimate_default_qty"],
+                    )
+    return result
+
+
+def _retain_dish_estimates(item: KitchenPurchaseOrderItem, valid_keys: set[str]) -> None:
+    overrides = _dish_estimate_overrides(item)
+    retained = {key: value for key, value in overrides.items() if key in valid_keys}
+    if retained != overrides:
+        item.dish_estimates_json = json.dumps(
+            {key: _trim_decimal(value) for key, value in retained.items()},
+            ensure_ascii=False, sort_keys=True,
+        )
+
+
+def _invalidate_changed_dish_estimates(service_date: date, before: dict) -> None:
+    """A central/local recipe edit invalidates estimates for changed servings only."""
+    after = _dish_estimate_baselines(_production_sheet_data(service_date))
+    orders = KitchenPurchaseOrder.query.filter_by(service_date=service_date, status="draft").all()
+    for order in orders:
+        for item in order.items:
+            if item.ordered or (item.source_type or "menu") != "menu":
+                continue
+            old = before.get(item.id, {})
+            new = after.get(item.id, {})
+            valid = {key for key, baseline in new.items() if old.get(key) == baseline}
+            _retain_dish_estimates(item, valid)
+
+
 def _production_estimate_total(item: KitchenPurchaseOrderItem, sheets: dict) -> Decimal:
     """Sum individual dishes once across both regular and vegetarian."""
     return _round_estimate(sum((
@@ -3627,7 +3715,7 @@ def _production_sheet_data(service_date: date):
     purchase_items = {}
     for order in sorted(purchase_orders, key=lambda row: (row.status != "draft", -row.id)):
         for item in order.items:
-            if item.ingredient_id:
+            if item.ingredient_id and (item.source_type or "menu") == "menu":
                 purchase_items.setdefault(item.ingredient_id, item)
 
     item_overrides = {item.id: _dish_estimate_overrides(item) for item in purchase_items.values()}

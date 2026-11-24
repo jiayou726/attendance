@@ -3103,3 +3103,115 @@ def test_central_daily_recipe_updates_default_school_but_not_own_override(app, a
             KitchenMenuPlanItem.recipe_id == ids["recipe"],
         ).one()
         assert order_tool_module._menu_item_components(saved_item)[0].grams_per_person == Decimal("50")
+
+
+def test_summary_recipe_change_resets_stale_estimate_and_updates_draft(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    plan_id = _create_plan(app, authed_client, ids, headcount=801)
+    other_plan_id = _create_plan(
+        app, authed_client, ids, service_date="2026-08-14", headcount=801,
+    )
+    with app.app_context():
+        central_item_id = KitchenMenuPlanItem.query.filter_by(plan_id=plan_id).one().id
+    assert authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": TEST_DAY.isoformat(),
+    }).status_code == 302
+    with app.app_context():
+        purchase = KitchenPurchaseOrderItem.query.one()
+        item_id = purchase.id
+        assert purchase.actual_order_qty == Decimal("70.488")
+    saved = authed_client.post(
+        f"/admin/order-tool/summary/production-sheet/items/{item_id}/save",
+        data={
+            "date": TEST_DAY.isoformat(), "estimate_key": f"regular:{ids['recipe']}",
+            "estimate": "72", "expected_estimate": "70.488", "expected_actual": "70.488",
+        },
+    )
+    assert saved.status_code == 200
+
+    url = f"/admin/order-tool/summary/dishes/{central_item_id}/recipe"
+    assert authed_client.post(url, data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]), "grams_per_person": "100",
+    }).status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.required_grams == Decimal("80100")
+        assert item.actual_order_qty == Decimal("80.1")
+        assert item.amount == Decimal("80.1") * item.unit_price_snapshot
+        assert order_tool_module._dish_estimate_overrides(item) == {}
+        sheet = order_tool_module._production_sheet_data(TEST_DAY)
+        row = sheet["regular"][0]["components"][0]
+        assert row["per_person"] == Decimal("100")
+        assert row["theoretical_qty"] == row["estimated_qty"] == item.actual_order_qty
+        other_item = KitchenMenuPlanItem.query.filter_by(plan_id=other_plan_id).one()
+        assert order_tool_module._menu_item_components(other_item)[0].grams_per_person == Decimal("88")
+
+    assert authed_client.post(url, data={"action": "reset"}).status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("70.488")
+        assert order_tool_module._dish_estimate_overrides(item) == {}
+
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        item.order.status = "confirmed"
+        db.session.commit()
+    authed_client.post(url, data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]), "grams_per_person": "120",
+    })
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("70.488")
+        assert order_tool_module._menu_item_components(
+            db.session.get(KitchenMenuPlanItem, central_item_id)
+        )[0].grams_per_person == Decimal("88")
+
+
+def test_summary_recipe_change_keeps_independent_procurement_quantity(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    plan_id = _create_plan(app, authed_client, ids, headcount=40)
+    assert authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": TEST_DAY.isoformat(),
+    }).status_code == 302
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        central_item_id = KitchenMenuPlanItem.query.filter_by(plan_id=plan_id).one().id
+    saved = authed_client.post(
+        f"/admin/order-tool/summary/procurement/items/{item_id}/save", data={
+            "actual": "12", "expected_actual": "3.52", "package_qty": "", "package_unit": "",
+            "supplier_name": "測試肉品", "delivery_date": TEST_DAY.isoformat(), "delivery_slot": "上午",
+        },
+    )
+    assert saved.status_code == 200
+    assert authed_client.post(f"/admin/order-tool/summary/dishes/{central_item_id}/recipe", data={
+        "action": "save", "ingredient_id": str(ids["ingredient"]), "grams_per_person": "100",
+    }).status_code == 302
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.required_grams == Decimal("4000")
+        assert item.actual_order_qty == Decimal("12")
+        sheet = order_tool_module._production_sheet_data(TEST_DAY)
+        assert sheet["regular"][0]["components"][0]["estimated_qty"] == Decimal("4")
+
+
+def test_legacy_stale_dish_estimate_reconciles_on_usage_page(app, authed_client):
+    ids = _seed_core_via_routes(app, authed_client)
+    _create_plan(app, authed_client, ids, headcount=40)
+    assert authed_client.post("/admin/order-tool/summary/procurement/generate", data={
+        "date": TEST_DAY.isoformat(),
+    }).status_code == 302
+    with app.app_context():
+        item = KitchenPurchaseOrderItem.query.one()
+        item_id = item.id
+        item.manual_override = True
+        item.dish_adjustment_qty = Decimal("0")
+        item.dish_estimates_json = '{"regular:obsolete": "12"}'
+        item.actual_order_qty = Decimal("12")
+        db.session.commit()
+    page = authed_client.get(f"/admin/order-tool/summary/production-sheet?date={TEST_DAY.isoformat()}")
+    assert page.status_code == 200
+    with app.app_context():
+        item = db.session.get(KitchenPurchaseOrderItem, item_id)
+        assert item.actual_order_qty == Decimal("3.52")
+        assert order_tool_module._dish_estimate_overrides(item) == {}

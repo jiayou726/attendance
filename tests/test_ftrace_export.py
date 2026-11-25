@@ -86,6 +86,15 @@ def test_system_prefills_all_three_receipt_codes_without_browser_import_or_datab
     assert b'ftrace-references' in response.data and b'TEST-S' in response.data
 
 
+def test_master_upload_interface_removed_but_reference_page_still_available(app):
+    client = app.test_client()
+    response = client.get("/admin/order-tool/ftrace?date=2026-11-05")
+    assert response.status_code == 200
+    assert b"/ftrace/master" not in response.data
+    assert client.get("/admin/order-tool/ftrace/master").status_code == 404
+    assert client.post("/admin/order-tool/ftrace/master").status_code == 404
+
+
 def test_ambiguous_references_are_not_guessed_and_supplier_spec_is_selected_only_when_unique(app):
     refs = private_references()
     refs["materials"][0]["specs"].append(dict(code="TEST-S2", supplier_name="另一製造商"))

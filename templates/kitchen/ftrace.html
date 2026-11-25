@@ -9,7 +9,7 @@
 </section>
 <div class="ftrace-workspace">
 <section class="card ftrace-editor-card">
-  <p><a class="btn secondary" href="{{ url_for('order_tool.ftrace_records') }}">共用資料區／匯入歷史收貨</a></p>
+  <p><a class="btn secondary" href="{{ url_for('order_tool.ftrace_records') }}">共用資料區／匯入歷史收貨</a> {% if not session.get('kitchen_practice') %}<a class="btn secondary" href="{{ url_for('order_tool.ftrace_master') }}">食登主檔管理（主管）</a>{% endif %}</p>
   {% if kind == 'manufacture' %}
   <p class="muted">依當日菜單與各校供餐人數計算用量，<strong>當日收貨符合條件會自動帶入</strong>；以前日期收貨可手動搜尋。每個原料旁的「× 不納入製造」只排除本次製造的該原料，不更改收貨或原始菜單。</p>
   {% else %}

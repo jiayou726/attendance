@@ -98,18 +98,27 @@
     const matches = list.filter(r => [r.name, ...(r.aliases || [])].some(n => normalized(n) === normalized(name)));
     return matches.length === 1 ? matches[0] : null;
   }
+  function matchReceiptMaterial(list, name, supplier) {
+    const direct = match(list,name);
+    if (direct) return direct;
+    if (!normalized(name) || !normalized(supplier)) return null;
+    const candidates = list.filter(r => [r.name,...(r.aliases || [])].some(n => normalized(n) === normalized(name)));
+    if (!candidates.some(r => r.master_imported)) return null;
+    const matches = candidates.filter(r => (r.specs || []).some(s => normalized(s.supplier_name) === normalized(supplier)));
+    return matches.length === 1 ? matches[0] : null;
+  }
   function applyReferences() {
     for (const row of data.receipts) {
       const saved = refs.mappings[`material:${row.material_key}`];
-      const material = saved || match(refs.materials, row.name);
+      const material = saved || matchReceiptMaterial(refs.materials, row.name, row.supplier_name);
       if (saved) row.material_code = saved.code;
       else row.material_code ||= material?.code || '';
       const specs = refs.materials.find(r => r.code === row.material_code)?.specs || [];
-      const supplierSpecs = specs.filter(s => normalized(s.supplier_name) === normalized(row.supplier_name));
+      const supplierSpecs = specs.filter(s => normalized(row.supplier_name) && normalized(s.supplier_name) === normalized(row.supplier_name));
       const savedSpec = refs.mappings[`spec:${row.material_key}:${row.supplier_key}`];
       const savedSupplier = refs.mappings[`supplier:${row.supplier_key}`];
       if (savedSpec) row.spec_code = savedSpec.code;
-      else row.spec_code ||= supplierSpecs.length === 1 ? supplierSpecs[0].code : specs.length === 1 ? specs[0].code : '';
+      else row.spec_code ||= supplierSpecs.length === 1 ? supplierSpecs[0].code : specs.length === 1 && !specs[0].master_imported ? specs[0].code : '';
       if (savedSupplier) row.supplier_code = savedSupplier.code;
       else row.supplier_code ||= match(refs.parties.filter(p => !p.relation || p.relation[1] === '1'), row.supplier_name)?.code || '';
     }

@@ -48,6 +48,18 @@ class FtraceReceipt(db.Model):
     disabled = db.Column(db.Boolean, nullable=False, default=False)
     version = db.Column(db.Integer, nullable=False, default=1)
 
+class FtraceMasterImport(db.Model):
+    __tablename__ = 'kitchen_ftrace_master_import'
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(20), nullable=False)
+    digest = db.Column(db.String(64), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    original_file = db.Column(db.LargeBinary, nullable=False)
+    payload_json = db.Column(db.Text, nullable=False)
+    summary_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=now)
+    __table_args__ = (db.UniqueConstraint('kind','digest',name='uq_ftrace_master_kind_digest'),)
+
 TABLES = (FtraceDocument.__table__, FtraceRevision.__table__, FtraceImport.__table__, FtraceReceipt.__table__)
 
 def ensure_schema(engine):
@@ -55,8 +67,9 @@ def ensure_schema(engine):
     with engine.begin() as connection:
         if engine.dialect.name == 'postgresql':
             connection.execute(text('SELECT pg_advisory_xact_lock(71320260, 6)'))
-        db.metadata.create_all(connection, tables=TABLES)
+        tables = (*TABLES, FtraceMasterImport.__table__)
+        db.metadata.create_all(connection, tables=tables)
         if engine.dialect.name == 'postgresql':
-            for table in TABLES:
+            for table in tables:
                 connection.execute(text(f'ALTER TABLE public.{table.name} ENABLE ROW LEVEL SECURITY'))
                 connection.execute(text(f'REVOKE ALL ON TABLE public.{table.name} FROM PUBLIC, anon, authenticated'))

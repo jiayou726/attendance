@@ -3,7 +3,7 @@ from datetime import date, datetime
 import json
 from zoneinfo import ZoneInfo
 
-from flask import jsonify, render_template, request, send_file, redirect, url_for, flash, abort
+from flask import jsonify, render_template, request, send_file, redirect, url_for, flash, abort, session
 
 from blueprints.order_tool import order_bp
 from services.ftrace import KINDS, SCHEMAS, ExportError, build_sheets, draft, export_workbook
@@ -31,6 +31,35 @@ def ftrace():
                                kinds=KINDS, references=reference_data(), cloud=cloud,
                                manufacture=made, receipts=store.receipt_catalog(day))
     return response, 200, {"Cache-Control": "no-store"}
+
+
+@order_bp.route('/ftrace/master', methods=['GET','POST'])
+def ftrace_master():
+    if request.blueprint != 'order_tool' or session.get('kitchen_practice'):
+        abort(403)
+    if session.get('role') != 'mgr':
+        return redirect(url_for('auth.login', next=url_for('order_tool.ftrace_master')))
+    from services.ftrace_master import import_master, latest_master, MAX_BYTES
+    if request.method == 'POST':
+        upload=request.files.get('file')
+        try:
+            if not upload or not (upload.filename or '').lower().endswith('.xls'):
+                raise ExportError('請選擇食登匯出的原始 XLS 主檔。')
+            if request.form.get('confirmed')!='1':
+                raise ExportError('請確認匯入主檔。')
+            row,created=import_master(upload.read(MAX_BYTES+1),upload.filename.rsplit('/',1)[-1])
+            counts=json.loads(row.summary_json)
+            flash(('已匯入新主檔' if created else '相同檔案已匯入，不重複新增')+
+                  f'：{counts["materials"]} 筆材料、{counts["specs"]} 筆規格。','success')
+        except (ValueError,TypeError) as error:
+            db.session.rollback()
+            flash(str(error) if isinstance(error,ExportError) else '檔案格式錯誤。','error')
+        return redirect(url_for('order_tool.ftrace_master'))
+    rows=[]
+    for kind,label in [('food','食品原料'),('packaging','物料材料')]:
+        row=latest_master(kind)
+        rows.append((label,row,json.loads(row.summary_json) if row else {}))
+    return render_template('kitchen/ftrace_master.html',rows=rows),200,{'Cache-Control':'no-store'}
 
 
 @order_bp.post("/ftrace/export")
